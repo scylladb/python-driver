@@ -21,7 +21,7 @@ from threading import Barrier, Event, RLock, Thread
 from unittest.mock import Mock, MagicMock, ANY, patch
 
 from cassandra import ConsistencyLevel, InvalidRequest, Unavailable, SchemaTargetType, SchemaChangeType, OperationTimedOut
-from cassandra.cluster import (Session, ResponseFuture, NoHostAvailable, ProtocolVersion,
+from cassandra.cluster import (Cluster, Session, ResponseFuture, NoHostAvailable, ProtocolVersion,
                                ControlConnection, ControlConnectionQueryFallback, _NOT_SET)
 from cassandra.connection import (Connection, ConnectionBusy, ConnectionException,
                                   ConnectionSendError, ConnectionShutdown,
@@ -114,6 +114,53 @@ class ResponseFutureTests(unittest.TestCase):
         assert rf._query(host) is None
         pool.borrow_connection.assert_not_called()
         connection.send_msg.assert_not_called()
+
+    def test_explicit_host_from_previous_cluster_uses_current_host(self):
+        host_id = uuid.uuid4()
+        retained_host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=host_id)
+        current_host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=host_id)
+        with Cluster() as previous_cluster:
+            previous_cluster.metadata.add_or_return_host(retained_host)
+
+        with Cluster() as current_cluster:
+            current_cluster.metadata.add_or_return_host(current_host)
+            session = self.make_owned_pool_session(current_host)
+            session.cluster.metadata = current_cluster.metadata
+            pool, connection = self.make_owned_pool(current_host)
+            session._pools[current_host] = pool
+
+            rf = self.make_response_future(session, host=retained_host)
+
+            assert rf.send_request()
+            assert rf._current_host is current_host
+            connection.send_msg.assert_called_once()
+            # Resolving the public target does not relax internal pool ownership.
+            assert rf._query(retained_host) is None
+            assert connection.send_msg.call_count == 1
+
+    def test_explicit_host_rejects_unknown_identity_and_current_removal(self):
+        for scenario in ('unknown', 'changed_identity', 'current_removed'):
+            with self.subTest(scenario=scenario):
+                host_id = uuid.uuid4()
+                retained_host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=host_id)
+                current_host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=host_id)
+                if scenario == 'changed_identity':
+                    current_host = Host('127.0.0.1', SimpleConvictionPolicy,
+                                        host_id=uuid.uuid4())
+                elif scenario == 'current_removed':
+                    current_host._is_removed = True
+                session = self.make_owned_pool_session(current_host)
+                session.cluster.metadata.get_host_by_host_id.return_value = (
+                    None if scenario in ('unknown', 'changed_identity') else current_host)
+                pool, connection = self.make_owned_pool(current_host)
+                session._pools[current_host] = pool
+
+                rf = self.make_response_future(session, host=retained_host)
+
+                assert not rf.send_request()
+                assert isinstance(rf._final_exception, NoHostAvailable)
+                pool.borrow_connection.assert_not_called()
+                connection.send_msg.assert_not_called()
 
     def test_query_restores_borrowed_stream_when_endpoint_changes_during_borrow(self):
         host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
@@ -325,10 +372,10 @@ class ResponseFutureTests(unittest.TestCase):
         session._pools.get.return_value = self.make_pool()
         return session
 
-    def make_response_future(self, session):
+    def make_response_future(self, session, host=None):
         query = SimpleStatement("SELECT * FROM foo")
         message = QueryMessage(query=query, consistency_level=ConsistencyLevel.ONE)
-        return ResponseFuture(session, message, query, 1)
+        return ResponseFuture(session, message, query, 1, host=host)
 
     def test_query_releases_borrowed_request_id_when_send_fails(self):
         for failure in (ConnectionBusy("busy"), ConnectionException("write failed")):
@@ -748,6 +795,55 @@ class ResponseFutureTests(unittest.TestCase):
             rf.result()
         assert exc_info.value.timeout == 1
         assert exc_info.value.in_flight == 5
+
+    def test_timeout_while_waiting_for_schema_agreement(self):
+        """
+        A schema change result removes the request from the connection's request
+        queue, like a defunct connection does, and then waits for schema agreement.
+        A timeout during that wait must be reported as a timeout while waiting for
+        schema agreement - the server did apply the schema change - not as a
+        connection defunct by heartbeat.
+        """
+
+        connection = MagicMock(spec=Connection)
+        connection._requests = {}
+        connection.in_flight = 5
+        connection.orphaned_request_ids = set()
+        connection.features.tablets_routing_v2 = False
+        connection.features.tablets_routing_v1 = False
+
+        pool = Mock()
+        pool.is_shutdown = False
+        pool.borrow_connection.return_value = [connection, 1]
+
+        session = self.make_basic_session()
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = [Mock(), Mock()]
+        session._pools.get.return_value = pool
+
+        query = SimpleStatement("DROP KEYSPACE ks")
+        message = QueryMessage(query=query, consistency_level=ConsistencyLevel.ONE)
+
+        rf = ResponseFuture(session, message, query, 1)
+        rf.send_request()
+
+        # Simulate the arrival of the schema change result: the connection has
+        # removed the request from its queue, and the result waits for schema
+        # agreement in session.submit(), which this mock session never runs.
+        connection._requests = {}
+        result = Mock(spec=ResultMessage,
+                      kind=RESULT_KIND_SCHEMA_CHANGE,
+                      schema_change_event={'target_type': SchemaTargetType.KEYSPACE,
+                                           'change_type': SchemaChangeType.DROPPED,
+                                           'keyspace': "ks"})
+        rf._set_result(None, connection, pool, result)
+        session.submit.assert_called_once()
+
+        # Simulate ResponseFuture timing out
+        rf._on_timeout()
+        with pytest.raises(OperationTimedOut, match="waiting for schema agreement") as exc_info:
+            rf.result()
+        assert "Connection defunct by heartbeat" not in str(exc_info.value)
+        assert exc_info.value.timeout == 1
 
     def test_read_timeout_error_message(self):
         session = self.make_session()

@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 import logging
 import uuid
 from cassandra.protocol_features import ProtocolFeatures
@@ -19,10 +19,11 @@ from cassandra.protocol_features import ProtocolFeatures
 from cassandra.shard_info import _ShardingInfo
 
 import unittest
-from threading import Thread, Event, Lock
+from threading import Barrier, Thread, Event, Lock, RLock
 from unittest.mock import Mock, NonCallableMagicMock, MagicMock, patch
 
-from cassandra.cluster import Session, ShardAwareOptions
+from cassandra.cluster import Cluster, Session, ShardAwareOptions
+from cassandra._lifecycle import ConnectionFailureReservation
 from cassandra.connection import Connection, ConnectionBusy, ConnectionException, ConnectionSendError, DefaultEndPoint
 from cassandra.pool import HostConnection
 from cassandra.pool import Host, NoConnectionsAvailable
@@ -30,8 +31,416 @@ from cassandra.policies import HostDistance, SimpleConvictionPolicy
 import pytest
 
 from tests.unit.util import HashableMock
+from tests.unit.utils import new_session_with_pool_state
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _make_socket_pool(session=None):
+    host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
+    host.signal_connection_failure = Mock(return_value=False)
+    if session is None:
+        session = NonCallableMagicMock(
+            spec=Session, keyspace=None, _lock=RLock(), is_shutdown=False)
+    session.cluster.is_shutdown = False
+    session.cluster.shard_aware_options.disable = True
+
+    def connection():
+        return HashableMock(
+            spec=Connection, lock=Lock(), in_flight=0, max_request_id=100,
+            is_closed=False, is_defunct=False, signaled_error=False,
+            orphaned_threshold_reached=False, orphaned_request_ids=set(),
+            keyspace=None, features=ProtocolFeatures(shard_id=0))
+
+    original = connection()
+    replacement = connection()
+    session.cluster.connection_factory.side_effect = [original, replacement]
+    pool = HostConnection(host, HostDistance.LOCAL, session)
+    session._pools = {host: pool}
+    return host, session, pool, original, replacement
+
+
+@pytest.fixture
+def socket_pool():
+    return _make_socket_pool()
+
+
+@pytest.mark.parametrize('ownership', [
+    'current', 'draining', 'retired_pool', 'unpublished_pool',
+    'retired_host', 'moved_endpoint', 'shutdown_session',
+])
+@pytest.mark.parametrize('convicted', [False, True])
+@pytest.mark.parametrize('shutdown_on_error', [False, True])
+def test_connection_failure_respects_socket_ownership(
+        socket_pool, ownership, convicted, shutdown_on_error):
+    host, session, pool, original, replacement = socket_pool
+    host.signal_connection_failure.return_value = convicted
+    pool.shutdown_on_error = shutdown_on_error
+    borrowed, _ = pool.borrow_connection(timeout=0)
+    assert borrowed is original
+    assert original.in_flight == 1
+
+    if ownership == 'draining':
+        # An overloaded socket keeps its outstanding requests after its shard
+        # slot has been given to a healthy replacement.
+        pool._connections[0] = replacement
+        pool._trash.add(original)
+    elif ownership in ('retired_pool', 'unpublished_pool'):
+        winner = HostConnection(host, HostDistance.LOCAL, session)
+        session._pools = {host: winner}
+        if ownership == 'retired_pool':
+            pool.shutdown()
+    elif ownership == 'retired_host':
+        host._is_removed = True
+    elif ownership == 'moved_endpoint':
+        host.endpoint = DefaultEndPoint('127.0.0.2')
+    elif ownership == 'shutdown_session':
+        session.is_shutdown = True
+
+    original.is_defunct = True
+    original.last_error = ConnectionException('old socket failed', host.endpoint)
+    pool.return_connection(original)
+
+    # Even stale completions still release their own connection's accounting.
+    assert original.in_flight == 0
+    assert replacement.in_flight == 0
+    if ownership == 'current':
+        host.signal_connection_failure.assert_called_once_with(original.last_error)
+        assert pool.is_shutdown is (convicted or shutdown_on_error)
+        if convicted or shutdown_on_error:
+            session.cluster.on_down.assert_called_once()
+            args, kwargs = session.cluster.on_down.call_args
+            assert args == (host,)
+            assert kwargs['is_host_addition'] is False
+        else:
+            session.submit.assert_called_once_with(pool._replace, original)
+    else:
+        current = session._pools[host]
+        host.signal_connection_failure.assert_not_called()
+        session.cluster.on_down.assert_not_called()
+        session.submit.assert_not_called()
+        assert not current.is_shutdown
+        if ownership in ('draining', 'retired_pool', 'unpublished_pool'):
+            assert current._connections.get(0) is replacement
+            replacement.close.assert_not_called()
+
+
+@pytest.mark.parametrize('convicted', [False, True])
+@pytest.mark.parametrize('change', ['socket', 'pool', 'endpoint', 'retirement'])
+def test_failure_policy_cannot_affect_replacement(socket_pool, convicted, change):
+    host, session, pool, original, replacement = socket_pool
+    pool.borrow_connection(timeout=0)
+    original.is_defunct = True
+    original.last_error = ConnectionException('socket failed', host.endpoint)
+    changed = Event()
+    errors = []
+
+    def replace():
+        try:
+            winner = (HostConnection(host, HostDistance.LOCAL, session)
+                      if change == 'pool' else None)
+            with original.lock, session._lock, host.lock, pool._lock:
+                if change == 'socket':
+                    pool._connections[0] = replacement
+                    pool._trash.add(original)
+                elif change == 'pool':
+                    session._pools[host] = winner
+                elif change == 'endpoint':
+                    host.endpoint = DefaultEndPoint('127.0.0.2')
+                else:
+                    host._is_removed = True
+        except Exception as error:
+            errors.append(error)
+        finally:
+            changed.set()
+
+    worker = Thread(target=replace)
+
+    def convict(error):
+        worker.start()
+        assert changed.wait(5), 'policy ran while ownership locks were held'
+        assert not errors
+        return convicted
+
+    host.signal_connection_failure.side_effect = convict
+    try:
+        pool.return_connection(original)
+    finally:
+        worker.join(5)
+    assert not worker.is_alive()
+    assert original.in_flight == 0
+    session.cluster.on_down.assert_not_called()
+    session.submit.assert_not_called()
+    assert not session._pools[host].is_shutdown
+    if change in ('socket', 'pool'):
+        assert session._pools[host]._connections[0] is replacement
+        replacement.close.assert_not_called()
+
+
+@pytest.mark.parametrize('change', ['pool', 'endpoint', 'health'])
+def test_down_admission_rechecks_failed_socket(socket_pool, change):
+    host, session, pool, original, replacement = socket_pool
+    cluster = Cluster(contact_points=[])
+    session.cluster = cluster
+    cluster.sessions = (session,)
+    cluster.profile_manager = Mock()
+    cluster.on_down_potentially_blocking = Mock(return_value=Future())
+    host.set_up()
+    host.signal_connection_failure.return_value = True
+    pool.borrow_connection(timeout=0)
+    original.is_defunct = True
+    original.last_error = ConnectionException('socket failed', host.endpoint)
+
+    def distance(current):
+        with session._lock, host.lock, pool._lock:
+            if change == 'pool':
+                session._pools[host] = Mock(
+                    host=host, endpoint=host.endpoint, is_shutdown=False)
+            elif change == 'endpoint':
+                host.endpoint = DefaultEndPoint('127.0.0.2')
+            else:
+                host._health_generation += 1
+        return HostDistance.IGNORED
+
+    cluster.profile_manager.distance.side_effect = distance
+    try:
+        pool.return_connection(original)
+        assert host.is_up
+        assert pool.is_shutdown
+        if change == 'pool':
+            assert not session._pools[host].is_shutdown
+        replacement.close.assert_not_called()
+        cluster.on_down_potentially_blocking.assert_not_called()
+    finally:
+        pool.shutdown()
+        cluster.shutdown()
+
+
+@pytest.mark.parametrize('change', ['pool', 'endpoint', 'host', 'session', 'cluster'])
+def test_retirement_cleanup_cannot_down_superseding_owner(socket_pool, change):
+    host, session, pool, original, replacement = socket_pool
+    host.signal_connection_failure.return_value = True
+    pool.borrow_connection(timeout=0)
+    original.is_defunct = True
+    successor = Mock(is_shutdown=False)
+
+    def supersede():
+        # Socket cleanup is outside ownership guards, so it can synchronously
+        # change topology or publish a successor before DOWN inspection starts.
+        with session._lock, host.lock:
+            assert pool._lock.acquire(False), 'cleanup retained the pool work lock'
+            try:
+                if change == 'pool':
+                    session._pools[host] = successor
+                elif change == 'endpoint':
+                    host.endpoint = DefaultEndPoint('127.0.0.2')
+                elif change == 'host':
+                    host._is_removed = True
+                elif change == 'session':
+                    session.is_shutdown = True
+                else:
+                    session.cluster.is_shutdown = True
+            finally:
+                pool._lock.release()
+
+    original.close.side_effect = supersede
+    pool.return_connection(original)
+    assert pool.is_shutdown
+    assert original.in_flight == 0
+    original.close.assert_called_once()
+    session.cluster.on_down.assert_not_called()
+    replacement.close.assert_not_called()
+    successor.shutdown.assert_not_called()
+
+
+@pytest.mark.parametrize('retirement', ['owned', 'generic', 'already_shutdown', 'stale', 'other_failure'])
+def test_only_own_guarded_retirement_can_admit_down(socket_pool, retirement):
+    host, session, pool, original, replacement = socket_pool
+    cluster = Cluster(contact_points=[])
+    session.cluster = cluster
+    cluster.sessions = (session,)
+    cluster.profile_manager.distance = Mock(return_value=HostDistance.IGNORED)
+    cluster.on_down_potentially_blocking = Mock(return_value=Future())
+    host.set_up()
+    failure = ConnectionFailureReservation(pool, original)
+    try:
+        if retirement == 'generic':
+            pool.shutdown()
+        elif retirement == 'already_shutdown':
+            pool.shutdown()
+            pool.shutdown(_failure=failure)
+        elif retirement == 'stale':
+            pool._connections[0] = replacement
+            pool.shutdown(_failure=failure)
+        elif retirement == 'other_failure':
+            pool.shutdown(_failure=ConnectionFailureReservation(pool, original))
+            pool.shutdown(_failure=failure)
+        else:
+            pool.shutdown(_failure=failure)
+
+        admitted = cluster.on_down(host, False, _pool_failure=failure)
+        assert admitted is (retirement == 'owned')
+        assert host.is_up is (retirement != 'owned')
+        assert cluster.on_down_potentially_blocking.call_count == int(retirement == 'owned')
+    finally:
+        pool.shutdown()
+        cluster.shutdown()
+
+
+def test_racing_first_callbacks_preserve_convicting_owner(socket_pool):
+    host, session, pool, original, _ = socket_pool
+    original.in_flight = 2
+    original.is_defunct = True
+    start_callbacks = Barrier(3)
+    policy_entered, release_policy, duplicate_done = Event(), Event(), Event()
+    errors = []
+
+    def convict(error):
+        policy_entered.set()
+        assert release_policy.wait(5)
+        return True
+
+    def fail():
+        try:
+            start_callbacks.wait(timeout=5)
+            pool.return_connection(original)
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            duplicate_done.set()
+
+    host.signal_connection_failure.side_effect = convict
+    workers = (Thread(target=fail), Thread(target=fail))
+    try:
+        for worker in workers:
+            worker.start()
+        start_callbacks.wait(timeout=5)
+        assert policy_entered.wait(5)
+        assert duplicate_done.wait(2), 'duplicate callback waited for conviction'
+        assert pool._connections[0] is original
+    finally:
+        release_policy.set()
+        start_callbacks.abort()
+        for worker in workers:
+            if worker.ident is not None:
+                worker.join(5)
+        pool.shutdown()
+    assert not errors
+    assert all(not worker.is_alive() for worker in workers)
+    assert original.in_flight == 0
+    host.signal_connection_failure.assert_called_once()
+    session.cluster.on_down.assert_called_once()
+    session.submit.assert_not_called()
+
+
+@pytest.mark.parametrize('independent_pool', [False, True])
+def test_failed_pool_cannot_discount_its_own_down(independent_pool):
+    session = new_session_with_pool_state()
+    session.cluster = Mock()
+    session.keyspace = None
+    session.is_shutdown = False
+    host, session, pool, original, sibling = _make_socket_pool(session)
+    sibling.features = ProtocolFeatures(shard_id=1)
+    pool._connections[1] = sibling
+
+    other_session = new_session_with_pool_state()
+    other_session.cluster = session.cluster
+    other_session.keyspace = None
+    other_session.is_shutdown = False
+    healthy = HashableMock(
+        spec=Connection, in_flight=0, is_closed=False, is_defunct=False,
+        orphaned_request_ids=set(), features=ProtocolFeatures(shard_id=0))
+    session.cluster.connection_factory.side_effect = [healthy]
+    other_pool = HostConnection(host, HostDistance.LOCAL, other_session)
+    other_session._pools[host] = other_pool
+
+    cluster = Cluster(contact_points=[])
+    session.cluster = other_session.cluster = cluster
+    cluster.sessions = ((session, other_session) if independent_pool
+                        else (session,))
+    cluster.profile_manager.distance = Mock(return_value=HostDistance.LOCAL)
+    cluster.on_down_potentially_blocking = Mock(return_value=Future())
+    host.set_up()
+    host.signal_connection_failure.return_value = True
+    original.in_flight = 1
+    original.is_defunct = True
+    original.last_error = ConnectionException('one shard failed', host.endpoint)
+    try:
+        assert cluster._discount_down_events
+        assert session.get_pool_state()[host]['open_count'] == 1
+        pool.return_connection(original)
+        assert original.in_flight == 0
+        assert pool.is_shutdown
+        assert host.is_up is independent_pool
+        assert (cluster.on_down_potentially_blocking.call_count ==
+                (0 if independent_pool else 1))
+        assert not other_pool.is_shutdown
+        healthy.close.assert_not_called()
+    finally:
+        pool.shutdown()
+        other_pool.shutdown()
+        cluster.shutdown()
+
+
+def test_queued_replacement_cannot_remove_new_socket(socket_pool):
+    host, session, pool, original, replacement = socket_pool
+    pool.borrow_connection(timeout=0)
+    original.is_defunct = True
+    pool.return_connection(original)
+    session.submit.assert_called_once_with(pool._replace, original)
+
+    with pool._lock:
+        pool._connections[0] = replacement
+    pool._replace(original)
+    assert pool._connections[0] is replacement
+    assert session.cluster.connection_factory.call_count == 1
+    replacement.close.assert_not_called()
+
+    # The stale worker must neither suppress a new failure nor clear its owner.
+    pool.borrow_connection(timeout=0)
+    replacement.is_defunct = True
+    pool.return_connection(replacement)
+    session.submit.assert_called_with(pool._replace, replacement)
+    pool._replace(original)
+    healthy = HashableMock(spec=Connection)
+    healthy.features = ProtocolFeatures(shard_id=0)
+    session.cluster.connection_factory.side_effect = [healthy]
+    pool._replace(replacement)
+    assert pool._connections[0] is healthy
+
+
+def test_current_pool_still_shuts_down_when_down_dispatch_raises(socket_pool):
+    host, session, pool, original, _ = socket_pool
+    host.signal_connection_failure.return_value = True
+    session.cluster.on_down.side_effect = RuntimeError('executor stopped')
+    pool.borrow_connection(timeout=0)
+    original.is_defunct = True
+
+    with pytest.raises(RuntimeError, match='executor stopped'):
+        pool.return_connection(original)
+
+    assert pool.is_shutdown
+    assert original.in_flight == 0
+    original.close.assert_called_once()
+
+
+def test_return_after_session_collection_releases_original_stream():
+    import gc
+    import weakref
+
+    host, session, pool, original, _ = _make_socket_pool()
+    pool.borrow_connection(timeout=0)
+    original.is_defunct = True
+    session_ref = weakref.ref(session)
+    del session
+    gc.collect()
+    assert session_ref() is None
+
+    pool.return_connection(original)
+
+    assert original.in_flight == 0
+    original.close.assert_called_once()
+    host.signal_connection_failure.assert_not_called()
 
 
 class _PoolTests(unittest.TestCase):
@@ -40,8 +449,18 @@ class _PoolTests(unittest.TestCase):
     uses_single_connection = None
 
     def make_session(self):
-        session = NonCallableMagicMock(spec=Session, keyspace='foobarkeyspace', _trash=[])
+        session = NonCallableMagicMock(
+            spec=Session, keyspace='foobarkeyspace', _trash=[],
+            _lock=RLock(), _pools={}, is_shutdown=False)
+        session.cluster.is_shutdown = False
         return session
+
+    def make_pool(self, host, session):
+        host.lock = RLock()
+        host._is_removed = False
+        pool = self.PoolImpl(host, HostDistance.LOCAL, session)
+        session._pools[host] = pool
+        return pool
 
     def test_borrow_and_return(self):
         host = Mock(spec=Host, address='ip1')
@@ -49,7 +468,7 @@ class _PoolTests(unittest.TestCase):
         conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False, is_closed=False, max_request_id=100)
         session.cluster.connection_factory.return_value = conn
 
-        pool = self.PoolImpl(host, HostDistance.LOCAL, session)
+        pool = self.make_pool(host, session)
         session.cluster.connection_factory.assert_called_once_with(host.endpoint, on_orphaned_stream_released=pool.on_orphaned_stream_released)
 
         c, request_id = pool.borrow_connection(timeout=0.01)
@@ -71,7 +490,7 @@ class _PoolTests(unittest.TestCase):
         session.cluster.connection_factory.return_value = conn
 
         with self.assertLogs('cassandra.pool', level='DEBUG') as logs:
-            self.PoolImpl(host, HostDistance.LOCAL, session)
+            self.make_pool(host, session)
 
         shard_logs = [r.getMessage() for r in logs.records
                       if "First connection created" in r.getMessage()]
@@ -84,7 +503,7 @@ class _PoolTests(unittest.TestCase):
         conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False, is_closed=False, max_request_id=100)
         session.cluster.connection_factory.return_value = conn
 
-        pool = self.PoolImpl(host, HostDistance.LOCAL, session)
+        pool = self.make_pool(host, session)
         session.cluster.connection_factory.assert_called_once_with(host.endpoint, on_orphaned_stream_released=pool.on_orphaned_stream_released)
 
         pool.borrow_connection(timeout=0.01)
@@ -104,7 +523,7 @@ class _PoolTests(unittest.TestCase):
                                     lock=Lock())
         session.cluster.connection_factory.return_value = conn
 
-        pool = self.PoolImpl(host, HostDistance.LOCAL, session)
+        pool = self.make_pool(host, session)
         session.cluster.connection_factory.assert_called_once_with(host.endpoint, on_orphaned_stream_released=pool.on_orphaned_stream_released)
 
         pool.borrow_connection(timeout=0.01)
@@ -129,7 +548,7 @@ class _PoolTests(unittest.TestCase):
         conn.max_request_id = 100
         session.cluster.connection_factory.return_value = conn
 
-        pool = self.PoolImpl(host, HostDistance.LOCAL, session)
+        pool = self.make_pool(host, session)
         session.cluster.connection_factory.assert_called_once_with(host.endpoint, on_orphaned_stream_released=pool.on_orphaned_stream_released)
 
         pool.borrow_connection(timeout=0.01)
@@ -153,7 +572,7 @@ class _PoolTests(unittest.TestCase):
                                     max_request_id=100, signaled_error=False)
         session.cluster.connection_factory.return_value = conn
 
-        pool = self.PoolImpl(host, HostDistance.LOCAL, session)
+        pool = self.make_pool(host, session)
         session.cluster.connection_factory.assert_called_once_with(host.endpoint, on_orphaned_stream_released=pool.on_orphaned_stream_released)
 
         pool.borrow_connection(timeout=0.01)
@@ -173,7 +592,7 @@ class _PoolTests(unittest.TestCase):
                             is_closed=False, max_request_id=100,
                             signaled_error=False)
         session.cluster.connection_factory.return_value = conn
-        pool = self.PoolImpl(host, HostDistance.LOCAL, session)
+        pool = self.make_pool(host, session)
 
         pool.borrow_connection(timeout=0.01)
         conn.is_defunct = True
@@ -192,7 +611,7 @@ class _PoolTests(unittest.TestCase):
                             is_closed=False, max_request_id=100,
                             signaled_error=False)
         session.cluster.connection_factory.return_value = conn
-        pool = self.PoolImpl(host, HostDistance.LOCAL, session)
+        pool = self.make_pool(host, session)
         pool.shutdown_on_error = True
 
         pool.borrow_connection(timeout=0.01)
@@ -210,7 +629,7 @@ class _PoolTests(unittest.TestCase):
                             is_closed=False, max_request_id=100,
                             signaled_error=False)
         session.cluster.connection_factory.return_value = conn
-        pool = self.PoolImpl(host, HostDistance.LOCAL, session)
+        pool = self.make_pool(host, session)
         pool.shutdown_on_error = True
 
         pool.borrow_connection(timeout=0.01)
@@ -232,7 +651,7 @@ class _PoolTests(unittest.TestCase):
                             is_closed=False, max_request_id=100,
                             signaled_error=False)
         session.cluster.connection_factory.return_value = conn
-        pool = self.PoolImpl(host, HostDistance.LOCAL, session)
+        pool = self.make_pool(host, session)
         pool.shutdown_on_error = True
 
         pool.borrow_connection(timeout=0.01)
@@ -243,7 +662,8 @@ class _PoolTests(unittest.TestCase):
 
         assert pool.is_shutdown
         host.signal_connection_failure.assert_not_called()
-        session.cluster.on_down.assert_called_once_with(host, is_host_addition=False)
+        session.cluster.on_down.assert_called_once_with(
+            host, is_host_addition=False, _pool_failure=unittest.mock.ANY)
 
     def test_return_defunct_connection_on_down_host(self):
         host = Mock(spec=Host, address='ip1')
@@ -254,7 +674,7 @@ class _PoolTests(unittest.TestCase):
         session.cluster.connection_factory.return_value = conn
         session.cluster.shard_aware_options = ShardAwareOptions()
 
-        pool = self.PoolImpl(host, HostDistance.LOCAL, session)
+        pool = self.make_pool(host, session)
         session.cluster.connection_factory.assert_called_once_with(host.endpoint, on_orphaned_stream_released=pool.on_orphaned_stream_released)
 
         pool.borrow_connection(timeout=0.01)
@@ -281,7 +701,7 @@ class _PoolTests(unittest.TestCase):
                                     signaled_error=False, orphaned_threshold_reached=False)
         session.cluster.connection_factory.return_value = conn
 
-        pool = self.PoolImpl(host, HostDistance.LOCAL, session)
+        pool = self.make_pool(host, session)
         session.cluster.connection_factory.assert_called_once_with(host.endpoint, on_orphaned_stream_released=pool.on_orphaned_stream_released)
 
         pool.borrow_connection(timeout=0.01)
@@ -377,7 +797,7 @@ class HostConnectionTests(_PoolTests):
     PoolImpl = HostConnection
     uses_single_connection = True
 
-    def test_replacement_connection_uses_pool_endpoint(self):
+    def test_replacement_skips_pool_after_endpoint_changes(self):
         host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
         session = self.make_session()
         session.keyspace = None
@@ -389,14 +809,16 @@ class HostConnectionTests(_PoolTests):
         replacement = HashableMock(spec=Connection)
         replacement.features.shard_id = 0
         session.cluster.connection_factory.side_effect = [first, replacement]
-        pool = HostConnection(host, HostDistance.LOCAL, session)
+        pool = self.make_pool(host, session)
 
         original_endpoint = host.endpoint
         host.endpoint = DefaultEndPoint('127.0.0.2')
         pool._replace(first)
 
         assert pool.endpoint == original_endpoint
-        assert session.cluster.connection_factory.call_args.args[0] == original_endpoint
+        assert session.cluster.connection_factory.call_count == 1
+        assert pool._connections[0] is first
+        replacement.close.assert_not_called()
         pool.shutdown()
 
     def test_borrow_rejects_unsynchronized_connection_without_waiting(self):
@@ -405,7 +827,7 @@ class HostConnectionTests(_PoolTests):
         conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
                             is_closed=False, max_request_id=100, lock=Lock())
         session.cluster.connection_factory.return_value = conn
-        pool = HostConnection(host, HostDistance.LOCAL, session)
+        pool = self.make_pool(host, session)
         pool._keyspace = 'newks'
         conn.keyspace = 'foobarkeyspace'
         conn.set_keyspace_blocking.side_effect = \
@@ -426,7 +848,7 @@ class HostConnectionTests(_PoolTests):
         conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
                             is_closed=False, max_request_id=100, lock=Lock())
         session.cluster.connection_factory.return_value = conn
-        pool = HostConnection(host, HostDistance.LOCAL, session)
+        pool = self.make_pool(host, session)
 
         errors = []
         pool._set_keyspace_for_all_conns(
@@ -450,7 +872,7 @@ class HostConnectionTests(_PoolTests):
         conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
                             is_closed=False, max_request_id=100, lock=Lock())
         session.cluster.connection_factory.return_value = conn
-        pool = HostConnection(host, HostDistance.LOCAL, session)
+        pool = self.make_pool(host, session)
         error = ConnectionBusy('send blocked')
         conn.set_keyspace_async.side_effect = error
         callback = Mock()
@@ -468,7 +890,7 @@ class HostConnectionTests(_PoolTests):
                              is_closed=False, max_request_id=100, lock=Lock())
         stale.features.shard_id = 0
         session.cluster.connection_factory.return_value = stale
-        pool = HostConnection(host, HostDistance.LOCAL, session)
+        pool = self.make_pool(host, session)
         aligned = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
                                is_closed=False, max_request_id=100, lock=Lock())
         aligned.features.shard_id = 1
@@ -487,7 +909,7 @@ class HostConnectionTests(_PoolTests):
         conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
                             is_closed=False, max_request_id=100, lock=Lock())
         session.cluster.connection_factory.return_value = conn
-        pool = HostConnection(host, HostDistance.LOCAL, session)
+        pool = self.make_pool(host, session)
         conn.keyspace = None
 
         def set_keyspace(keyspace):
@@ -507,7 +929,7 @@ class HostConnectionTests(_PoolTests):
         conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
                             is_closed=False, max_request_id=100, lock=Lock())
         session.cluster.connection_factory.return_value = conn
-        pool = HostConnection(host, HostDistance.LOCAL, session)
+        pool = self.make_pool(host, session)
         finished = []
 
         pool._set_keyspace_for_all_conns(
@@ -530,18 +952,17 @@ class HostConnectionTests(_PoolTests):
         assert conn.keyspace == pool._keyspace
 
     def test_failed_replacement_keyspace_sync_removes_connection(self):
-        host = Mock(spec=Host, address='ip1', sharding_info=None)
-        session = self.make_session()
-        session.cluster.shard_aware_options.disable = True
-        old_conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
-                                is_closed=False, max_request_id=100, lock=Lock())
-        old_conn.features.shard_id = 0
-        old_conn.features.sharding_info = None
-        new_conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
-                                is_closed=False, max_request_id=100, lock=Lock())
-        new_conn.features.shard_id = 0
-        session.cluster.connection_factory.side_effect = [old_conn, new_conn]
-        pool = HostConnection(host, HostDistance.LOCAL, session)
+        host, session, pool, old_conn, new_conn = _make_socket_pool()
+        pool._keyspace = 'foobarkeyspace'
+        # Regular-port replacements can land on a different shard.
+        new_conn.features = ProtocolFeatures(shard_id=1)
+        healthy = HashableMock(
+            spec=Connection, in_flight=0, is_defunct=False, is_closed=False,
+            max_request_id=100, lock=Lock(), keyspace=None,
+            features=ProtocolFeatures(shard_id=0))
+        healthy.set_keyspace_blocking.side_effect = \
+            lambda keyspace: setattr(healthy, 'keyspace', keyspace)
+        session.cluster.connection_factory.side_effect = [new_conn, healthy]
 
         def set_keyspace(keyspace):
             if keyspace == 'foobarkeyspace':
@@ -551,11 +972,26 @@ class HostConnectionTests(_PoolTests):
                 raise ConnectionException('sync failed', host.endpoint)
 
         new_conn.set_keyspace_blocking.side_effect = set_keyspace
-        pool._replace(old_conn)
+        old_conn.is_defunct = True
+        old_conn.in_flight = 1
+        try:
+            pool.return_connection(old_conn)
+            replace, retired = session.submit.call_args.args
+            replace(retired)
 
-        assert 0 not in pool._connections
-        new_conn.close.assert_called_once()
-        session.submit.assert_called_once_with(pool._replace, new_conn)
+            assert not pool._connections
+            new_conn.close.assert_called_once()
+            replace, retired = session.submit.call_args.args
+            replace(retired)
+
+            borrowed, _ = pool.borrow_connection(timeout=0)
+            assert borrowed is healthy
+            assert healthy.keyspace == pool._keyspace == 'newks'
+            assert not pool._replacement_connections
+            healthy.close.assert_not_called()
+            pool.return_connection(borrowed)
+        finally:
+            pool.shutdown()
 
     def test_failed_shard_keyspace_sync_allows_retry(self):
         host = Mock(spec=Host, address='ip1', sharding_info=None)
@@ -568,7 +1004,7 @@ class HostConnectionTests(_PoolTests):
                                   is_closed=False, max_request_id=100, lock=Lock())
         shard_conn.features.shard_id = 1
         session.cluster.connection_factory.side_effect = [first_conn, shard_conn]
-        pool = HostConnection(host, HostDistance.LOCAL, session)
+        pool = self.make_pool(host, session)
         host.sharding_info = Mock(shards_count=2)
         pool._get_shard_aware_endpoint = Mock(return_value=None)
         pool._connecting.add(1)

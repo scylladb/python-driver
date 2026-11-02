@@ -14,6 +14,7 @@
 import unittest
 
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import nullcontext
 import gc
 import logging
 import multiprocessing
@@ -1024,7 +1025,8 @@ class ClusterTest(unittest.TestCase):
 
             pool = Mock(
                 host=pool_host, host_distance=distance,
-                is_shutdown=False, _keyspace=None)
+                is_shutdown=False, _keyspace=None, _membership_lock=RLock())
+            pool._lock_usable_connection.return_value = nullcontext(True)
             pool.get_state.return_value = {"open_count": 1}
             created_pools.append(pool)
             return pool
@@ -1255,7 +1257,9 @@ class ClusterTest(unittest.TestCase):
 
         new_pool = Mock(
             host=host, host_distance=HostDistance.LOCAL,
-            is_shutdown=False, _keyspace="old_keyspace")
+            is_shutdown=False, _keyspace="old_keyspace",
+            _membership_lock=RLock())
+        new_pool._lock_usable_connection.return_value = nullcontext(True)
         keyspace_error = ConnectionException("keyspace update failed")
 
         def fail_keyspace_update(_keyspace, callback):
@@ -1363,7 +1367,8 @@ class ClusterTest(unittest.TestCase):
 
         new_pool = Mock(
             host=host, host_distance=HostDistance.LOCAL,
-            is_shutdown=False, _keyspace=None)
+            is_shutdown=False, _keyspace=None, _membership_lock=RLock())
+        new_pool._lock_usable_connection.return_value = nullcontext(True)
 
         def create_pool(*args, **kwargs):
             cluster.remove_host(host, trigger_reconciliation=False)
@@ -2874,7 +2879,8 @@ class SessionPoolRaceTest(unittest.TestCase):
     def _pool(self, host, keyspace=None, distance=HostDistance.LOCAL):
         pool = Mock(
             host=host, host_distance=distance, is_shutdown=False,
-            _keyspace=keyspace)
+            _keyspace=keyspace, _membership_lock=RLock())
+        pool._lock_usable_connection.return_value = nullcontext(True)
         pool.shutdown.side_effect = lambda: setattr(
             pool, 'is_shutdown', True)
         return pool
@@ -2989,6 +2995,68 @@ class SessionPoolRaceTest(unittest.TestCase):
         host_connection.assert_called_once_with(
             host, HostDistance.LOCAL, session)
         assert session._pools == {host: winner}
+        winner.shutdown.assert_not_called()
+
+    def test_reconciliation_preserves_pool_creation_owned_by_up(self):
+        # #851: UP already owns the pool attempt while preparation/readiness
+        # is pending. Reconciliation must neither duplicate nor supersede it.
+        host = self._host()
+        host.set_down()
+        host._currently_handling_node_up = True
+        candidate = self._pool(host)
+        session = self._session(workers=1)
+        factory = self._blocking_pool_factory(candidate)
+
+        with patch('cassandra.cluster.HostConnection',
+                   side_effect=factory) as create:
+            ready = session.add_or_renew_pool(host, is_host_addition=False)
+            assert factory.creation_started.wait(5)
+            assert session.update_created_pools(hosts=(host,)) == set()
+            assert not ready.done()
+            factory.release_creation.set()
+            assert ready.result(timeout=5) is True
+
+        create.assert_called_once_with(host, HostDistance.LOCAL, session)
+        assert session._pools == {host: candidate}
+        candidate.shutdown.assert_not_called()
+
+    def test_endpoint_replacement_fences_candidate_and_keeps_new_pool(self):
+        # #860: use the replacement API so both metadata and retirement fences
+        # participate, rather than assigning a new endpoint to the old Host.
+        host = self._host()
+        cluster = Cluster(contact_points=[])
+        self.addCleanup(cluster.shutdown)
+        cluster.metadata.add_or_return_host(host)
+        cluster.on_add = Mock()
+        cluster.control_connection.on_remove = Mock()
+        candidate = self._pool(host)
+        session = self._session()
+        session.cluster = cluster
+        cluster.sessions.add(session)
+        factory = self._blocking_pool_factory(candidate)
+
+        with patch('cassandra.cluster.HostConnection', side_effect=factory):
+            stale_ready = session.add_or_renew_pool(host, is_host_addition=False)
+            assert factory.creation_started.wait(5)
+            with session._lock:
+                stale_work = session._pool_creation_work[stale_ready]
+            replacement = cluster.replace_host_endpoint(
+                host, DefaultEndPoint('127.0.0.2'))
+            winner = self._pool(replacement)
+            with patch('cassandra.cluster.HostConnection', return_value=winner):
+                ready = session.add_or_renew_pool(
+                    replacement, is_host_addition=True)
+                assert ready.result(timeout=5) is True
+            factory.release_creation.set()
+            assert stale_ready.result(timeout=5) is False
+            # Retirement can settle the public waiter before the constructor
+            # returns. Await the worker too before checking candidate cleanup.
+            assert stale_work.result(timeout=5) is False
+
+        assert host._is_removed
+        assert cluster.metadata.get_host_by_host_id(host.host_id) is replacement
+        assert session._pools == {replacement: winner}
+        candidate.shutdown.assert_called_once_with()
         winner.shutdown.assert_not_called()
 
     def test_pool_creation_discards_result_after_endpoint_change(self):
@@ -5154,7 +5222,9 @@ class SessionTest(unittest.TestCase):
             "127.0.0.2", SimpleConvictionPolicy, host_id=host_id)
         old_pool = Mock(host=original_host)
         pool_state = {"open_count": 1}
-        new_pool = Mock(host=current_host, _keyspace=None)
+        new_pool = Mock(
+            host=current_host, _keyspace=None, _membership_lock=RLock())
+        new_pool._lock_usable_connection.return_value = nullcontext(True)
         new_pool.get_state.return_value = pool_state
         session = new_session_with_pool_state({original_host: old_pool})
         session.keyspace = None

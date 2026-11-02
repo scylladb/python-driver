@@ -20,7 +20,7 @@ classifiers = [
     'Programming Language :: Python :: Implementation :: PyPy',
     'Topic :: Software Development :: Libraries :: Python Modules',
 ]
-dependencies = ['geomet>=1.1', 'pyyaml > 5.0']
+dependencies = ['geomet>=1.1']
 dynamic = ["version", "readme"]
 license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
@@ -46,18 +46,16 @@ dev = [
     # Keep the patched 9.x range without a literal "<": cibuildwheel runs
     # test-group installs through cmd.exe, where "<" is input redirection.
     "pytest~=9.1",
-    "PyYAML",
     "pure-sasl",
     "cryptography>=42.0",
     "cython>=3.2",
     "setuptools",
     "packaging>=25.0",
-    "pyyaml",
     "numpy",
     "objgraph",
     "coverage[toml]>=7.6",
     "jsonschema>=4.18",
-    "ccm @ git+https://git@github.com/scylladb/scylla-ccm.git@master",
+    "ccm @ git+https://git@github.com/scylladb/scylla-ccm.git@ad068edc3524309b54428c1babb31ab7e7af2c89",
 ]
 
 [tool.setuptools]
@@ -239,11 +237,11 @@ test-command = [
 [tool.cibuildwheel.windows]
 build-frontend = "build"
 # On Windows the C extensions are optional (CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST
-# is overridden to "no" below), so extension-dependent tests (e.g. libev) are
+# is overridden to "no" below), so extension-dependent tests may be
 # legitimately skipped here. CASS_DRIVER_NO_SKIP is therefore NOT enabled on
 # Windows; we only add -v so skips are visible in the log.
 test-command = [
-    "pytest --import-mode=append {project}/tests/unit -v -k \"not (test_deserialize_date_range_year or test_datetype or test_libevreactor)\"",
+    "pytest --import-mode=append {project}/tests/unit -v -k \"not (test_deserialize_date_range_year or test_datetype)\"",
 ]
 
 # TODO: set CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST to yes when https://github.com/scylladb/python-driver/issues/429 is fixed

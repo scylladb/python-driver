@@ -11,13 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import errno
+import sys
 import threading
+import time
+import weakref
 import unittest
 
 from unittest.mock import patch, Mock
 import socket
 
 from cassandra import DependencyException
+from cassandra.connection import DefaultEndPoint
 
 try:
     from cassandra.io.libevreactor import _cleanup as libev__cleanup
@@ -51,6 +56,30 @@ class LibevConnectionTest(ReactorTestMixin, unittest.TestCase):
             self.addCleanup(p.stop)
         for p in patchers:
             p.start()
+
+    def test_watcher_failure_releases_first_watcher_and_socket(self):
+        """
+        If the write watcher cannot be created (e.g. no free CRT fd on
+        Windows), the read watcher and the socket must not be leaked.
+        """
+        class Watcher(object):
+            pass
+        first = Watcher()
+        first_ref = weakref.ref(first)
+        sock = Mock()
+        from cassandra.io import libevwrapper
+        libevwrapper.IO.side_effect = [first, OSError(errno.EMFILE, 'Too many open files')]
+        del first
+
+        def connect(conn):
+            conn._socket = sock
+
+        with patch.object(LibevConnection, '_connect_socket', connect):
+            with self.assertRaises(OSError):
+                LibevConnection(DefaultEndPoint('1.2.3.4'), cql_version='3.0.1', connect_timeout=5)
+        sock.close.assert_called_once_with()
+        libevwrapper.IO.side_effect = None  # the mock's iterator holds `first` too
+        self.assertIsNone(first_ref())
 
     def test_watchers_are_finished(self):
         """
@@ -95,18 +124,21 @@ class LibevConnectionTest(ReactorTestMixin, unittest.TestCase):
                 # singleton loop is left in a working state for subsequent tests
                 # (otherwise timers would never be scheduled and tests would hang).
                 _global_loop._preparer.start()
+                # _cleanup took the preparer's loop reference back; drop it
+                # again as in LibevLoop.__init__, or the loop never returns
+                _global_loop._loop.unref()
 
 
 class _InstrumentedLock(object):
     """
-    Wraps a real threading.Lock and calls a hook the first time it is
+    Wraps a real threading.RLock (like LibevLoop._lock) and calls a hook the first time it is
     acquired. Used to pause a thread *while it holds the lock* so a second
     thread's attempt to acquire the same lock can be observed as blocking
     (or not).
     """
 
     def __init__(self, on_first_acquire):
-        self._real_lock = threading.Lock()
+        self._real_lock = threading.RLock()
         self._on_first_acquire = on_first_acquire
         self._acquire_count = 0
         self._count_lock = threading.Lock()
@@ -123,6 +155,9 @@ class _InstrumentedLock(object):
 
     def release(self):
         self._real_lock.release()
+
+    def _is_owned(self):
+        return self._real_lock._is_owned()
 
     def __enter__(self):
         self.acquire()
@@ -328,6 +363,243 @@ class LibevLoopRaceTest(unittest.TestCase):
         self.assertEqual(loop._new_conns, set())
 
 
+    def test_connection_destroyed_reentered_under_lock(self):
+        """
+        A GC finalizer (Session.__del__ -> shutdown() -> conn.close()) can
+        fire inside any block holding _lock and call connection_destroyed()
+        on the same thread. That must not deadlock, and the connection must
+        still be closed by the next loop pass.
+
+        @jira_ticket GH-1133
+        """
+        loop = LibevLoop()
+
+        conn = Mock()
+        loop.connection_created(conn)
+        loop._started = True  # simulate a running reactor thread
+
+        def finalizer_under_lock():
+            with loop._lock:
+                loop.connection_destroyed(conn)
+
+        t = threading.Thread(target=finalizer_under_lock, daemon=True)
+        t.start()
+        t.join(timeout=5)
+        self.assertFalse(t.is_alive(), "connection_destroyed() deadlocked")
+        self.assertIn(conn, loop._live_conns)
+
+        loop._loop_will_run(None)
+
+        conn._socket.close.assert_called_once_with()
+        self.assertEqual(loop._live_conns, set())
+        self.assertEqual(loop._new_conns, set())
+        self.assertEqual(loop._closed_conns, set())
+        self.assertEqual(loop._deferred_destroyed, [])
+
+
+    def _reenter_on_close(self, loop, victim):
+        # Simulate a GC finalizer closing `victim` while _close_conns() runs
+        # under _lock, which is where the reactor exit paths close sockets.
+        real_close_conns = loop._close_conns
+
+        def close_conns(conns):
+            loop._close_conns = real_close_conns  # close() runs only once
+            loop.connection_destroyed(victim)
+            real_close_conns(conns)
+        loop._close_conns = close_conns
+
+    def test_connection_destroyed_reentered_during_reactor_exit(self):
+        """
+        No loop pass follows the reactor's exit block, so a close deferred
+        there must be finished before the thread ends.
+
+        @jira_ticket GH-1133
+        """
+        loop = LibevLoop()
+        loop._started = True
+        loop._loop = Mock()  # start() returns at once with no live conns
+        victim = Mock()
+        self._reenter_on_close(loop, victim)
+
+        t = threading.Thread(target=loop._run_loop, daemon=True)
+        t.start()
+        t.join(timeout=5)
+
+        self.assertFalse(t.is_alive())
+        victim._socket.close.assert_called_once_with()
+        self.assertEqual(loop._deferred_destroyed, [])
+
+    def test_connection_destroyed_reentered_with_reactor_stopped(self):
+        """
+        With no reactor running, connection_destroyed() closes the socket
+        itself under _lock; a close deferred there must still be finished.
+
+        @jira_ticket GH-1133
+        """
+        loop = LibevLoop()
+        conn, victim = Mock(), Mock()
+        loop.connection_created(conn)
+        loop.connection_created(victim)
+        loop._started = False
+        self._reenter_on_close(loop, victim)
+
+        t = threading.Thread(target=loop.connection_destroyed, args=(conn,), daemon=True)
+        t.start()
+        t.join(timeout=5)
+
+        self.assertFalse(t.is_alive(), "connection_destroyed() deadlocked")
+        conn._socket.close.assert_called_once_with()
+        victim._socket.close.assert_called_once_with()
+        self.assertEqual(loop._live_conns, set())
+        self.assertEqual(loop._deferred_destroyed, [])
+
+
+    def test_close_drains_many_deferred_closes(self):
+        """
+        One GC pass can defer closing every shard connection at once. The
+        close() that drains them must not recurse per connection, or it
+        dies with RecursionError before failing its own pending requests.
+
+        @jira_ticket GH-1133
+        """
+        loop = LibevLoop()
+        loop._started = True
+        deferred = [Mock() for _ in range(sys.getrecursionlimit() + 100)]
+        for c in deferred:
+            loop.connection_created(c)
+        loop._deferred_destroyed.extend(deferred)
+
+        conn = Mock(lock=threading.Lock(), is_closed=False, is_defunct=False, last_error=None)
+        loop.connection_created(conn)
+        with patch('cassandra.io.libevreactor._global_loop', loop):
+            LibevConnection.close(conn)
+
+        conn.error_all_requests.assert_called_once()
+        conn.connected_event.set.assert_called_once_with()
+        self.assertEqual(loop._deferred_destroyed, [])
+        self.assertEqual(loop._live_conns, set())
+
+        loop._loop_will_run(None)
+        for c in deferred + [conn]:
+            c._socket.close.assert_called_once_with()
+
+
+class LibevLoopCleanupTest(unittest.TestCase):
+
+    def setUp(self):
+        if LibevLoop is None:
+            raise unittest.SkipTest('libev does not appear to be installed correctly')
+
+    def _start_loop(self):
+        """A started LibevLoop with 4 open connections, waiting in ev_run"""
+        from cassandra.io import libevwrapper as libev
+
+        class FakeConnection(object):
+            deque = ()
+            _write_watcher_is_active = False
+            _read_watcher = None
+            _write_watcher = None
+            endpoint = 'fake'
+
+            def __init__(self, sock):
+                self._socket = sock
+                self._read_watcher = libev.IO(sock.fileno(), libev.EV_READ, loop._loop, Mock())
+                self._write_watcher = libev.IO(sock.fileno(), libev.EV_WRITE, loop._loop, Mock())
+
+            def close(self):
+                pass
+
+        loop = LibevLoop()
+        socks = []
+
+        def teardown():
+            # also when an assertion failed: end the loop thread and release
+            # the sockets, as nothing else owns this local loop
+            loop._cleanup()
+            for sock in socks:
+                sock.close()
+        self.addCleanup(teardown)
+
+        conns = []
+        for _ in range(4):
+            sock, peer = socket.socketpair()
+            socks += [sock, peer]
+            conn = FakeConnection(sock)
+            loop.connection_created(conn)
+            loop.maybe_start()
+            conns.append(conn)
+
+        # with open connections and their read watchers active, the loop
+        # thread can't leave ev_run until _cleanup() stops the watchers
+        deadline = time.time() + 2
+        while not all(c._read_watcher.is_active() for c in conns):
+            self.assertLess(time.time(), deadline, "read watchers never started")
+            time.sleep(0.001)
+        self.assertTrue(loop._thread.is_alive())
+        return loop, conns
+
+    def test_cleanup_ends_the_loop_thread(self):
+        """
+        At exit the atexit _cleanup() runs while the loop thread is in ev_run:
+        after Cluster.shutdown() it's closing the sockets of the closed
+        connections, without it the connections are still open. _cleanup()
+        must end that thread, instead of waiting out the join timeout, which
+        made every process using the driver exit 5s late.
+        """
+        loop, conns = self._start_loop()
+
+        thread = loop._thread
+        start = time.time()
+        loop._cleanup()
+
+        self.assertFalse(thread.is_alive())
+        self.assertLess(time.time() - start, 2)
+
+    def test_cleanup_while_loop_thread_arms_the_timer(self):
+        """
+        _update_timer() checks _shutdown, then runs the timer callbacks and
+        arms the loop timer. If _cleanup() stops the timer in between, the
+        timer armed after it keeps ev_run going until it fires, so the join
+        in _cleanup() waits out its timeout.
+        """
+        loop, conns = self._start_loop()
+
+        class TimerSpy(object):
+            def __init__(self, timer):
+                self.timer = timer
+                self.stopped = threading.Event()
+
+            def start(self, timeout):
+                self.timer.start(timeout)
+
+            def stop(self):
+                self.timer.stop()
+                self.stopped.set()
+
+        timer = loop._loop_timer = TimerSpy(loop._loop_timer)
+        cleanup = threading.Thread(target=loop._cleanup)
+        cleanup_started = threading.Event()
+
+        def service_timeouts():
+            # runs on the loop thread, after _update_timer() checked _shutdown
+            if not cleanup.is_alive() and not loop._shutdown:
+                cleanup.start()
+                cleanup_started.set()
+                # let _cleanup() stop the timer before it's armed below
+                timer.stopped.wait(2)
+            return time.time() + 100
+
+        thread = loop._thread
+        start = time.time()
+        with patch.object(loop._timers, 'service_timeouts', service_timeouts):
+            loop.notify()  # wake the loop thread to run _update_timer()
+            self.assertTrue(cleanup_started.wait(2))
+            cleanup.join(10)
+
+        self.assertFalse(thread.is_alive())
+        self.assertLess(time.time() - start, 2)
+
+
 class LibevTimerPatcher(unittest.TestCase):
 
     @classmethod
@@ -374,3 +646,80 @@ class LibevTimerTest(TimerTestMixin, LibevTimerPatcher):
 
         LibevConnection.initialize_reactor()
         super(LibevTimerTest, self).setUp()
+
+
+class LibevRealSocketTest(unittest.TestCase):
+
+    def test_io_watcher_on_real_socket(self):
+        """
+        An IO watcher on a real socket must fire. On Windows this used to kill
+        the process with 0xC0000409 (scylladb/python-driver#501).
+        """
+        if LibevConnection is None:
+            raise unittest.SkipTest('libev does not appear to be installed correctly')
+        from cassandra.io import libevwrapper
+
+        a, b = socket.socketpair()
+        self.addCleanup(a.close)
+        self.addCleanup(b.close)
+        fired = []
+        loop = libevwrapper.Loop()
+
+        def callback(watcher, revents):
+            fired.append(revents)
+            watcher.stop()
+            timer.stop()
+
+        def timeout():
+            watcher.stop()
+            timer.stop()
+
+        watcher = libevwrapper.IO(b, libevwrapper.EV_READ, loop, callback)
+        # Run the loop on this thread: it returns once both watchers are
+        # stopped, so nothing native is left running when the test ends.
+        timer = libevwrapper.Timer(loop, timeout)
+        try:
+            watcher.start()
+            timer.start(5)
+            a.send(b'x')
+            loop.start()
+        finally:
+            # The callbacks and the native watchers reference each other, and
+            # IO/Timer cannot be collected by the GC. Clearing the closure
+            # cells frees them (and on Windows the socket duplicate) here.
+            del watcher, timer
+        self.assertEqual(fired, [libevwrapper.EV_READ])
+
+    def test_io_init_failures_keep_reference_counts(self):
+        """
+        IO.__init__ failures must release the loop and callback references
+        exactly once, and re-initializing a watcher is refused instead of
+        leaking what the first initialization acquired.
+        """
+        if LibevConnection is None:
+            raise unittest.SkipTest('libev does not appear to be installed correctly')
+        from cassandra.io import libevwrapper
+
+        a, b = socket.socketpair()
+        self.addCleanup(a.close)
+        self.addCleanup(b.close)
+        loop = libevwrapper.Loop()
+
+        def callback(watcher, revents):
+            pass
+
+        not_callable = object()
+        refs = sys.getrefcount(loop), sys.getrefcount(callback), sys.getrefcount(not_callable)
+        for _ in range(10):
+            with self.assertRaises(TypeError):
+                libevwrapper.IO(b, libevwrapper.EV_READ, loop, not_callable)
+            with self.assertRaises((TypeError, ValueError)):
+                libevwrapper.IO(-1, libevwrapper.EV_READ, loop, callback)
+            with self.assertRaises(TypeError):
+                libevwrapper.IO(object(), libevwrapper.EV_READ, loop, callback)
+            watcher = libevwrapper.IO(b, libevwrapper.EV_READ, loop, callback)
+            with self.assertRaises(RuntimeError):
+                watcher.__init__(b, libevwrapper.EV_READ, loop, callback)
+            del watcher
+        self.assertEqual(
+            (sys.getrefcount(loop), sys.getrefcount(callback), sys.getrefcount(not_callable)), refs)

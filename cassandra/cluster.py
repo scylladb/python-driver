@@ -343,9 +343,11 @@ class NoHostAvailable(Exception):
 
     errors = None
     """
-    A map of the form ``{ip: exception}`` which details the particular
-    Exception that was caught for each host the operation was attempted
-    against.
+    A map from hosts or connection-candidate labels to the exceptions that
+    prevented their use. Keys may be :class:`cassandra.pool.Host` objects,
+    endpoint strings, or host-ID labels for unresolved policy candidates.
+    If all initial pools fail with control fallback disabled, it is instead
+    a list of the host addresses that could not be connected.
     """
 
     def __init__(self, message, errors):
@@ -2384,7 +2386,9 @@ class Cluster(object):
                 return
 
             log.info("Connection pools established for node %s", host)
-            if not self._lifecycle.mark_ready(host, readiness_generation=generation):
+            if not self._lifecycle.mark_ready(
+                    host, readiness_generation=generation,
+                    advance_health=False):
                 return
             self._notify_pending_add(host, generation)
             for listener in self.listeners:
@@ -2642,18 +2646,30 @@ class Cluster(object):
         if self.is_shutdown or self.allow_control_connection_query_fallback == ControlConnectionQueryFallback.SkipPoolCreation:
             return False
 
+        health_generation = self._lifecycle.observe_health(host)
+        if health_generation is None:
+            return False
+
         # Custom distance policies may refresh topology. Do not invoke them
-        # under the Host state lock needed by terminal publication.
+        # under the Host state lock needed by terminal publication. Recovery
+        # or pool publication during inspection invalidates this observation.
         connected = False
         if (self._discount_down_events and
                 self.profile_manager.distance(host) != HostDistance.IGNORED):
             for session in tuple(self.sessions):
+                # This failure will shut down its pool, including any healthy
+                # sibling shards. Only independent pools can discount DOWN.
+                if (isinstance(_pool_failure,
+                               _lifecycle.ConnectionFailureReservation) and
+                        session is _pool_failure.session):
+                    continue
                 pool_state = session.get_pool_state().get(host)
                 if pool_state:
                     connected |= pool_state['open_count'] > 0
 
         return self._lifecycle.dispatch_down(
-            host, is_host_addition, connected, expect_host_to_be_down,
+            host, health_generation, is_host_addition, connected,
+            expect_host_to_be_down,
             on_add_reconnection, _pool_failure)
 
     def on_add(self, host, refresh_nodes=True,
@@ -2801,7 +2817,8 @@ class Cluster(object):
                 log.warning("Connection pool could not be created, not marking node %s up", host)
             else:
                 self._finalize_add(host, generation=generation,
-                               addition_token=addition_token)
+                                   addition_token=addition_token,
+                                   advance_health=False)
                 return
 
             if not reconcile_pools_on_failure:
@@ -2909,10 +2926,10 @@ class Cluster(object):
 
     @_lifecycle.event
     def _finalize_add(self, host, set_up=True, generation=None,
-                      addition_token=None):
+                      addition_token=None, advance_health=True):
         if not self._lifecycle.mark_ready(
                 host, set_up, readiness_generation=generation,
-                addition_token=addition_token):
+                addition_token=addition_token, advance_health=advance_health):
             return
 
         self._notify_pending_add(host, generation)
@@ -3722,7 +3739,13 @@ class Session(object):
 
         `paging_state` is an optional paging state, reused from a previous :class:`ResultSet`.
 
-        `host` is the :class:`cassandra.pool.Host` that should handle the query. If the host specified is down or
+        `host` is the :class:`cassandra.pool.Host` that should handle the
+        query.
+        It is resolved by ``host_id`` against this cluster's current metadata,
+        so a cached Host from a previous Cluster or endpoint can be reused.
+        The current host and its current endpoint are used. An unknown host ID
+        fails with :class:`NoHostAvailable`, without targeting another node.
+        If the resolved current host is down or
         not yet connected, the query will fail with :class:`NoHostAvailable`. Using this is
         discouraged except in a few cases, e.g., querying node-local tables and applying schema changes.
 
@@ -4824,28 +4847,37 @@ class Session(object):
                 publish_pool = False
                 stale_candidate = False
                 stale_result = False
-                with self._lock:
-                    with host.lock:
-                        if not self._owns_pool_generation_locked(
-                                host, generation, expected_pool, endpoint):
-                            stale_candidate = True
-                            stale_result = \
-                                self._stale_pool_creation_result_locked(
-                                    host, expected_pool, intent, distance,
-                                    ignored_intent_is_success=True)
-                        else:
-                            keyspace = self.keyspace
-                            if new_pool._keyspace == keyspace:
-                                current_intent = \
-                                    self._pool_intents_locked().get(host)
-                                if (current_intent is not intent and
-                                        expected_pool is not None and
-                                        not expected_pool.is_shutdown):
-                                    new_pool.host_distance = \
-                                        expected_pool.host_distance
-                                self._pools[host] = new_pool
-                                self._pool_generations[host] = object()
-                                publish_pool = True
+                # This short guard excludes membership changes, not
+                # background connection creation or keyspace waits under
+                # the pool work lock.
+                with new_pool._membership_lock:
+                    with self._lock:
+                        with host.lock:
+                            if not self._owns_pool_generation_locked(
+                                    host, generation, expected_pool, endpoint):
+                                stale_candidate = True
+                                stale_result = \
+                                    self._stale_pool_creation_result_locked(
+                                        host, expected_pool, intent, distance,
+                                        ignored_intent_is_success=True)
+                            else:
+                                keyspace = self.keyspace
+                                if new_pool._keyspace == keyspace:
+                                    current_intent = \
+                                        self._pool_intents_locked().get(host)
+                                    if (current_intent is not intent and
+                                            expected_pool is not None and
+                                            not expected_pool.is_shutdown):
+                                        new_pool.host_distance = \
+                                            expected_pool.host_distance
+                                    with (
+                                        new_pool._lock_usable_connection()
+                                    ) as connected:
+                                        self._pools[host] = new_pool
+                                        self._pool_generations[host] = object()
+                                        if connected:
+                                            host._health_generation += 1
+                                        publish_pool = True
 
                 if stale_candidate:
                     log.debug(
@@ -5896,7 +5928,21 @@ class ControlConnection(object):
         lbp = self._cluster.load_balancing_policy \
             if self._cluster._config_mode == _ConfigMode.LEGACY else self._cluster._default_load_balancing_policy
 
-        for endpoint in chain((host.endpoint for host in lbp.make_query_plan()), self._cluster.endpoints_resolved):
+        def policy_endpoints():
+            for host in lbp.make_query_plan():
+                current = self._cluster.metadata.get_host_by_host_id(
+                    host.host_id)
+                if current is None:
+                    errors["Host ID %s" % host.host_id] = ConnectionException(
+                        "Host ID is not known to this cluster")
+                    log.debug(
+                        "[control connection] Skipping unknown host ID %s "
+                        "from policy", host.host_id)
+                else:
+                    yield current.endpoint
+
+        for endpoint in chain(policy_endpoints(),
+                              self._cluster.endpoints_resolved):
             try:
                 return (self._try_connect(endpoint), None)
             except Exception as exc:
@@ -5912,9 +5958,8 @@ class ControlConnection(object):
         Tries to connect to each host in the query plan until one succeeds
         or every attempt fails. If successful, a new Connection will be
         returned.  Otherwise, :exc:`NoHostAvailable` will be raised
-        with an "errors" arg that is a dict mapping host addresses
-        to the exception that was raised when an attempt was made to open
-        a connection to that host.
+        with an "errors" arg mapping endpoint strings or unknown host-ID
+        labels to the exceptions that prevented selection or connection.
         """
         (conn, _) = self._try_connect_to_hosts()
         if conn is not None:
@@ -7385,8 +7430,14 @@ class ResponseFuture(object):
             # We should still raise OperationTimedOut to reject the future so that the main event thread will not
             # wait for it endlessly
             except KeyError:
-                key = "Connection defunct by heartbeat"
-                errors = {key: "Client request timeout. See Session.execute[_async](timeout)"}
+                if not self.is_schema_agreed:
+                    # The request was also removed when its response arrived:
+                    # a schema change result, which now waits for schema
+                    # agreement. Report that instead of a defunct connection.
+                    errors = self._schema_agreement_timeout_errors()
+                else:
+                    key = "Connection defunct by heartbeat"
+                    errors = {key: "Client request timeout. See Session.execute[_async](timeout)"}
                 self._set_final_exception(OperationTimedOut(errors, self._current_host,
                                                             timeout=self.timeout,
                                                             in_flight=connection.in_flight))
@@ -7418,13 +7469,16 @@ class ResponseFuture(object):
                     key = str(self._current_host.endpoint)
                 errors = {key: "Client request timeout. See Session.execute[_async](timeout)"}
             else:
-                connection = self.session.cluster.control_connection._connection
-                host = str(connection.endpoint) if connection else 'unknown'
-                errors = {host: "Request timed out while waiting for schema agreement. See Session.execute[_async](timeout) and Cluster.max_schema_agreement_wait."}
+                errors = self._schema_agreement_timeout_errors()
 
         self._set_final_exception(OperationTimedOut(errors, self._current_host,
                                                     timeout=self.timeout,
                                                     in_flight=conn_in_flight))
+
+    def _schema_agreement_timeout_errors(self):
+        connection = self.session.cluster.control_connection._connection
+        host = str(connection.endpoint) if connection else 'unknown'
+        return {host: "Request timed out while waiting for schema agreement. See Session.execute[_async](timeout) and Cluster.max_schema_agreement_wait."}
 
     def _on_speculative_execute(self):
         self._timer = None
@@ -7473,7 +7527,30 @@ class ResponseFuture(object):
         # query_plan is an iterator, so this will resume where we last left
         # off if send_request() is called multiple times
         for host in self.query_plan:
-            req_id = self._query(host)
+            # Public targets and extension query plans may retain a Host from
+            # an older Cluster or endpoint generation. Resolve only new
+            # selections; internal attempt callbacks keep their original owner.
+            selected_host = host
+            if isinstance(host, Host):
+                host = self.session.cluster.metadata.get_host_by_host_id(
+                    host.host_id)
+            if host is None:
+                host_id = getattr(selected_host, 'host_id', None)
+                self._errors[selected_host] = ConnectionException(
+                    "Host ID %s is not known to this cluster" % host_id)
+                log.debug("Skipping unknown host ID %s from query plan",
+                          host_id)
+                req_id = None
+            elif isinstance(host, Host) and (host._is_removed or
+                                             host.is_up is False):
+                self._errors[host] = ConnectionException(
+                    "Host has been marked down or removed")
+                log.debug("Skipping unavailable current host ID %s "
+                          "from query plan",
+                          host.host_id)
+                req_id = None
+            else:
+                req_id = self._query(host)
             if req_id is not None:
                 self._req_id = req_id
                 return True
@@ -7970,11 +8047,21 @@ class ResponseFuture(object):
             else:
                 connection, request_id = pool.borrow_connection(
                     timeout=2.0, **borrow_options)
-            # Pool publication/removal and endpoint updates take the host
-            # lock. Keep it until send begins so ownership cannot change
-            # between the final check and the send. Other hosts can send in
-            # parallel.
+            # Check the metadata owner at final admission under the host lock.
+            # This prevents terminal retirement until send begins. Metadata
+            # publication uses its own lock and may follow admission.
+            # An admitted attempt keeps its original pool and stream owners.
             with host.lock if isinstance(host, Host) else nullcontext():
+                if (isinstance(host, Host) and
+                        (host.is_up is False or
+                         not self.session.cluster._lifecycle.is_current(
+                             host))):
+                    self._errors[host] = ConnectionException(
+                        "Host is down or no longer current in this cluster")
+                    log.debug(
+                        "Host ID %s became unavailable while borrowing "
+                        "connection", host.host_id)
+                    return None
                 if (pool.is_shutdown or
                         self.session._pools.get(host) is not pool or
                         not self.session._pool_matches_host(host, pool)):

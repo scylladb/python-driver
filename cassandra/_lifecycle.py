@@ -20,7 +20,7 @@ explicitly for internal use; no names are exported by wildcard imports.
 
 from collections import deque
 from concurrent.futures import Future
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from functools import partial, wraps
 import logging
 from threading import local, RLock
@@ -56,9 +56,73 @@ class PoolFailureReservation:
                     self.host, self.generation, self.expected_pool, self.endpoint))
 
     def is_current(self):
+        with self.locked():
+            return self.owns_locked()
+
+    @contextmanager
+    def locked(self):
         with self.session._lock:
             with self.host.lock:
-                return self.owns_locked()
+                yield
+
+
+class ConnectionFailureReservation:
+    """Retain the pool and shard slot that own a connection failure."""
+
+    def __init__(self, pool, connection, replacing=False):
+        self.pool = pool
+        self.connection = connection
+        self.session = pool._session_ref()
+        self.host = pool.host
+        self.replacing = replacing
+        self.retired = False
+
+    @contextmanager
+    def locked(self):
+        if self.session is None:
+            yield
+            return
+        while True:
+            with self.session._lock:
+                with self.host.lock:
+                    # Unpublished candidates can hold their work lock while
+                    # publication waits for Session under the membership lock.
+                    # A completed retirement no longer needs shard ownership
+                    # inspected; its receipt retains only Session/Host guards.
+                    if (self.retired or
+                            self.session._pools.get(self.host) is not self.pool):
+                        yield
+                        return
+                    if self.pool._lock.acquire(False):
+                        try:
+                            yield
+                        finally:
+                            self.pool._lock.release()
+                        return
+            # Never retain work while reacquiring Session/Host. Active socket
+            # failures may await I/O under work before they can retire a pool.
+            with self.pool._lock:
+                pass
+
+    def owns_locked(self):
+        if (self.session is None or
+                self.session._pools.get(self.host) is not self.pool):
+            return False
+        owns_slot = self.retired
+        if not self.retired and not self.pool.is_shutdown:
+            current = self.pool._connections.get(self.connection.features.shard_id)
+            owns_slot = (current is self.connection or
+                         (self.replacing and current is None and
+                          self.pool._replacement_connections.get(
+                              self.connection.features.shard_id) is self.connection))
+        return (not self.session.is_shutdown and
+                not self.session.cluster.is_shutdown and
+                not self.host._is_removed and
+                self.host.endpoint == self.pool.endpoint and owns_slot)
+
+    def is_current(self):
+        with self.locked():
+            return self.owns_locked()
 
 
 class LifecycleCoordinator:
@@ -186,35 +250,46 @@ class LifecycleCoordinator:
                     getattr(host, '_readiness_generation', 0)):
                 host._currently_handling_node_up = False
 
-    def begin_down(self, host, connected=False, expect_down=False, pool_failure=None):
-        """Return (generation, retry_only), or None if DOWN is discounted."""
-        failure_lock = (pool_failure.session._lock
-                        if pool_failure is not None else nullcontext())
-        with failure_lock:
-            with host.lock:
-                if (self.closed or host._is_removed or connected or
-                        (pool_failure is not None and not pool_failure.owns_locked())):
-                    return None
-                self.cancel_preparation(host)
-                host._readiness_generation = (
-                    getattr(host, '_readiness_generation', 0) + 1)
-                host._currently_handling_node_up = False
-                was_up = host.is_up
-                host.set_down()
-                if (not was_up and (host.is_currently_reconnecting() or
-                                    host._currently_handling_node_down)):
-                    return None
-                host._currently_handling_node_down = True
-                host._down_event_generation += 1
-                return host._down_event_generation, not was_up and not expect_down
+    def observe_health(self, host):
+        """Capture ownership before inspecting policies or session pools."""
+        with host.lock:
+            if self.closed or host._is_removed:
+                return None
+            return host._health_generation
 
-    def dispatch_down(self, host, is_host_addition, connected, expect_host_to_be_down,
-                      on_add_reconnection, pool_failure=None):
+    def begin_down(self, host, health_generation, connected=False,
+                   expect_down=False, pool_failure=None):
+        """Return (generation, retry_only), or None if DOWN is discounted."""
+        failure_lock = (pool_failure.locked()
+                        if pool_failure is not None else host.lock)
+        with failure_lock:
+            if (self.closed or host._is_removed or connected or
+                    health_generation != host._health_generation or
+                    (pool_failure is not None and not pool_failure.owns_locked())):
+                return None
+            host._health_generation += 1
+            self.cancel_preparation(host)
+            host._readiness_generation = (
+                getattr(host, '_readiness_generation', 0) + 1)
+            host._currently_handling_node_up = False
+            was_up = host.is_up
+            host.set_down()
+            if (not was_up and (host.is_currently_reconnecting() or
+                                host._currently_handling_node_down)):
+                return None
+            host._currently_handling_node_down = True
+            host._down_event_generation += 1
+            return host._down_event_generation, not was_up and not expect_down
+
+    def dispatch_down(self, host, health_generation, is_host_addition,
+                      connected, expect_host_to_be_down, on_add_reconnection,
+                      pool_failure=None):
         # Publish DOWN state and FIFO admission together. Do not drain on
         # this caller; the executor (or another drainer) owns delivery.
         with self.transaction(drain=False):
             admission = self.begin_down(
-                host, connected=connected, expect_down=expect_host_to_be_down,
+                host, health_generation, connected=connected,
+                expect_down=expect_host_to_be_down,
                 pool_failure=pool_failure)
             if admission is None:
                 return False
@@ -230,8 +305,8 @@ class LifecycleCoordinator:
                         on_add_reconnection=on_add_reconnection)
                 if future is None:
                     self.finish_down(host, down_event_generation)
-                # Restarting the host reconnector does not dispatch the DOWN
-                # callbacks that reconnect the control connection.
+                # Restarting the host reconnector does not dispatch
+                # DOWN callbacks that reconnect the control connection.
                 return False
 
             log.warning("Host %s has been marked down", host)
@@ -434,7 +509,7 @@ class LifecycleCoordinator:
             return True
 
     def mark_ready(self, host, set_up=True, readiness_generation=None,
-                   addition_token=None):
+                   addition_token=None, advance_health=True):
         if (not self.readiness_is_current(host, readiness_generation) or
                 (addition_token is not None and
                  not self.addition_is_current(host, addition_token))):
@@ -448,6 +523,8 @@ class LifecycleCoordinator:
                 return False
             if set_up:
                 host.is_up = True
+                if advance_health:
+                    host._health_generation += 1
             host._addition_token = None
             host._endpoint_add_retry_pending = False
             host._lifecycle_pending = False

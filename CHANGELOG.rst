@@ -1,5 +1,6 @@
-Unreleased
-==========
+3.29.13
+========
+Nov 2, 2026
 
 Features
 --------
@@ -31,6 +32,26 @@ Bug Fixes
   built-in Cython LZ4 codec is present. As before 3.29.12, it picks LZ4 only when
   the ``lz4`` package is installed; ``compression='lz4'`` still works with the
   built-in codec alone (#1085).
+* Use ``host_id`` as the canonical host identity, replace hosts when their
+  endpoints move, and resolve retained request and control-policy hosts against
+  current metadata before connecting or sending (#1006, #1117, #1118).
+* Coordinate topology notifications, pool ownership and reconnection so stale
+  UP, DOWN and socket-failure work cannot retire a recovered host or its pool.
+  Avoid lock inversions and shutdown hangs while waiting for pool work
+  (#1035, #1097, #1124).
+* Keep requests tied to the pool and endpoint that sent them, release request
+  IDs after failed sends, and ignore late responses after a request completes
+  (#872, #874, #1056, #1125).
+* Preserve session keyspaces through control-connection fallback and pool
+  changes, and report schema-agreement timeouts without defuncting healthy
+  connections (#1126).
+* Preserve tablet replica order for LWT and serial queries (#782), and stop
+  retrying permanent ``TruncateError`` failures (#632).
+* Decode null collection elements correctly in Cython deserializers (#1120)
+  and retain partial protocol v5 segment headers across socket reads.
+* Fix libev loop exit races, reentrant loop-lock deadlocks and socket cleanup;
+  avoid a five-second shutdown delay and use CRT file descriptors for Windows
+  sockets (#981).
 
 Behavior Changes
 ----------------
@@ -77,6 +98,17 @@ Behavior Changes
   ``request_timeout`` otherwise (10 seconds by default), instead of never
   timing out on the client. With ``raise_on_first_error=True``, both result
   modes now stop scheduling new statements after the first failure.
+* ``PyYAML`` is no longer a dependency. It has been unused since the removal
+  of the Scylla Cloud bundle support; applications that import ``yaml`` must
+  depend on it directly.
+* ``cassandra.cqlengine`` is deprecated; its documentation now points to
+  ``coodie`` as an alternative (#1127).
+* macOS wheels now require macOS 15 or later (#1101).
+
+Performance Improvements
+------------------------
+* Cache parameterized CQL types, avoid temporary format strings when packing
+  routing keys, and reduce per-frame memory overhead (#794, #799, #802).
 
 3.29.12
 ========

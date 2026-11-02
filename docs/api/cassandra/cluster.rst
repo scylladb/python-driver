@@ -171,6 +171,16 @@ Clusters and Sessions
 
    .. automethod:: execute_async(statement[, parameters][, trace][, custom_payload][, paging_state][, host][, execute_as])
 
+   Both execution methods resolve an explicit ``host`` by its ``host_id`` in
+   the receiving cluster's current metadata. A cached Host can therefore be
+   reused after recreating the Cluster or changing the node's endpoint. The
+   current host and endpoint are used for each new request or page. An unknown
+   ID or unavailable target raises :class:`NoHostAvailable` without selecting
+   another node.
+
+   Hosts yielded by custom load-balancing policies are resolved in the same
+   way, while retaining the policy's normal order and failover behavior.
+
    .. automethod:: execute_concurrent(statements_and_parameters[, concurrency][, raise_on_first_error][, results_generator][, execution_profile])
 
    .. automethod:: execute_concurrent_with_args(statement, parameters, *args, **kwargs)
