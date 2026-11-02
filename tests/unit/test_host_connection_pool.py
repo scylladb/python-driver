@@ -46,11 +46,14 @@ def _make_socket_pool(session=None):
     session.cluster.shard_aware_options.disable = True
 
     def connection():
-        return HashableMock(
+        conn = HashableMock(
             spec=Connection, lock=Lock(), in_flight=0, max_request_id=100,
             is_closed=False, is_defunct=False, signaled_error=False,
             orphaned_threshold_reached=False, orphaned_request_ids=set(),
             keyspace=None, features=ProtocolFeatures(shard_id=0))
+        conn.set_keyspace_blocking.side_effect = \
+            lambda keyspace: setattr(conn, 'keyspace', keyspace)
+        return conn
 
     original = connection()
     replacement = connection()
@@ -458,6 +461,9 @@ class _PoolTests(unittest.TestCase):
     def make_pool(self, host, session):
         host.lock = RLock()
         host._is_removed = False
+        conn = session.cluster.connection_factory.return_value
+        conn.set_keyspace_blocking.side_effect = \
+            lambda keyspace: setattr(conn, 'keyspace', keyspace)
         pool = self.PoolImpl(host, HostDistance.LOCAL, session)
         session._pools[host] = pool
         return pool
@@ -1203,8 +1209,9 @@ def test_shard_connection_diagnostics(socket_pool, caplog, pause, outcome):
 @pytest.mark.parametrize('change', ['endpoint', 'pool', 'host', 'session', 'cluster'])
 @pytest.mark.parametrize('fail', [False, True])
 def test_connection_completion_rechecks_ownership(
-        socket_pool, operation, pause, change, fail):
+        socket_pool, request, operation, pause, change, fail):
     host, session, pool, original, candidate = socket_pool
+    request.addfinalizer(pool.shutdown)
     host.sharding_info = Mock(shards_count=2)
     pool._get_shard_aware_endpoint = Mock(return_value=None)
     if operation == 'shard':
@@ -1251,6 +1258,7 @@ def test_connection_completion_rechecks_ownership(
                 host.endpoint = DefaultEndPoint('127.0.0.2')
             elif change == 'pool':
                 winner = HostConnection(host, HostDistance.IGNORED, session)
+                request.addfinalizer(winner.shutdown)
                 session._pools[host] = winner
             elif change == 'host':
                 host._is_removed = True
@@ -1277,12 +1285,12 @@ def test_connection_completion_rechecks_ownership(
     if winner is not None:
         assert session._pools[host] is winner
         assert not winner.is_shutdown
-    pool.shutdown()
 
 
 @pytest.mark.parametrize('fail', [False, True])
-def test_old_attempt_cleanup_preserves_new_attempt(socket_pool, fail):
+def test_old_attempt_cleanup_preserves_new_attempt(socket_pool, request, fail):
     host, session, pool, original, candidate = socket_pool
+    request.addfinalizer(pool.shutdown)
     host.sharding_info = Mock(shards_count=2)
     candidate.features = ProtocolFeatures(shard_id=1)
     pool._get_shard_aware_endpoint = Mock(return_value=None)
@@ -1329,12 +1337,13 @@ def test_old_attempt_cleanup_preserves_new_attempt(socket_pool, fail):
     assert pool._connections == {0: original, 1: healthy}
     assert not pool._connecting
     healthy.close.assert_not_called()
-    pool.shutdown()
 
 
 @pytest.mark.parametrize('fail', [False, True])
-def test_competing_shard_completion_cannot_overwrite_winner(socket_pool, fail):
+def test_competing_shard_completion_cannot_overwrite_winner(
+        socket_pool, request, fail):
     host, session, pool, original, candidate = socket_pool
+    request.addfinalizer(pool.shutdown)
     host.sharding_info = Mock(shards_count=3)
     candidate.features = ProtocolFeatures(shard_id=1)
     pool._get_shard_aware_endpoint = Mock(return_value=None)
@@ -1377,7 +1386,6 @@ def test_competing_shard_completion_cannot_overwrite_winner(socket_pool, fail):
     candidate.close.assert_called_once()
     winner.close.assert_not_called()
     assert not pool._connecting
-    pool.shutdown()
 
 
 def test_shutdown_during_keyspace_sync_revokes_publication(socket_pool):
@@ -1435,8 +1443,9 @@ def test_shutdown_during_keyspace_sync_revokes_publication(socket_pool):
     assert not pool._excess_connections
 
 
-def test_excess_connection_retention_rechecks_pool_owner(socket_pool):
+def test_excess_connection_retention_rechecks_pool_owner(socket_pool, request):
     host, session, pool, original, candidate = socket_pool
+    request.addfinalizer(pool.shutdown)
     host.sharding_info = Mock(shards_count=2)
     pool._get_shard_aware_endpoint = Mock(return_value=None)
     pool.max_excess_connections_per_shard_multiplier = 0
@@ -1464,6 +1473,7 @@ def test_excess_connection_retention_rechecks_pool_owner(socket_pool):
         worker.start()
         assert entered.wait(5)
         winner = HostConnection(host, HostDistance.IGNORED, session)
+        request.addfinalizer(winner.shutdown)
         with session._lock:
             session._pools[host] = winner
     finally:
@@ -1803,8 +1813,10 @@ def test_rejected_replacement_clears_only_its_marker(
 
 
 @pytest.mark.parametrize('newer_attempt', [False, True])
-def test_cancelled_shard_work_only_clears_its_own_marker(socket_pool, newer_attempt):
+def test_cancelled_shard_work_only_clears_its_own_marker(
+        socket_pool, request, newer_attempt):
     host, session, pool, original, candidate = socket_pool
+    request.addfinalizer(pool.shutdown)
     future = Future()
     session.submit.return_value = future
     pool._submit_shard_attempt(1)
@@ -1816,7 +1828,6 @@ def test_cancelled_shard_work_only_clears_its_own_marker(socket_pool, newer_atte
         assert pool._connection_attempts[1] is newer[1]
     else:
         assert 1 not in pool._connection_attempts
-    pool.shutdown()
 
 
 def test_failure_waiting_for_membership_does_not_hold_session(socket_pool):
