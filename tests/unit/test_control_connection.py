@@ -17,6 +17,8 @@ import unittest
 import uuid
 import weakref
 
+import pytest
+
 from concurrent.futures import Future, ThreadPoolExecutor
 from threading import Event, Thread
 from unittest.mock import Mock, ANY, call, patch
@@ -3197,3 +3199,25 @@ class EventTimingTest(unittest.TestCase):
                 current_delay = self.cluster.scheduler.mock_calls[0][1][0]
                 assert prior_delay < current_delay
                 prior_delay = current_delay
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+@pytest.mark.parametrize('unknown', [False, True])
+def test_control_connection_policy_uses_current_endpoints(legacy, unknown):
+    current = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
+    cached = Host('127.0.0.2', SimpleConvictionPolicy,
+                  host_id=uuid.uuid4() if unknown else current.host_id)
+    policy = Mock(spec=RoundRobinPolicy)
+    policy.make_query_plan.return_value = iter([cached])
+    kwargs = {'load_balancing_policy': policy} if legacy else {
+        'execution_profiles': {EXEC_PROFILE_DEFAULT: ExecutionProfile(
+            load_balancing_policy=policy)}}
+    with Cluster(protocol_version=4, **kwargs) as cluster:
+        cluster.metadata.add_or_return_host(current)
+        cluster.endpoints_resolved = [DefaultEndPoint('127.0.0.3')]
+        control = cluster.control_connection
+        with patch.object(control, '_try_connect') as connect:
+            control._try_connect_to_hosts()
+
+        connect.assert_called_once_with(
+            cluster.endpoints_resolved[0] if unknown else current.endpoint)
