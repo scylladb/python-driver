@@ -122,7 +122,8 @@ def test_explicit_host_resolves_by_id(routed_session, asynchronous,
 
 @pytest.mark.parametrize('asynchronous', [False, True])
 @pytest.mark.parametrize('failure', ['unknown', 'missing_pool', 'shutdown_pool',
-                                    'obsolete_pool', 'current_down'])
+                                    'obsolete_pool', 'current_down',
+                                    'down_during_borrow'])
 def test_explicit_host_failure_does_not_select_another_node(
         routed_session, asynchronous, failure):
     session, current, pool, connection = routed_session
@@ -141,6 +142,11 @@ def test_explicit_host_failure_does_not_select_another_node(
         pool.host = cached
     elif failure == 'current_down':
         current.set_down()
+    elif failure == 'down_during_borrow':
+        def borrow_after_down(**kwargs):
+            current.set_down()
+            return connection, 1
+        pool.borrow_connection.side_effect = borrow_after_down
     session.cluster.allow_control_connection_query_fallback = (
         ControlConnectionQueryFallback.SkipPoolCreation)
 
@@ -157,6 +163,9 @@ def test_explicit_host_failure_does_not_select_another_node(
     connection.send_msg.assert_not_called()
     other_connection.send_msg.assert_not_called()
     control_query.assert_not_called()
+    if failure == 'down_during_borrow':
+        pool.return_connection.assert_called_once_with(connection)
+        assert list(connection.request_ids) == [1]
 
 
 @pytest.mark.parametrize('statement_kind', ['simple', 'prepared', 'bound', 'batch'])
