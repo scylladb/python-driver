@@ -1426,6 +1426,7 @@ def test_shutdown_during_keyspace_sync_revokes_publication(socket_pool):
         for thread in (worker, shutdown):
             if thread.ident is not None:
                 thread.join(5)
+        pool._lock = work_lock
     assert not worker.is_alive() and not shutdown.is_alive()
     assert not errors
     assert pool.is_shutdown
@@ -1478,6 +1479,192 @@ def test_excess_connection_retention_rechecks_pool_owner(socket_pool):
     assert not winner.is_shutdown
     pool.shutdown()
     retained_excess.close.assert_called_once()
+
+
+@pytest.mark.parametrize('failure', [
+    'current', 'retry', 'retry_retired', 'retired', 'newer_marker'])
+def test_sharded_replacement_submission_failure(socket_pool, caplog, failure):
+    host, session, pool, original, candidate = socket_pool
+    host.sharding_info = Mock(shards_count=2)
+    session.cluster.shard_aware_options.disable = False
+    retry = Future()
+
+    def submit(*args, **kwargs):
+        if session.submit.call_count == 1:
+            if failure == 'retired':
+                with session._lock, host.lock:
+                    host._is_removed = True
+            elif failure == 'newer_marker':
+                pool._replacement_connections[0] = candidate
+            raise RuntimeError('scheduler unavailable')
+        if failure in ('retry', 'retry_retired'):
+            if failure == 'retry_retired':
+                with session._lock, host.lock:
+                    host._is_removed = True
+            raise RuntimeError('retry unavailable')
+        return retry
+
+    session.submit.side_effect = submit
+    try:
+        with caplog.at_level(logging.WARNING, logger='cassandra.pool'):
+            pool._replace(original)
+        if failure in ('current', 'retry', 'retry_retired'):
+            assert 'scheduler unavailable' in caplog.text
+            assert str(host) in caplog.text
+            assert session.submit.call_count == 2
+        else:
+            assert not caplog.records
+            session.submit.assert_called_once()
+        if failure == 'current':
+            assert pool._replacement_connections == {0: original}
+        elif failure == 'newer_marker':
+            assert pool._replacement_connections == {0: candidate}
+        else:
+            assert not pool._replacement_connections
+        if failure == 'retry':
+            assert 'retry unavailable' in caplog.text
+        elif failure == 'retry_retired':
+            assert 'retry unavailable' not in caplog.text
+        assert not pool._connecting
+        assert not pool._connection_attempts
+        session.cluster.connection_factory.assert_called_once()
+        session.cluster.on_down.assert_not_called()
+        host.signal_connection_failure.assert_not_called()
+    finally:
+        retry.cancel()
+        pool.shutdown()
+
+
+def test_concurrent_requests_coalesce_shard_recovery(socket_pool):
+    host, session, pool, original, candidate = socket_pool
+    host.sharding_info = Mock(shards_count=2)
+    host.sharding_info.shard_id_from_token.return_value = 1
+    session.cluster.shard_aware_options.disable = False
+    candidate.features = ProtocolFeatures(shard_id=1)
+    pool._get_shard_aware_endpoint = Mock(return_value=None)
+    admitted = Barrier(2)
+    begin_attempt = pool._begin_shard_attempt
+    futures, borrowed, errors = [], [], []
+
+    def begin(shard_id, **kwargs):
+        admitted.wait(timeout=5)
+        return begin_attempt(shard_id, **kwargs)
+
+    def submit(*args, **kwargs):
+        future = Future()
+        futures.append(future)
+        return future
+
+    def borrow():
+        try:
+            conn, _ = pool.borrow_connection(
+                timeout=0, routing_key=b'key', routing_token=Mock(value=1))
+            borrowed.append(conn)
+        except Exception as exc:
+            errors.append(exc)
+
+    session.submit.side_effect = submit
+    workers = [Thread(target=borrow) for _ in range(2)]
+    try:
+        with patch.object(pool, '_begin_shard_attempt', begin):
+            try:
+                for worker in workers:
+                    worker.start()
+            finally:
+                for worker in workers:
+                    if worker.ident is not None:
+                        worker.join(5)
+        assert all(not worker.is_alive() for worker in workers)
+        assert not errors
+        assert borrowed == [original, original]
+        session.submit.assert_called_once()
+        queued_attempt = session.submit.call_args.args[2]
+        assert pool._connection_attempts[1] is queued_attempt[1]
+        assert futures[0].set_running_or_notify_cancel()
+        pool._open_connection_to_missing_shard(1, queued_attempt)
+        futures[0].set_result(None)
+        assert pool._connections == {0: original, 1: candidate}
+        candidate.close.assert_not_called()
+        newer = pool._begin_shard_attempt(1)
+        newest = pool._begin_shard_attempt(1)
+        assert newest[1] is not newer[1]
+        assert pool._connection_attempts[1] is newest[1]
+    finally:
+        for conn in borrowed:
+            pool.return_connection(conn)
+        for future in futures:
+            future.cancel()
+        pool.shutdown()
+
+
+@pytest.mark.parametrize('change', ['none', 'owner', 'attempt', 'slot'])
+def test_shard_error_after_publication_checks_current_owner(
+        socket_pool, caplog, change):
+    host, session, pool, original, candidate = socket_pool
+    host.sharding_info = Mock(shards_count=2)
+    candidate.features = ProtocolFeatures(shard_id=1)
+    pool._get_shard_aware_endpoint = Mock(return_value=None)
+    winner = HashableMock(
+        spec=Connection, features=ProtocolFeatures(shard_id=1))
+
+    def close_excess(_attempt=None):
+        assert pool._connections[1] is candidate
+        if change == 'owner':
+            with session._lock, host.lock:
+                host._is_removed = True
+        elif change == 'attempt':
+            pool._begin_shard_attempt(1)
+        elif change == 'slot':
+            with pool._membership_lock:
+                pool._connections[1] = winner
+        raise RuntimeError('excess close failed')
+
+    try:
+        with patch.object(pool, '_close_excess_connections', close_excess):
+            with caplog.at_level(logging.ERROR, logger='cassandra.pool'):
+                if change == 'none':
+                    with pytest.raises(
+                            RuntimeError, match='excess close failed'):
+                        pool._open_connection_to_missing_shard(1)
+                else:
+                    pool._open_connection_to_missing_shard(1)
+        if change == 'none':
+            assert 'excess close failed' in caplog.text
+            assert str(host) in caplog.text
+            assert 'shard_id=1' in caplog.text
+        else:
+            assert not caplog.records
+        candidate.close.assert_not_called()
+        if change == 'attempt':
+            assert 1 in pool._connection_attempts
+        else:
+            assert not pool._connection_attempts
+    finally:
+        pool.shutdown()
+
+
+def test_duplicate_shard_retained_until_coverage_completes(socket_pool):
+    host, session, pool, original, duplicate = socket_pool
+    host.sharding_info = Mock(shards_count=2)
+    pool._get_shard_aware_endpoint = Mock(return_value=None)
+    last_shard = HashableMock(
+        spec=Connection, keyspace=None, orphaned_threshold_reached=False,
+        features=ProtocolFeatures(shard_id=1))
+    session.cluster.connection_factory.side_effect = [duplicate, last_shard]
+    try:
+        pool._open_connection_to_missing_shard(1)
+        assert pool._connections == {0: original}
+        assert pool._excess_connections == {duplicate}
+        duplicate.close.assert_not_called()
+        pool._open_connection_to_missing_shard(1)
+        assert pool._connections == {0: original, 1: last_shard}
+        assert not pool._excess_connections
+        duplicate.close.assert_called_once()
+        original.close.assert_not_called()
+        last_shard.close.assert_not_called()
+    finally:
+        pool.shutdown()
+    duplicate.close.assert_called_once()
 
 
 def test_current_shard_replacement_preserves_draining_requests(socket_pool):
