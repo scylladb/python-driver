@@ -820,10 +820,10 @@ class HostConnection(object):
                 self._connections.clear()
                 self._connection_attempts.clear()
                 self._connecting.clear()
+                futures_to_cancel = tuple(self._shard_connections_futures)
             with self._stream_available_condition:
                 self._stream_available_condition.notify_all()
 
-            futures_to_cancel = tuple(self._shard_connections_futures)
             self._replacement_connections.clear()
             pending_connections_to_close = self._pending_connections.copy()
             self._pending_connections.clear()
@@ -956,13 +956,16 @@ class HostConnection(object):
             self._finish_shard_attempt(attempt)
             raise
         if isinstance(future, Future):
-            self._shard_connections_futures.append(future)
+            with self._membership_lock:
+                self._shard_connections_futures.append(future)
 
-            def cancelled(completed):
+            def finished(completed):
+                with self._membership_lock:
+                    self._shard_connections_futures.remove(completed)
                 if completed.cancelled():
                     self._finish_shard_attempt(attempt)
 
-            future.add_done_callback(cancelled)
+            future.add_done_callback(finished)
         if future is None:
             self._finish_shard_attempt(attempt)
 

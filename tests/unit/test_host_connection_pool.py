@@ -1395,6 +1395,39 @@ def test_current_shard_replacement_preserves_draining_requests(socket_pool):
     pool.shutdown()
 
 
+@pytest.mark.parametrize('completed_before_submit', [False, True])
+@pytest.mark.parametrize('outcome', ['success', 'failure', 'cancelled'])
+def test_completed_shard_work_is_not_retained(
+        socket_pool, completed_before_submit, outcome):
+    host, session, pool, original, candidate = socket_pool
+
+    def complete(future):
+        if outcome == 'success':
+            future.set_result(None)
+        elif outcome == 'failure':
+            future.set_exception(ConnectionException('shard attempt failed'))
+        else:
+            assert future.cancel()
+
+    for _ in range(3):
+        future = Future()
+        session.submit.return_value = future
+        if completed_before_submit:
+            complete(future)
+        pool._submit_shard_attempt(1)
+        if not completed_before_submit:
+            assert future in pool._shard_connections_futures
+            complete(future)
+        assert not pool._shard_connections_futures
+
+    pending = Future()
+    session.submit.return_value = pending
+    pool._submit_shard_attempt(1)
+    pool.shutdown()
+    assert pending.cancelled()
+    assert not pool._shard_connections_futures
+
+
 @pytest.mark.parametrize('newer_attempt', [False, True])
 def test_cancelled_shard_work_only_clears_its_own_marker(socket_pool, newer_attempt):
     host, session, pool, original, candidate = socket_pool
