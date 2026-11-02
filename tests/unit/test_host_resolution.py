@@ -209,7 +209,9 @@ def test_legacy_policy_resolves_cached_hosts(routed_session):
     assert result.response_future.coordinator_host is host
 
 
-def test_resolution_does_not_bypass_replacement_during_borrow(routed_session):
+@pytest.mark.parametrize('replace_pool', [False, True])
+def test_resolution_does_not_bypass_replacement_during_borrow(routed_session,
+                                                            replace_pool):
     session, host, pool, connection = routed_session
     cached = new_host('127.0.0.2', host.host_id)
     replacement = new_host('127.0.0.3', host.host_id)
@@ -217,7 +219,8 @@ def test_resolution_does_not_bypass_replacement_during_borrow(routed_session):
 
     def replace_during_borrow(**kwargs):
         session.cluster.metadata.replace_host_endpoint(host, replacement)
-        session._pools[replacement] = new_pool
+        if replace_pool:
+            session._pools[replacement] = new_pool
         return connection, 1
 
     pool.borrow_connection.side_effect = replace_during_borrow
@@ -230,6 +233,7 @@ def test_resolution_does_not_bypass_replacement_during_borrow(routed_session):
     new_connection.send_msg.assert_not_called()
 
     # A subsequent public request can select the new generation.
+    session._pools[replacement] = new_pool
     result = session.execute('SELECT host_id FROM system.local', host=cached)
     assert result.response_future.coordinator_host is replacement
 
