@@ -124,17 +124,20 @@ def test_explicit_host_failure_does_not_select_another_node(
     elif failure == 'obsolete_pool':
         pool.host = cached
     session.cluster.allow_control_connection_query_fallback = (
-        ControlConnectionQueryFallback.Fallback)
+        ControlConnectionQueryFallback.SkipPoolCreation)
 
-    with pytest.raises(NoHostAvailable) as exc:
-        execute(session, 'SELECT host_id FROM system.local', cached,
-                asynchronous)
+    with patch('cassandra.cluster.ResponseFuture._query_control_connection',
+               return_value=None) as control_query:
+        with pytest.raises(NoHostAvailable) as exc:
+            execute(session, 'SELECT host_id FROM system.local', cached,
+                    asynchronous)
 
     assert list(exc.value.errors) == [cached]
     if failure == 'unknown':
         assert 'Host ID' in str(exc.value.errors[cached])
     connection.send_msg.assert_not_called()
     other_connection.send_msg.assert_not_called()
+    control_query.assert_not_called()
 
 
 @pytest.mark.parametrize('statement_kind', ['simple', 'prepared', 'bound', 'batch'])
