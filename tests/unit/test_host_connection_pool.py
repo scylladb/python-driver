@@ -1091,6 +1091,113 @@ class HostConnectionTests(_PoolTests):
             session.cluster.executor.shutdown(wait=True)
 
 
+@pytest.mark.parametrize('change', ['endpoint', 'host', 'session', 'cluster'])
+def test_first_connection_retired_after_keyspace_publication(
+        socket_pool, change):
+    host, session, original_pool, original, candidate = socket_pool
+    session.cluster.shard_aware_options.disable = False
+    candidate.features = ProtocolFeatures(
+        shard_id=0, sharding_info=Mock(shards_count=2))
+    sync_keyspace = HostConnection._sync_keyspace
+    initialized = []
+
+    def sync_then_retire(pool, conn, **kwargs):
+        initialized.append(pool)
+        assert sync_keyspace(pool, conn, **kwargs)
+        assert pool._connections == {0: candidate}
+        with session._lock, host.lock:
+            if change == 'endpoint':
+                host.endpoint = DefaultEndPoint('127.0.0.2')
+            elif change == 'host':
+                host._is_removed = True
+            elif change == 'session':
+                session.is_shutdown = True
+            else:
+                session.cluster.is_shutdown = True
+        return True
+
+    try:
+        with patch.object(HostConnection, '_sync_keyspace', sync_then_retire):
+            pool = HostConnection(host, HostDistance.LOCAL, session)
+        assert pool.is_shutdown
+        assert pool._ownership.retired
+        assert not pool._connections
+        candidate.close.assert_called_once()
+        assert host.sharding_info is None
+        assert session._pools[host] is original_pool
+        session.submit.assert_not_called()
+        session.cluster.on_down.assert_not_called()
+        host.signal_connection_failure.assert_not_called()
+    finally:
+        for pool in initialized:
+            pool.shutdown()
+        original_pool.shutdown()
+
+
+@pytest.mark.parametrize('pause', ['connect', 'keyspace'])
+@pytest.mark.parametrize('outcome', [
+    'success', 'current_failure', 'stale_failure'])
+def test_shard_connection_diagnostics(socket_pool, caplog, pause, outcome):
+    host, session, pool, original, candidate = socket_pool
+    host.sharding_info = Mock(shards_count=2)
+    candidate.features = ProtocolFeatures(shard_id=1)
+    pool._get_shard_aware_endpoint = Mock(
+        return_value=DefaultEndPoint('127.0.0.1', 19042))
+    pool._keyspace = 'ks'
+
+    def fail_if_requested(stage):
+        if stage == pause and outcome != 'success':
+            if outcome == 'stale_failure':
+                with session._lock:
+                    session.is_shutdown = True
+            raise ConnectionException(
+                'shard listener unavailable', pool.endpoint)
+
+    def connect(*args, **kwargs):
+        fail_if_requested('connect')
+        return candidate
+
+    def keyspace(target):
+        fail_if_requested('keyspace')
+        candidate.keyspace = target
+
+    session.cluster.connection_factory.side_effect = connect
+    candidate.set_keyspace_blocking.side_effect = keyspace
+    try:
+        with caplog.at_level(logging.ERROR, logger='cassandra.pool'):
+            if outcome == 'current_failure':
+                with pytest.raises(
+                        ConnectionException, match='shard listener unavailable'):
+                    pool._open_connection_to_missing_shard(1)
+            else:
+                pool._open_connection_to_missing_shard(1)
+
+        records = [record for record in caplog.records
+                   if record.name == 'cassandra.pool']
+        if outcome == 'current_failure':
+            assert len(records) == 1
+            assert records[0].levelno == logging.ERROR
+            assert str(host) in records[0].getMessage()
+            assert 'shard_id=1' in records[0].getMessage()
+            assert 'shard listener unavailable' in records[0].getMessage()
+        else:
+            assert not records
+        assert not pool._connecting
+        if outcome == 'success':
+            assert pool._connections == {0: original, 1: candidate}
+            candidate.close.assert_not_called()
+        else:
+            assert pool._connections == {0: original}
+            if pause == 'keyspace':
+                candidate.close.assert_called_once()
+            else:
+                candidate.close.assert_not_called()
+        session.cluster.on_down.assert_not_called()
+        host.signal_connection_failure.assert_not_called()
+    finally:
+        pool.shutdown()
+
+
 @pytest.mark.parametrize('operation', ['replace', 'shard'])
 @pytest.mark.parametrize('pause', ['connect', 'keyspace'])
 @pytest.mark.parametrize('change', ['endpoint', 'pool', 'host', 'session', 'cluster'])

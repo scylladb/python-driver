@@ -86,10 +86,10 @@ class TestUseKeyspace(unittest.TestCase):
         on_old_keyspace = threading.Event()
         use_done = threading.Event()
 
-        def open_shard(pool, shard_id):
+        def open_shard(pool, shard_id, _attempt=None):
             opening.active = True
             try:
-                return original_open(pool, shard_id)
+                return original_open(pool, shard_id, _attempt)
             finally:
                 opening.active = False
 
@@ -110,7 +110,9 @@ class TestUseKeyspace(unittest.TestCase):
                 with session._lock:
                     pools = tuple(session.get_pools())
                 for pool in pools:
-                    for future in pool._shard_connections_futures:
+                    with pool._membership_lock:
+                        futures = tuple(pool._shard_connections_futures)
+                    for future in futures:
                         future.result(timeout=30)
 
             with session._lock:

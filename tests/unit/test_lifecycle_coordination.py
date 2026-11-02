@@ -2075,6 +2075,7 @@ def test_topology_replacement_fences_real_connection_work(
     cluster.connection_factory = Mock(side_effect=factory)
     pool = None
     worker = None
+    work = None
     if scope == 'shard':
         assert session.add_or_renew_pool(host, False).result(timeout=5)
         pool = session._pools[host]
@@ -2127,7 +2128,7 @@ def test_topology_replacement_fences_real_connection_work(
         if worker is not None:
             worker.join(5)
             assert not worker.is_alive()
-        else:
+        elif work is not None:
             work.result(timeout=5)
 
     assert not errors
