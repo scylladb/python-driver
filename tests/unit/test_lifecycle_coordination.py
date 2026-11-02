@@ -999,7 +999,7 @@ def test_duplicate_failed_callback_allows_same_pool_use_response(
         session.submit.assert_called_once_with(pool._replace, original)
         pool._replace(original)
         assert session.submit.call_count == 2
-        session.submit.assert_called_with(pool._open_connection_to_missing_shard, 0)
+        assert session.submit.call_args.args[:2] == (pool._open_connection_to_missing_shard, 0)
 
     io_waiting = Event()
     first_blocking = Event()
@@ -2018,3 +2018,252 @@ def test_rejected_executor_handoff_removes_queued_down(topology):
         cluster.profile_manager.on_down.assert_not_called()
     finally:
         cluster.executor.submit = original_submit
+
+
+@pytest.mark.parametrize('scope', ['first', 'shard'])
+@pytest.mark.parametrize('pause', ['connect', 'keyspace'])
+@pytest.mark.parametrize('change', ['endpoint', 'host', 'pool'])
+@pytest.mark.parametrize('fail', [False, True])
+def test_topology_replacement_fences_real_connection_work(
+        topology, scope, pause, change, fail):
+    from uuid import uuid4
+    from cassandra.shard_info import _ShardingInfo
+
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    session = new_session_with_pool_state()
+    session.cluster = cluster
+    session._profile_manager = cluster.profile_manager
+    session.keyspace = 'ks'
+    session.is_shutdown = False
+    session.shutdown = Mock()
+    cluster.sessions = (session,)
+    cluster.on_add = Mock()
+    cluster.control_connection.on_remove = Mock()
+    cluster.shard_aware_options.disable_shardaware_port = True
+    entered, release = Event(), Event()
+    errors = []
+    candidates = []
+    sockets = []
+
+    def wait():
+        entered.set()
+        assert release.wait(5)
+        if fail:
+            raise ConnectionException('retired connection failed')
+
+    def factory(endpoint, **kwargs):
+        connection = _PublicationConnection(endpoint, compression=False)
+        connection.features = ProtocolFeatures(shard_id=0)
+        sockets.append(connection)
+        candidate_call = 1 if scope == 'first' else 2
+        if len(sockets) == candidate_call:
+            candidates.append(connection)
+            connection.features = ProtocolFeatures(shard_id=0 if scope == 'first' else 1)
+            if pause == 'connect':
+                wait()
+                connection.keyspace = 'ks'
+            else:
+                def keyspace(target):
+                    wait()
+                    connection.keyspace = target
+                connection.set_keyspace_blocking = keyspace
+        else:
+            connection.keyspace = 'ks'
+        return connection
+
+    cluster.connection_factory = Mock(side_effect=factory)
+    pool = None
+    worker = None
+    if scope == 'shard':
+        assert session.add_or_renew_pool(host, False).result(timeout=5)
+        pool = session._pools[host]
+        # Retain a real request on the original pool across replacement.
+        borrowed, _ = pool.borrow_connection(timeout=0)
+        assert borrowed.in_flight == 1
+        host.sharding_info = _ShardingInfo(0, 2, '', '', 0, None, None)
+
+        def complete():
+            try:
+                pool._open_connection_to_missing_shard(1)
+            except BaseException as exc:
+                errors.append(exc)
+
+        worker = Thread(target=complete)
+        worker.start()
+    else:
+        ready = session.add_or_renew_pool(host, False)
+
+    try:
+        assert entered.wait(5)
+        if scope == 'first':
+            with session._lock:
+                work = session._pool_creation_work[ready]
+        if change == 'endpoint':
+            replacement = cluster.replace_host_endpoint(
+                host, DefaultEndPoint('192.168.2.2'))
+        elif change == 'host':
+            replacement, new = cluster.add_host(
+                host.endpoint, host_id=uuid4(), refresh_nodes=False)
+            assert new
+        else:
+            replacement = host
+        # Observe installation before cleanup waits for the old pool's USE.
+        published = Event()
+
+        class PublishedPools(dict):
+            def __setitem__(self, key, value):
+                super().__setitem__(key, value)
+                published.set()
+
+        session._pools = PublishedPools(session._pools)
+        winning_ready = session.add_or_renew_pool(replacement, True)
+        assert published.wait(5)
+        winner = session._pools[replacement]
+        winning_socket = winner._connections[0]
+        assert not winning_socket.is_closed
+    finally:
+        release.set()
+        if worker is not None:
+            worker.join(5)
+            assert not worker.is_alive()
+        else:
+            work.result(timeout=5)
+
+    assert not errors
+    assert winning_ready.result(timeout=5)
+    if scope == 'first':
+        assert ready.result(timeout=5) is (change == 'pool')
+    else:
+        assert 1 not in pool._connections
+        pool.return_connection(borrowed)
+        assert borrowed.in_flight == 0
+    assert session._pools == {replacement: winner}
+    assert winner._connections == {0: winning_socket}
+    assert winning_socket.in_flight == 0
+    assert not winning_socket.is_closed
+    assert not winner.is_shutdown
+    if pause == 'keyspace' or not fail:
+        assert candidates[0].is_closed
+    if change != 'pool':
+        assert host._is_removed
+        assert cluster.metadata.get_host_by_host_id(replacement.host_id) is replacement
+    winner.shutdown()
+
+
+@pytest.mark.parametrize('invalidate', ['none', 'generation', 'session', 'cluster'])
+def test_unpublished_candidate_shards_share_creation_reservation(topology, invalidate):
+    from cassandra.cluster import Session
+    from cassandra.shard_info import _ShardingInfo
+
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    session = new_session_with_pool_state()
+    session.cluster = cluster
+    session._profile_manager = cluster.profile_manager
+    session.keyspace = 'ks'
+    session.is_shutdown = False
+    session._initial_connect_futures = set()
+    cluster.sessions = (session,)
+    cluster.shard_aware_options.disable_shardaware_port = True
+    sharding = _ShardingInfo(0, 2, '', '', 0, None, None)
+    first = _PublicationConnection(host.endpoint, compression=False)
+    first.features = ProtocolFeatures(shard_id=0, sharding_info=sharding)
+    first.keyspace = 'ks'
+    second = _PublicationConnection(host.endpoint, compression=False)
+    second.features = ProtocolFeatures(shard_id=1, sharding_info=sharding)
+    shard_waiting, release_shard = Event(), Event()
+    constructed, release_constructor = Event(), Event()
+    candidates = []
+    shard_work = []
+    submit = session.submit
+
+    def schedule(fn, *args, **kwargs):
+        future = submit(fn, *args, **kwargs)
+        if getattr(fn, '__name__', '') == '_open_connection_to_missing_shard':
+            shard_work.append(future)
+        return future
+
+    session.submit = schedule
+
+    def keyspace(target):
+        shard_waiting.set()
+        assert release_shard.wait(5)
+        second.keyspace = target
+
+    second.set_keyspace_blocking = keyspace
+    cluster.connection_factory = Mock(side_effect=[first, second])
+
+    def construct(*args, **kwargs):
+        pool = HostConnection(*args, **kwargs)
+        candidates.append(pool)
+        assert shard_waiting.wait(5)
+        constructed.set()
+        assert release_constructor.wait(5)
+        return pool
+
+    shutdown = None
+    shutdown_errors = []
+    try:
+        with patch('cassandra.cluster.HostConnection', side_effect=construct):
+            ready = session.add_or_renew_pool(host, False)
+            assert constructed.wait(5)
+            with session._lock:
+                work = session._pool_creation_work[ready]
+            assert session._pools == {}
+            if invalidate == 'generation':
+                with session._lock:
+                    session._pool_generations[host] = object()
+            elif invalidate == 'session':
+                Session.shutdown(session)
+            elif invalidate == 'cluster':
+                closing = Event()
+                close = cluster._lifecycle.close
+
+                def close_lifecycle():
+                    close()
+                    closing.set()
+
+                cluster._lifecycle.close = close_lifecycle
+
+                def stop():
+                    try:
+                        cluster.shutdown()
+                    except BaseException as exc:
+                        shutdown_errors.append(exc)
+
+                shutdown = Thread(target=stop)
+                shutdown.start()
+                assert closing.wait(5)
+            # Finish the background shard while the pool is still unpublished.
+            release_shard.set()
+            for future in shard_work:
+                future.result(timeout=5)
+            if invalidate == 'none':
+                assert candidates[0]._connections == {0: first, 1: second}
+                assert not second.is_closed
+            else:
+                assert candidates[0]._connections == {0: first}
+                assert second.is_closed
+            release_constructor.set()
+            work.result(timeout=5)
+        # A Session shutdown receipt is successful. Cluster shutdown can
+        # reach that step before or after the stale constructor completes.
+        result = ready.result(timeout=5)
+        if invalidate != 'cluster':
+            assert result is (invalidate != 'generation')
+        if invalidate == 'none':
+            assert session._pools[host] is candidates[0]
+            assert candidates[0]._ownership.published
+        else:
+            assert session._pools == {}
+            assert first.is_closed
+    finally:
+        release_shard.set()
+        release_constructor.set()
+        if shutdown is not None:
+            shutdown.join(5)
+            assert not shutdown.is_alive()
+        for pool in candidates:
+            pool.shutdown()
+    assert not shutdown_errors

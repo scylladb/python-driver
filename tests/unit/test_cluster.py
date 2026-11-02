@@ -1019,7 +1019,7 @@ class ClusterTest(unittest.TestCase):
 
         created_pools = []
 
-        def create_pool(pool_host, distance, session):
+        def create_pool(pool_host, distance, session, _ownership=None):
             if session is failing_session:
                 raise ConnectionException("pool creation failed")
 
@@ -2896,7 +2896,7 @@ class SessionPoolRaceTest(unittest.TestCase):
         executor = ThreadPoolExecutor(max_workers=workers)
         self.addCleanup(executor.shutdown)
         session.cluster = Mock(
-            executor=executor, connect_timeout=5,
+            executor=executor, connect_timeout=5, is_shutdown=False,
             allow_control_connection_query_fallback=(
                 ControlConnectionQueryFallback.Disabled))
         return session
@@ -2966,7 +2966,7 @@ class SessionPoolRaceTest(unittest.TestCase):
         assert futures == set()
         assert len(observed_states) == 1
         host_connection.assert_called_once_with(
-            host, HostDistance.LOCAL, session)
+            host, HostDistance.LOCAL, session, _ownership=ANY)
         assert session._pools == {host: winner}
         assert winner.is_shutdown is False
         winner.shutdown.assert_not_called()
@@ -2993,7 +2993,7 @@ class SessionPoolRaceTest(unittest.TestCase):
             assert reconciliation_future.result(timeout=5) is True
 
         host_connection.assert_called_once_with(
-            host, HostDistance.LOCAL, session)
+            host, HostDistance.LOCAL, session, _ownership=ANY)
         assert session._pools == {host: winner}
         winner.shutdown.assert_not_called()
 
@@ -3016,7 +3016,7 @@ class SessionPoolRaceTest(unittest.TestCase):
             factory.release_creation.set()
             assert ready.result(timeout=5) is True
 
-        create.assert_called_once_with(host, HostDistance.LOCAL, session)
+        create.assert_called_once_with(host, HostDistance.LOCAL, session, _ownership=ANY)
         assert session._pools == {host: candidate}
         candidate.shutdown.assert_not_called()
 
@@ -3248,7 +3248,7 @@ class SessionPoolRaceTest(unittest.TestCase):
                     timeout=5) is True
 
         host_connection.assert_called_once_with(
-            replacement_host, HostDistance.LOCAL, session)
+            replacement_host, HostDistance.LOCAL, session, _ownership=ANY)
         assert session._pools == {replacement_host: winner}
         winner.shutdown.assert_not_called()
 
@@ -3291,7 +3291,7 @@ class SessionPoolRaceTest(unittest.TestCase):
                 assert old_future.result(timeout=5) is True
 
         host_connection.assert_called_once_with(
-            host, HostDistance.LOCAL, session)
+            host, HostDistance.LOCAL, session, _ownership=ANY)
         assert session._pools == {host: winner}
         old_pool.shutdown.assert_called_once_with()
         winner.shutdown.assert_not_called()
@@ -3337,7 +3337,7 @@ class SessionPoolRaceTest(unittest.TestCase):
                 assert old_future.result(timeout=5) is True
 
         host_connection.assert_called_once_with(
-            host, HostDistance.LOCAL, session)
+            host, HostDistance.LOCAL, session, _ownership=ANY)
         assert session._pools == {host: winner}
         assert winner.host_distance == HostDistance.LOCAL
         assert winner.is_shutdown is False
@@ -3388,7 +3388,7 @@ class SessionPoolRaceTest(unittest.TestCase):
                 assert old_future.result(timeout=5) is False
 
         host_connection.assert_called_once_with(
-            host, HostDistance.LOCAL, session)
+            host, HostDistance.LOCAL, session, _ownership=ANY)
         assert session._pools == {}
 
     def test_direct_add_observation_cannot_replace_published_winner(self):
@@ -3438,7 +3438,7 @@ class SessionPoolRaceTest(unittest.TestCase):
                 assert winner_future.result(timeout=5) is True
 
         host_connection.assert_called_once_with(
-            host, HostDistance.LOCAL, session)
+            host, HostDistance.LOCAL, session, _ownership=ANY)
         assert session._pools == {host: winner}
         old_pool.shutdown.assert_called_once_with()
         winner.shutdown.assert_not_called()
@@ -3607,7 +3607,7 @@ class SessionPoolRaceTest(unittest.TestCase):
                 assert newer_future.result(timeout=5) is True
 
         host_connection.assert_called_once_with(
-            host, HostDistance.LOCAL, session)
+            host, HostDistance.LOCAL, session, _ownership=ANY)
         assert session._pools == {}
         old_pool.shutdown.assert_called_once_with()
         candidate.shutdown.assert_called_once_with()
@@ -3665,7 +3665,7 @@ class SessionPoolRaceTest(unittest.TestCase):
             assert ignored_future.result(timeout=5) is True
 
         host_connection.assert_called_once_with(
-            host, HostDistance.LOCAL, session)
+            host, HostDistance.LOCAL, session, _ownership=ANY)
         assert session._pools == {host: winner}
         old_pool.shutdown.assert_called_once_with()
         winner.shutdown.assert_not_called()
@@ -3736,7 +3736,7 @@ class SessionPoolRaceTest(unittest.TestCase):
                 assert older_creation.result(timeout=5) is True
 
         host_connection.assert_called_once_with(
-            host, HostDistance.LOCAL, session)
+            host, HostDistance.LOCAL, session, _ownership=ANY)
         assert session._pools == {}
         intermediate_pool.shutdown.assert_called_once_with()
 
@@ -3803,7 +3803,7 @@ class SessionPoolRaceTest(unittest.TestCase):
                 assert older_future.result(timeout=5) is True
 
         host_connection.assert_called_once_with(
-            host, HostDistance.LOCAL, session)
+            host, HostDistance.LOCAL, session, _ownership=ANY)
         assert session._pools == {}
         intermediate_pool.shutdown.assert_called_once_with()
 
@@ -4080,7 +4080,7 @@ class SessionPoolRaceTest(unittest.TestCase):
         self.addCleanup(release_blocker.set)
         created_pools = {blocker_host: [], target_host: []}
 
-        def create_pool(host, distance, pool_session):
+        def create_pool(host, distance, pool_session, _ownership=None):
             pool = self._pool(host, distance=distance)
             created_pools[host].append(pool)
             if host is blocker_host and len(created_pools[host]) == 1:
@@ -4149,7 +4149,7 @@ class SessionPoolRaceTest(unittest.TestCase):
                     timeout=5) is True
 
         host_connection.assert_called_once_with(
-            replacement_host, HostDistance.LOCAL, session)
+            replacement_host, HostDistance.LOCAL, session, _ownership=ANY)
         assert session._pools == {replacement_host: winner}
         winner.shutdown.assert_not_called()
 
@@ -4199,7 +4199,7 @@ class SessionPoolRaceTest(unittest.TestCase):
                 assert stale_future.result(timeout=5) is True
 
         host_connection.assert_called_once_with(
-            host, HostDistance.LOCAL, session)
+            host, HostDistance.LOCAL, session, _ownership=ANY)
         assert session._pools == {host: winner}
         winner.shutdown.assert_not_called()
 
@@ -4215,7 +4215,7 @@ class SessionPoolRaceTest(unittest.TestCase):
         release_remote = Event()
         self.addCleanup(release_remote.set)
 
-        def create_pool(pool_host, distance, pool_session):
+        def create_pool(pool_host, distance, pool_session, _ownership=None):
             if distance == HostDistance.REMOTE:
                 remote_started.set()
                 assert release_remote.wait(5)
@@ -4240,8 +4240,8 @@ class SessionPoolRaceTest(unittest.TestCase):
             remote_work.result(timeout=5)
 
         assert host_connection.call_args_list == [
-            call(host, HostDistance.REMOTE, session),
-            call(host, HostDistance.LOCAL, session),
+            call(host, HostDistance.REMOTE, session, _ownership=ANY),
+            call(host, HostDistance.LOCAL, session, _ownership=ANY),
         ]
         assert session._pools == {host: local_pool}
         remote_pool.shutdown.assert_called_once_with()
@@ -4354,7 +4354,7 @@ class SessionPoolRaceTest(unittest.TestCase):
             candidate_work.result(timeout=5)
 
         host_connection.assert_called_once_with(
-            host, HostDistance.LOCAL, session)
+            host, HostDistance.LOCAL, session, _ownership=ANY)
         assert session._pools == {}
         assert old_pool.is_shutdown is True
         assert candidate.is_shutdown is True
@@ -4410,7 +4410,7 @@ class SessionPoolRaceTest(unittest.TestCase):
                     timeout=5) is True
 
         host_connection.assert_called_once_with(
-            replacement_host, HostDistance.LOCAL, session)
+            replacement_host, HostDistance.LOCAL, session, _ownership=ANY)
         assert session._pools == {replacement_host: winner}
         old_pool.shutdown.assert_called_once_with()
         winner.shutdown.assert_not_called()
@@ -4444,7 +4444,7 @@ class SessionPoolRaceTest(unittest.TestCase):
             assert replacement_future.result(timeout=5) is True
 
         host_connection.assert_called_once_with(
-            replacement_host, HostDistance.LOCAL, session)
+            replacement_host, HostDistance.LOCAL, session, _ownership=ANY)
         assert session._pools == {replacement_host: winner}
         old_pool.shutdown.assert_called_once_with()
         winner.shutdown.assert_not_called()
@@ -4613,8 +4613,8 @@ class SessionPoolRaceTest(unittest.TestCase):
                 assert older_future.result(timeout=5) is True
 
         assert host_connection.call_args_list == [
-            call(host, HostDistance.LOCAL, session),
-            call(host, HostDistance.LOCAL, session),
+            call(host, HostDistance.LOCAL, session, _ownership=ANY),
+            call(host, HostDistance.LOCAL, session, _ownership=ANY),
         ]
         assert session._pools == {host: winner}
         winner.shutdown.assert_not_called()
@@ -5223,13 +5223,15 @@ class SessionTest(unittest.TestCase):
         old_pool = Mock(host=original_host)
         pool_state = {"open_count": 1}
         new_pool = Mock(
-            host=current_host, _keyspace=None, _membership_lock=RLock())
+            host=current_host, is_shutdown=False, _keyspace=None,
+            _membership_lock=RLock())
         new_pool._lock_usable_connection.return_value = nullcontext(True)
         new_pool.get_state.return_value = pool_state
         session = new_session_with_pool_state({original_host: old_pool})
         session.keyspace = None
         session.is_shutdown = False
         session.cluster = Mock(
+            is_shutdown=False,
             allow_control_connection_query_fallback=ControlConnectionQueryFallback.Disabled)
         session._profile_manager = Mock()
         session._profile_manager.distance.return_value = HostDistance.LOCAL

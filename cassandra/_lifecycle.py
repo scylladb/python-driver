@@ -39,6 +39,53 @@ class EndpointMoveRejected(ValueError):
     """A batch could not publish because its metadata snapshot went stale."""
 
 
+_UNRESERVED = object()
+
+
+class PoolOwnershipReservation:
+    """Carry creation authority into the installed pool's connection work.
+
+    Creation generations admit background shards before pool publication.
+    Once published, only the exact installed pool retains that authority.
+    Retirement is permanent, even if a caller reinstalls the same pool.
+    """
+
+    def __init__(self, session, host, endpoint, generation=_UNRESERVED,
+                 expected_pool=None):
+        self._session_ref = weakref.ref(session)
+        self.host = host
+        self.endpoint = endpoint
+        self.generation = generation
+        self.expected_pool = expected_pool
+        self.published = False
+        self.retired = False
+
+    @contextmanager
+    def locked(self):
+        session = self._session_ref()
+        if session is None:
+            yield
+            return
+        with session._lock:
+            with self.host.lock:
+                yield
+
+    def owns_locked(self, pool):
+        session = self._session_ref()
+        if (self.retired or pool.is_shutdown or session is None or
+                session.is_shutdown or session.cluster.is_shutdown or
+                self.host._is_removed or self.host.endpoint != self.endpoint):
+            return False
+        if self.published:
+            return session._pools.get(self.host) is pool
+        if self.generation is _UNRESERVED:
+            # Direct construction is used internally by tests. Its initial
+            # socket may initialize before the caller installs the pool.
+            return True
+        return session._owns_pool_generation_locked(
+            self.host, self.generation, self.expected_pool, self.endpoint)
+
+
 class PoolFailureReservation:
     """Fence an admitted pool failure without locking across policy callbacks."""
 
@@ -83,22 +130,20 @@ class ConnectionFailureReservation:
             yield
             return
         while True:
-            with self.session._lock:
-                with self.host.lock:
-                    # Unpublished candidates can hold their work lock while
-                    # publication waits for Session under the membership lock.
-                    # A completed retirement no longer needs shard ownership
-                    # inspected; its receipt retains only Session/Host guards.
-                    if (self.retired or
-                            self.session._pools.get(self.host) is not self.pool):
+            with self.pool._membership_lock, self.session._lock, self.host.lock:
+                # Match connection publication's membership/Session/Host
+                # order. Never wait for work while retaining these guards:
+                # a worker can hold it across a pending USE response.
+                if (self.retired or
+                        self.session._pools.get(self.host) is not self.pool):
+                    yield
+                    return
+                if self.pool._lock.acquire(False):
+                    try:
                         yield
-                        return
-                    if self.pool._lock.acquire(False):
-                        try:
-                            yield
-                        finally:
-                            self.pool._lock.release()
-                        return
+                    finally:
+                        self.pool._lock.release()
+                    return
             # Never retain work while reacquiring Session/Host. Active socket
             # failures may await I/O under work before they can retire a pool.
             with self.pool._lock:
@@ -109,7 +154,8 @@ class ConnectionFailureReservation:
                 self.session._pools.get(self.host) is not self.pool):
             return False
         owns_slot = self.retired
-        if not self.retired and not self.pool.is_shutdown:
+        if (not self.retired and not self.pool.is_shutdown and
+                not self.pool._ownership.retired):
             current = self.pool._connections.get(self.connection.features.shard_id)
             owns_slot = (current is self.connection or
                          (self.replacing and current is None and
