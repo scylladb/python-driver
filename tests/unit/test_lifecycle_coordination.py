@@ -2086,7 +2086,7 @@ def test_topology_replacement_fences_real_connection_work(
         def complete():
             try:
                 pool._open_connection_to_missing_shard(1)
-            except BaseException as exc:
+            except Exception as exc:
                 errors.append(exc)
 
         worker = Thread(target=complete)
@@ -2229,7 +2229,7 @@ def test_unpublished_candidate_shards_share_creation_reservation(topology, inval
                 def stop():
                     try:
                         cluster.shutdown()
-                    except BaseException as exc:
+                    except Exception as exc:
                         shutdown_errors.append(exc)
 
                 shutdown = Thread(target=stop)

@@ -1131,7 +1131,7 @@ def test_connection_completion_rechecks_ownership(
                 pool._replace(original)
             else:
                 pool._open_connection_to_missing_shard(1)
-        except BaseException as exc:
+        except Exception as exc:
             errors.append(exc)
 
     worker = Thread(target=complete)
@@ -1195,7 +1195,7 @@ def test_old_attempt_cleanup_preserves_new_attempt(socket_pool, fail):
     def complete():
         try:
             pool._open_connection_to_missing_shard(1)
-        except BaseException as exc:
+        except Exception as exc:
             errors.append(exc)
 
     worker = Thread(target=complete)
@@ -1248,7 +1248,7 @@ def test_competing_shard_completion_cannot_overwrite_winner(socket_pool, fail):
         try:
             # This requested shard 2, but the server assigned shard 1.
             pool._open_connection_to_missing_shard(2)
-        except BaseException as exc:
+        except Exception as exc:
             errors.append(exc)
 
     winner = HashableMock(
@@ -1304,7 +1304,7 @@ def test_shutdown_during_keyspace_sync_revokes_publication(socket_pool):
     def run(fn, *args):
         try:
             fn(*args)
-        except BaseException as exc:
+        except Exception as exc:
             errors.append(exc)
 
     worker = Thread(target=run, args=(pool._open_connection_to_missing_shard, 1))
@@ -1348,7 +1348,7 @@ def test_excess_connection_retention_rechecks_pool_owner(socket_pool):
     def complete():
         try:
             pool._open_connection_to_missing_shard(1)
-        except BaseException as exc:
+        except Exception as exc:
             errors.append(exc)
 
     worker = Thread(target=complete)
@@ -1434,7 +1434,7 @@ def test_failure_waiting_for_membership_does_not_hold_session(socket_pool):
     def fail():
         try:
             pool.return_connection(original)
-        except BaseException as exc:
+        except Exception as exc:
             errors.append(exc)
 
     def acquire_session():
