@@ -3742,7 +3742,7 @@ class Session(object):
         so a cached Host from a previous Cluster or endpoint can be reused.
         The current host and its current endpoint are used. An unknown host ID
         fails with :class:`NoHostAvailable`, without targeting another node.
-        If the host specified is down or
+        If the resolved current host is down or
         not yet connected, the query will fail with :class:`NoHostAvailable`. Using this is
         discouraged except in a few cases, e.g., querying node-local tables and applying schema changes.
 
@@ -8037,7 +8037,9 @@ class ResponseFuture(object):
             # between the final check and the send. Other hosts can send in
             # parallel.
             with host.lock if isinstance(host, Host) else nullcontext():
-                if (pool.is_shutdown or
+                if ((isinstance(host, Host) and
+                        not self.session.cluster._lifecycle.is_current(host)) or
+                        pool.is_shutdown or
                         self.session._pools.get(host) is not pool or
                         not self.session._pool_matches_host(host, pool)):
                     self._errors[host] = ConnectionException(
