@@ -8044,9 +8044,12 @@ class ResponseFuture(object):
             # The admitted attempt retains its original pool and stream owners.
             with host.lock if isinstance(host, Host) else nullcontext():
                 if (isinstance(host, Host) and
-                        not self.session.cluster._lifecycle.is_current(host)):
+                        (host.is_up is False or
+                         not self.session.cluster._lifecycle.is_current(host))):
                     self._errors[host] = ConnectionException(
-                        "Host is no longer current in this cluster")
+                        "Host is down or no longer current in this cluster")
+                    log.debug("Host ID %s became unavailable while borrowing connection",
+                              host.host_id)
                     return None
                 if (pool.is_shutdown or
                         self.session._pools.get(host) is not pool or
