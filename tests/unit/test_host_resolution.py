@@ -25,6 +25,7 @@ from cassandra.cluster import (Cluster, ControlConnectionQueryFallback,
                                NoHostAvailable, Session)
 from cassandra import concurrent
 from cassandra.connection import Connection
+from cassandra.io.asyncioreactor import AsyncioConnection
 from cassandra.policies import RoundRobinPolicy, SimpleConvictionPolicy
 from cassandra.pool import Host
 from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS
@@ -67,7 +68,8 @@ def routed_session(request):
     host = new_host()
     kwargs = {'load_balancing_policy': RoundRobinPolicy()} if getattr(
         request, 'param', False) else {}
-    with Cluster(protocol_version=4, **kwargs) as cluster:
+    with Cluster(protocol_version=4, connection_class=AsyncioConnection,
+                 **kwargs) as cluster:
         cluster.metadata.add_or_return_host(host)
         cluster._populate_hosts()
         ready = Future()
@@ -78,6 +80,18 @@ def routed_session(request):
         pool, connection = owned_pool(host)
         session._pools[host] = pool
         cluster.connection_class.initialize_reactor()
+
+        def bound_result_wait(future):
+            wait = future._event.wait
+
+            def wait_with_deadline(timeout=None):
+                completed = wait(5 if timeout is None else min(timeout, 5))
+                assert completed, 'Request did not complete within test deadline'
+                return completed
+
+            future._event.wait = wait_with_deadline
+
+        session.add_request_init_listener(bound_result_wait)
         yield session, host, pool, connection
 
 
@@ -108,7 +122,7 @@ def test_explicit_host_resolves_by_id(routed_session, asynchronous,
 
 @pytest.mark.parametrize('asynchronous', [False, True])
 @pytest.mark.parametrize('failure', ['unknown', 'missing_pool', 'shutdown_pool',
-                                    'obsolete_pool'])
+                                    'obsolete_pool', 'current_down'])
 def test_explicit_host_failure_does_not_select_another_node(
         routed_session, asynchronous, failure):
     session, current, pool, connection = routed_session
@@ -125,6 +139,8 @@ def test_explicit_host_failure_does_not_select_another_node(
         pool.is_shutdown = True
     elif failure == 'obsolete_pool':
         pool.host = cached
+    elif failure == 'current_down':
+        current.set_down()
     session.cluster.allow_control_connection_query_fallback = (
         ControlConnectionQueryFallback.SkipPoolCreation)
 
