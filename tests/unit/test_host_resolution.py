@@ -43,6 +43,8 @@ def owned_pool(host, paging_states=(None,)):
     connection.orphaned_request_ids = set()
     connection.request_ids = deque()
     connection.is_defunct = False
+    connection.is_control_connection = False
+    connection.in_flight = 0
     pool = Mock(host=host, endpoint=host.endpoint, is_shutdown=False)
     pool.borrow_connection.return_value = (connection, 1)
     pages = iter(paging_states)
@@ -75,8 +77,8 @@ def routed_session(request):
         cluster.sessions.add(session)
         pool, connection = owned_pool(host)
         session._pools[host] = pool
-        with patch.object(cluster.connection_class, 'create_timer'):
-            yield session, host, pool, connection
+        cluster.connection_class.initialize_reactor()
+        yield session, host, pool, connection
 
 
 def execute(session, query, host, asynchronous):
@@ -135,6 +137,7 @@ def test_explicit_host_failure_does_not_select_another_node(
     assert list(exc.value.errors) == [cached]
     if failure == 'unknown':
         assert 'Host ID' in str(exc.value.errors[cached])
+        assert str(cached.host_id) in str(exc.value.errors[cached])
     connection.send_msg.assert_not_called()
     other_connection.send_msg.assert_not_called()
     control_query.assert_not_called()

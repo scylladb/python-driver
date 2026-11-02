@@ -5952,9 +5952,8 @@ class ControlConnection(object):
         Tries to connect to each host in the query plan until one succeeds
         or every attempt fails. If successful, a new Connection will be
         returned.  Otherwise, :exc:`NoHostAvailable` will be raised
-        with an "errors" arg that is a dict mapping host addresses
-        to the exception that was raised when an attempt was made to open
-        a connection to that host.
+        with an "errors" arg mapping endpoint strings or unknown host-ID
+        labels to the exceptions that prevented selection or connection.
         """
         (conn, _) = self._try_connect_to_hosts()
         if conn is not None:
@@ -7529,12 +7528,16 @@ class ResponseFuture(object):
             if isinstance(host, Host):
                 host = self.session.cluster.metadata.get_host_by_host_id(host.host_id)
             if host is None:
+                host_id = getattr(selected_host, 'host_id', None)
                 self._errors[selected_host] = ConnectionException(
-                    "Host ID is not known to this cluster")
+                    "Host ID %s is not known to this cluster" % host_id)
+                log.debug("Skipping unknown host ID %s from query plan", host_id)
                 req_id = None
             elif isinstance(host, Host) and host._is_removed:
                 self._errors[host] = ConnectionException(
                     "Host has been marked down or removed")
+                log.debug("Skipping removed current host ID %s from query plan",
+                          host.host_id)
                 req_id = None
             else:
                 req_id = self._query(host)
@@ -8034,14 +8037,17 @@ class ResponseFuture(object):
             else:
                 connection, request_id = pool.borrow_connection(
                     timeout=2.0, **borrow_options)
-            # Pool publication/removal and endpoint updates take the host
-            # lock. Keep it until send begins so ownership cannot change
-            # between the final check and the send. Other hosts can send in
-            # parallel.
+            # Check the metadata owner at final admission under the host lock.
+            # Terminal retirement cannot pass this region before send begins,
+            # but metadata publication has its own lock and may follow admission.
+            # The admitted attempt retains its original pool and stream owners.
             with host.lock if isinstance(host, Host) else nullcontext():
-                if ((isinstance(host, Host) and
-                        not self.session.cluster._lifecycle.is_current(host)) or
-                        pool.is_shutdown or
+                if (isinstance(host, Host) and
+                        not self.session.cluster._lifecycle.is_current(host)):
+                    self._errors[host] = ConnectionException(
+                        "Host is no longer current in this cluster")
+                    return None
+                if (pool.is_shutdown or
                         self.session._pools.get(host) is not pool or
                         not self.session._pool_matches_host(host, pool)):
                     self._errors[host] = ConnectionException(
