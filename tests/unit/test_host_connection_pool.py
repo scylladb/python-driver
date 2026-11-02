@@ -1468,6 +1468,7 @@ def test_excess_connection_retention_rechecks_pool_owner(socket_pool):
     finally:
         release.set()
         worker.join(5)
+        pool._close_excess_connections = close_excess
     assert not worker.is_alive()
     assert not errors
     assert pool._excess_connections == {retained_excess}
@@ -1475,7 +1476,6 @@ def test_excess_connection_retention_rechecks_pool_owner(socket_pool):
     assert pool._connections == {0: original}
     candidate.close.assert_called_once()
     assert not winner.is_shutdown
-    pool._close_excess_connections = close_excess
     pool.shutdown()
     retained_excess.close.assert_called_once()
 
@@ -1533,6 +1533,86 @@ def test_completed_shard_work_is_not_retained(
     pool.shutdown()
     assert pending.cancelled()
     assert not pool._shard_connections_futures
+
+
+@pytest.mark.parametrize('running', [False, True])
+def test_shard_work_registered_after_shutdown(socket_pool, running):
+    host, session, pool, original, candidate = socket_pool
+    future = Future()
+    if running:
+        assert future.set_running_or_notify_cancel()
+    submitted, release = Event(), Event()
+    errors = []
+
+    def submit(*args, **kwargs):
+        submitted.set()
+        assert release.wait(5)
+        return future
+
+    session.submit.side_effect = submit
+
+    def schedule():
+        try:
+            pool._submit_shard_attempt(1)
+        except Exception as exc:
+            errors.append(exc)
+
+    worker = Thread(target=schedule)
+    try:
+        try:
+            worker.start()
+            assert submitted.wait(5)
+            assert not pool._shard_connections_futures
+            pool.shutdown()
+            assert not future.cancelled()
+        finally:
+            release.set()
+            worker.join(5)
+        assert not worker.is_alive()
+        assert not errors
+        assert future.cancelled() is not running
+        if running:
+            assert pool._shard_connections_futures == [future]
+            future.set_result(None)
+        assert not pool._shard_connections_futures
+        assert not pool._connecting
+        assert not pool._connection_attempts
+        original.close.assert_called_once()
+        candidate.close.assert_not_called()
+    finally:
+        pool.shutdown()
+
+
+@pytest.mark.parametrize('newer_marker', [False, True])
+def test_rejected_replacement_clears_only_its_marker(
+        socket_pool, newer_marker):
+    host, session, pool, original, candidate = socket_pool
+    begin_attempt = pool._begin_shard_attempt
+
+    def retire_before_attempt(shard_id):
+        assert pool._replacement_connections[shard_id] is original
+        with session._lock, host.lock:
+            host._is_removed = True
+        if newer_marker:
+            pool._replacement_connections[shard_id] = candidate
+        return begin_attempt(shard_id)
+
+    try:
+        with patch.object(pool, '_begin_shard_attempt', retire_before_attempt):
+            pool._replace(original)
+        if newer_marker:
+            assert pool._replacement_connections == {0: candidate}
+        else:
+            assert not pool._replacement_connections
+        assert not pool._connections
+        assert not pool._connecting
+        assert not pool._connection_attempts
+        session.cluster.connection_factory.assert_called_once()
+        session.submit.assert_not_called()
+        session.cluster.on_down.assert_not_called()
+        host.signal_connection_failure.assert_not_called()
+    finally:
+        pool.shutdown()
 
 
 @pytest.mark.parametrize('newer_attempt', [False, True])
@@ -1593,6 +1673,8 @@ def test_failure_waiting_for_membership_does_not_hold_session(socket_pool):
         for worker in (failure, publication):
             if worker.ident is not None:
                 worker.join(5)
-            assert not worker.is_alive()
+        pool._membership_lock = membership_lock
+    for worker in (failure, publication):
+        assert not worker.is_alive()
     assert not errors
     pool.shutdown()

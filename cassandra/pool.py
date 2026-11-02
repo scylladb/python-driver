@@ -471,6 +471,8 @@ class HostConnection(object):
         self._session = weakref.proxy(session)
         self._session_ref = weakref.ref(session)
         self._lock = Lock()
+        # Failure reservations hold membership while return_connection and
+        # shutdown re-enter it.
         self._membership_lock = RLock()
         self._ownership = _ownership or _lifecycle.PoolOwnershipReservation(
             session, host, self.endpoint)
@@ -768,6 +770,8 @@ class HostConnection(object):
                          self._replacement_connections.get(shard_id) is not connection)):
                     return
                 self._connections.pop(shard_id, None)
+            log.debug("Replacing connection (%s) to %s",
+                      id(connection), self.host)
             self._replacement_connections[shard_id] = connection
             if self.host.sharding_info and not self._session.cluster.shard_aware_options.disable:
                 self._submit_shard_attempt(shard_id)
@@ -775,11 +779,17 @@ class HostConnection(object):
                 return
             attempt = self._begin_shard_attempt(shard_id)
             if attempt is None:
+                if self._replacement_connections.get(shard_id) is connection:
+                    self._replacement_connections.pop(shard_id)
                 return
             try:
                 new_connection = self._session.cluster.connection_factory(
                     self.endpoint,
                     on_orphaned_stream_released=self.on_orphaned_stream_released)
+                log.debug("Received replacement connection (%s) to %s, "
+                          "assigned shard_id=%s", id(new_connection),
+                          self.host,
+                          new_connection.features.shard_id)
                 expected = self._connections.get(new_connection.features.shard_id)
                 if expected is None or expected.orphaned_threshold_reached:
                     published = self._sync_keyspace(
@@ -798,6 +808,8 @@ class HostConnection(object):
                         self._replacement_connections.get(shard_id) is connection):
                     self._replacement_connections.pop(shard_id)
         if new_connection is not None and not published:
+            log.debug("Closing unpublished replacement connection (%s) to %s",
+                      id(new_connection), self.host)
             new_connection.close()
 
     def shutdown(self, _failure=None):
@@ -961,6 +973,7 @@ class HostConnection(object):
         if isinstance(future, Future):
             with self._membership_lock:
                 self._shard_connections_futures.append(future)
+                cancel_pending = self._ownership.retired or self.is_shutdown
 
             def finished(completed):
                 with self._membership_lock:
@@ -969,6 +982,10 @@ class HostConnection(object):
                     self._finish_shard_attempt(attempt)
 
             future.add_done_callback(finished)
+            if cancel_pending:
+                # Submission can return after shutdown took its snapshot.
+                # cancel() runs callbacks, so keep it outside membership.
+                future.cancel()
         if future is None:
             self._finish_shard_attempt(attempt)
 
@@ -1002,11 +1019,17 @@ class HostConnection(object):
                     self.endpoint, host_conn=self,
                     on_orphaned_stream_released=self.on_orphaned_stream_released)
 
+            log.debug("Received connection (%s) to %s for shard_id=%i, "
+                      "assigned shard_id=%s", id(conn), self.host, shard_id,
+                      conn.features.shard_id)
             with self._connection_guard(attempt) as current:
                 if not current:
                     return
                 expected = self._connections.get(conn.features.shard_id)
             if shard_aware_endpoint and shard_id != conn.features.shard_id:
+                # A different assigned shard may indicate NAT changed the
+                # source port. Back off advanced shard awareness for ten
+                # minutes.
                 self.disable_advanced_shard_aware(10 * 60)
 
             if expected is None or expected.orphaned_threshold_reached:
@@ -1019,7 +1042,15 @@ class HostConnection(object):
                             remaining = old_conn.in_flight - len(old_conn.orphaned_request_ids)
                             if remaining:
                                 self._trash.add(old_conn)
+                                log.debug("Draining replaced connection (%s) "
+                                          "to %s, shard_id=%s: %i requests",
+                                          id(old_conn), self.host,
+                                          old_conn.features.shard_id,
+                                          remaining)
                                 old_conn = None
+                if retained:
+                    log.debug("Published connection (%s) to %s, shard_id=%s",
+                              id(conn), self.host, conn.features.shard_id)
                 if retained and self.num_missing_or_needing_replacement == 0:
                     self._close_excess_connections(_attempt=attempt)
             else:
@@ -1029,6 +1060,10 @@ class HostConnection(object):
                     if current and self.num_missing_or_needing_replacement != 0:
                         self._excess_connections.add(conn)
                         retained = True
+                if retained:
+                    log.debug("Keeping excess connection (%s) to %s, "
+                              "shard_id=%s", id(conn), self.host,
+                              conn.features.shard_id)
         except Exception as exc:
             with self._connection_guard(attempt, conn, expected) as current:
                 report_error = current
@@ -1042,8 +1077,14 @@ class HostConnection(object):
             # close() can return requests or run callbacks; keep it outside
             # both ownership guards and the pool work lock.
             if conn is not None and not retained:
+                log.debug("Closing unpublished connection (%s) to %s, "
+                          "shard_id=%s", id(conn), self.host,
+                          conn.features.shard_id)
                 conn.close()
             if old_conn is not None:
+                log.debug("Closing replaced connection (%s) to %s, "
+                          "shard_id=%s",
+                          id(old_conn), self.host, old_conn.features.shard_id)
                 old_conn.close()
 
     def _open_connections_for_all_shards(self, skip_shard_id=None):
