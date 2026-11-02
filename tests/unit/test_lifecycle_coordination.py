@@ -2127,10 +2127,11 @@ def test_topology_replacement_fences_real_connection_work(
         release.set()
         if worker is not None:
             worker.join(5)
-            assert not worker.is_alive()
-        elif work is not None:
-            work.result(timeout=5)
 
+    if worker is not None:
+        assert not worker.is_alive()
+    elif work is not None:
+        work.result(timeout=5)
     assert not errors
     assert winning_ready.result(timeout=5)
     if scope == 'first':
