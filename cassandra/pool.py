@@ -583,7 +583,7 @@ class HostConnection(object):
                     # The connection has met its orphaned stream ID limit
                     # and needs to be replaced. Start opening a connection
                     # to the same shard and replace when it is opened.
-                    self._submit_shard_attempt(shard_id)
+                    self._submit_shard_attempt(shard_id, _coalesce=True)
                     log.debug(
                         "Connection to shard_id=%i reached orphaned stream limit, replacing on host %s (%s/%i)",
                         shard_id,
@@ -593,7 +593,7 @@ class HostConnection(object):
                     )
             elif shard_id not in self._connecting:
                 # rate controlled optimistic attempt to connect to a missing shard
-                self._submit_shard_attempt(shard_id)
+                self._submit_shard_attempt(shard_id, _coalesce=True)
                 log.debug(
                     "Trying to connect to missing shard_id=%i on host %s (%s/%i)",
                     shard_id,
@@ -759,6 +759,7 @@ class HostConnection(object):
         new_connection = None
         published = False
         retry = False
+        attempt = None
         expected = _NOT_SET
         with self._lock:
             shard_id = connection.features.shard_id
@@ -773,16 +774,14 @@ class HostConnection(object):
             log.debug("Replacing connection (%s) to %s",
                       id(connection), self.host)
             self._replacement_connections[shard_id] = connection
-            if self.host.sharding_info and not self._session.cluster.shard_aware_options.disable:
-                self._submit_shard_attempt(shard_id)
-                self._replacement_connections.pop(shard_id, None)
-                return
-            attempt = self._begin_shard_attempt(shard_id)
-            if attempt is None:
-                if self._replacement_connections.get(shard_id) is connection:
-                    self._replacement_connections.pop(shard_id)
-                return
             try:
+                if (self.host.sharding_info and not
+                        self._session.cluster.shard_aware_options.disable):
+                    self._submit_shard_attempt(shard_id)
+                    return
+                attempt = self._begin_shard_attempt(shard_id)
+                if attempt is None:
+                    return
                 new_connection = self._session.cluster.connection_factory(
                     self.endpoint,
                     on_orphaned_stream_released=self.on_orphaned_stream_released)
@@ -794,16 +793,33 @@ class HostConnection(object):
                 if expected is None or expected.orphaned_threshold_reached:
                     published = self._sync_keyspace(
                         new_connection, attempt=attempt, expected=expected)
-            except Exception:
+            except Exception as exc:
                 # Only the original owner may retry a failed connection.
                 with self._connection_guard(
                         attempt, new_connection, expected) as current_owner:
-                    retry = current_owner
+                    retry = (current_owner and
+                             self._replacement_connections.get(shard_id)
+                             is connection)
                 if retry:
-                    log.warning("Failed reconnecting %s. Retrying.", self.endpoint)
-                    self._session.submit(self._replace, connection)
+                    log.warning("Failed reconnecting %s. Retrying: %s",
+                                self.endpoint, exc)
+                    try:
+                        retry = self._session.submit(
+                            self._replace, connection) is not None
+                    except Exception as retry_exc:
+                        retry = False
+                        with self._connection_guard() as current_owner:
+                            report_error = (
+                                current_owner and
+                                self._replacement_connections.get(shard_id)
+                                is connection)
+                        if report_error:
+                            log.warning(
+                                "Failed scheduling reconnection to %s: %s",
+                                self.endpoint, retry_exc)
             finally:
-                self._finish_shard_attempt(attempt)
+                if attempt is not None:
+                    self._finish_shard_attempt(attempt)
                 if (not retry and
                         self._replacement_connections.get(shard_id) is connection):
                     self._replacement_connections.pop(shard_id)
@@ -942,9 +958,9 @@ class HostConnection(object):
                         conn.features.shard_id) is expected)
                 yield current
 
-    def _begin_shard_attempt(self, shard_id):
+    def _begin_shard_attempt(self, shard_id, _coalesce=False):
         with self._connection_guard() as current:
-            if not current:
+            if not current or (_coalesce and shard_id in self._connecting):
                 return None
             # Tokens fence late completions and cleanup independently of
             # creation generations and exact installed pool ownership.
@@ -960,8 +976,8 @@ class HostConnection(object):
                 self._connection_attempts.pop(shard_id)
                 self._connecting.discard(shard_id)
 
-    def _submit_shard_attempt(self, shard_id):
-        attempt = self._begin_shard_attempt(shard_id)
+    def _submit_shard_attempt(self, shard_id, _coalesce=False):
+        attempt = self._begin_shard_attempt(shard_id, _coalesce=_coalesce)
         if attempt is None:
             return
         try:
@@ -1065,7 +1081,8 @@ class HostConnection(object):
                               "shard_id=%s", id(conn), self.host,
                               conn.features.shard_id)
         except Exception as exc:
-            with self._connection_guard(attempt, conn, expected) as current:
+            with self._connection_guard(
+                    attempt, conn, conn if retained else expected) as current:
                 report_error = current
             if report_error:
                 log.error(

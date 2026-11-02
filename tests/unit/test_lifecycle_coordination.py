@@ -2265,7 +2265,8 @@ def test_unpublished_candidate_shards_share_creation_reservation(topology, inval
         release_constructor.set()
         if shutdown is not None:
             shutdown.join(5)
-            assert not shutdown.is_alive()
         for pool in candidates:
             pool.shutdown()
+    if shutdown is not None:
+        assert not shutdown.is_alive()
     assert not shutdown_errors
