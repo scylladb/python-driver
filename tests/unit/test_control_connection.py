@@ -17,11 +17,11 @@ import unittest
 import uuid
 import weakref
 
-import pytest
-
 from concurrent.futures import Future, ThreadPoolExecutor
 from threading import Event, Thread
 from unittest.mock import Mock, ANY, call, patch
+
+import pytest
 
 from cassandra import (AuthenticationFailed, OperationTimedOut,
                        SchemaTargetType, SchemaChangeType,
@@ -3202,10 +3202,10 @@ class EventTimingTest(unittest.TestCase):
 
 
 @pytest.mark.parametrize('legacy', [False, True])
-@pytest.mark.parametrize('unknown, fail_contact', [(False, False), (True, False),
-                                                 (True, True)])
+@pytest.mark.parametrize(
+    'unknown, fail_contact', [(False, False), (True, False), (True, True)])
 def test_control_connection_policy_uses_current_endpoints(legacy, unknown,
-                                                         fail_contact):
+                                                          fail_contact):
     current = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
     cached = Host('127.0.0.2', SimpleConvictionPolicy,
                   host_id=uuid.uuid4() if unknown else current.host_id)
@@ -3217,7 +3217,7 @@ def test_control_connection_policy_uses_current_endpoints(legacy, unknown,
     with Cluster(protocol_version=4, **kwargs) as cluster:
         cluster.metadata.add_or_return_host(current)
         cluster.endpoints_resolved = [cached.endpoint if fail_contact else
-                                     DefaultEndPoint('127.0.0.3')]
+                                      DefaultEndPoint('127.0.0.3')]
         control = cluster.control_connection
         with patch.object(control, '_try_connect') as connect:
             endpoint_failure = ConnectionException('Contact point unavailable')

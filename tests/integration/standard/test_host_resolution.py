@@ -14,11 +14,11 @@
 import pytest
 
 from tests.integration import (CASSANDRA_IP, PROTOCOL_VERSION, TestCluster,
-                               remove_cluster, use_cluster)
+                               remove_cluster, use_single_node)
 
 
 def setup_module():
-    use_cluster('host_resolution', [1], start=True)
+    use_single_node()
 
 
 def teardown_module():

@@ -86,7 +86,8 @@ def routed_session(request):
 
             def wait_with_deadline(timeout=None):
                 completed = wait(5 if timeout is None else min(timeout, 5))
-                assert completed, 'Request did not complete within test deadline'
+                assert completed, (
+                    'Request did not complete within test deadline')
                 return completed
 
             future._event.wait = wait_with_deadline
@@ -104,7 +105,7 @@ def execute(session, query, host, asynchronous):
 @pytest.mark.parametrize('asynchronous', [False, True])
 @pytest.mark.parametrize('changed_endpoint', [False, True])
 def test_explicit_host_resolves_by_id(routed_session, asynchronous,
-                                     changed_endpoint):
+                                      changed_endpoint):
     session, current, pool, connection = routed_session
     cached = new_host('127.0.0.2' if changed_endpoint else current.address,
                       current.host_id)
@@ -121,9 +122,10 @@ def test_explicit_host_resolves_by_id(routed_session, asynchronous,
 
 
 @pytest.mark.parametrize('asynchronous', [False, True])
-@pytest.mark.parametrize('failure', ['unknown', 'missing_pool', 'shutdown_pool',
-                                    'obsolete_pool', 'current_down',
-                                    'down_during_borrow'])
+@pytest.mark.parametrize(
+    'failure',
+    ['unknown', 'missing_pool', 'shutdown_pool', 'obsolete_pool',
+     'current_down', 'down_during_borrow'])
 def test_explicit_host_failure_does_not_select_another_node(
         routed_session, asynchronous, failure):
     session, current, pool, connection = routed_session
@@ -168,12 +170,14 @@ def test_explicit_host_failure_does_not_select_another_node(
         assert list(connection.request_ids) == [1]
 
 
-@pytest.mark.parametrize('statement_kind', ['simple', 'prepared', 'bound', 'batch'])
+@pytest.mark.parametrize(
+    'statement_kind', ['simple', 'prepared', 'bound', 'batch'])
 def test_statement_types_share_host_resolution(routed_session, statement_kind):
     session, host, _, _ = routed_session
     cached = new_host('127.0.0.2', host.host_id)
-    prepared = PreparedStatement([], b'query-id', [], 'SELECT now() FROM system.local',
-                                 None, 4, [], None)
+    prepared = PreparedStatement(
+        [], b'query-id', [], 'SELECT now() FROM system.local',
+        None, 4, [], None)
     statements = {
         'simple': SimpleStatement('SELECT now() FROM system.local'),
         'prepared': prepared,
@@ -181,7 +185,8 @@ def test_statement_types_share_host_resolution(routed_session, statement_kind):
         'batch': BatchStatement().add('INSERT INTO ks.t (k) VALUES (1)'),
     }
 
-    assert session.execute(statements[statement_kind], host=cached).one().host_id == host.host_id
+    assert session.execute(
+        statements[statement_kind], host=cached).one().host_id == host.host_id
 
 
 class CachedHostPolicy(RoundRobinPolicy):
@@ -193,7 +198,8 @@ class CachedHostPolicy(RoundRobinPolicy):
         return iter(self.hosts)
 
 
-@pytest.mark.parametrize('source', ['default_profile', 'named_profile', 'listener'])
+@pytest.mark.parametrize(
+    'source', ['default_profile', 'named_profile', 'listener'])
 def test_extension_query_plans_resolve_cached_hosts(routed_session, source):
     session, host, _, _ = routed_session
     cached = new_host('127.0.0.2', host.host_id)
@@ -203,12 +209,14 @@ def test_extension_query_plans_resolve_cached_hosts(routed_session, source):
         session.add_request_init_listener(
             lambda future: setattr(future, 'query_plan', iter([cached])))
     else:
-        name = EXEC_PROFILE_DEFAULT if source == 'default_profile' else 'cached'
+        name = (EXEC_PROFILE_DEFAULT if source == 'default_profile'
+                else 'cached')
         session.cluster.profile_manager.profiles[name] = ExecutionProfile(
             load_balancing_policy=policy)
         kwargs['execution_profile'] = name
 
-    result = session.execute_async('SELECT host_id FROM system.local', **kwargs).result()
+    result = session.execute_async(
+        'SELECT host_id FROM system.local', **kwargs).result()
 
     assert result.response_future.coordinator_host is host
 
@@ -239,7 +247,7 @@ def test_legacy_policy_resolves_cached_hosts(routed_session):
 
 @pytest.mark.parametrize('replace_pool', [False, True])
 def test_resolution_does_not_bypass_replacement_during_borrow(routed_session,
-                                                            replace_pool):
+                                                              replace_pool):
     session, host, pool, connection = routed_session
     cached = new_host('127.0.0.2', host.host_id)
     replacement = new_host('127.0.0.3', host.host_id)
@@ -269,7 +277,7 @@ def test_resolution_does_not_bypass_replacement_during_borrow(routed_session,
 @pytest.mark.parametrize('api', ['future', 'result_set', 'iterator'])
 @pytest.mark.parametrize('explicit', [False, True])
 def test_paging_resolves_host_replaced_between_pages(routed_session, api,
-                                                    explicit):
+                                                     explicit):
     session, host, _, _ = routed_session
     old_pool, old_connection = owned_pool(host, (b'page-2',))
     session._pools[host] = old_pool
@@ -299,16 +307,17 @@ def test_paging_resolves_host_replaced_between_pages(routed_session, api,
 
 @pytest.mark.parametrize('session_method', [False, True])
 @pytest.mark.parametrize('variant', ['execute_concurrent',
-                                    'execute_concurrent_with_args',
-                                    'execute_concurrent_async'])
+                                     'execute_concurrent_with_args',
+                                     'execute_concurrent_async'])
 def test_concurrent_wrappers_share_policy_resolution(routed_session,
-                                                    session_method, variant):
+                                                     session_method, variant):
     session, host, _, _ = routed_session
     cached = new_host('127.0.0.2', host.host_id)
     session.cluster.profile_manager.default.load_balancing_policy = (
         CachedHostPolicy([cached]))
     query = SimpleStatement('SELECT host_id FROM system.local')
-    args = (query, [None]) if variant.endswith('_with_args') else ([(query, None)],)
+    args = (query, [None]) if variant.endswith(
+        '_with_args') else ([(query, None)],)
     if session_method:
         results = getattr(session, variant)(*args)
     else:
