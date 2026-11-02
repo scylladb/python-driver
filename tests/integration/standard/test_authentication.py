@@ -22,7 +22,7 @@ from cassandra.cluster import NoHostAvailable
 from cassandra.auth import PlainTextAuthProvider, SASLClient, SaslAuthProvider
 
 from tests.integration import use_singledc, get_cluster, remove_cluster, PROTOCOL_VERSION, \
-    CASSANDRA_IP, CASSANDRA_VERSION, start_cluster_wait_for_up, TestCluster
+    CASSANDRA_IP, CASSANDRA_VERSION, start_cluster_wait_for_up, TestCluster, SCYLLA_VERSION
 from tests.integration.util import assert_quiescent_pool_state
 
 import unittest
@@ -47,9 +47,11 @@ def setup_module():
         config_options = {
             'authenticator': 'PasswordAuthenticator',
             'authorizer': 'CassandraAuthorizer',
-            'auth_superuser_name': 'cassandra',
-            'auth_superuser_salted_password': '$6$x7IFjiX5VCpvNiFk$2IfjTvSyGL7zerpV.wbY7mJjaRCrJ/68dtT3UpT.sSmNYz1bPjtn3mH.kJKFvaZ2T4SbVeBijjmwGjcb83LlV/'
         }
+        if SCYLLA_VERSION:
+            # Scylla only options, Cassandra creates the cassandra/cassandra superuser by default
+            config_options['auth_superuser_name'] = 'cassandra'
+            config_options['auth_superuser_salted_password'] = '$6$x7IFjiX5VCpvNiFk$2IfjTvSyGL7zerpV.wbY7mJjaRCrJ/68dtT3UpT.sSmNYz1bPjtn3mH.kJKFvaZ2T4SbVeBijjmwGjcb83LlV/'
         ccm_cluster.set_configuration_options(config_options)
         log.debug("Starting ccm test cluster with %s", config_options)
         start_cluster_wait_for_up(ccm_cluster)

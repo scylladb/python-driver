@@ -1020,6 +1020,9 @@ class LightweightTransactionTests(unittest.TestCase):
                         # actually returned a WriteTimeout/WriteFailure.
                         received_client_timeout = True
                     continue
+                if exception_type == "ErrorMessage" and result.code == 0x1700:
+                    # Cassandra 4.0+ CAS_WRITE_UNKNOWN: "CAS operation result is unknown"
+                    continue
 
                 pytest.fail("Unexpected exception %s: %s" % (exception_type, result))
 
@@ -1681,6 +1684,8 @@ class PreparedWithKeyspaceTests(BaseKeyspaceTests, unittest.TestCase):
             wait_until(
                 lambda: mock_handler.get_message_count('debug', 'Preparing all known prepared statements') >= 1,
                 delay=0.5, max_attempts=20)
+            # statements are prepared while the pool opens, before the host is marked up
+            wait_until(lambda: self.cluster.metadata.get_host('127.0.0.1').is_up, delay=0.5, max_attempts=20)
 
             results = self.session.execute(prepared_statement, (1,), execution_profile="only_first")
             assert results.one() == (1, )

@@ -24,7 +24,7 @@ from cassandra.policies import (ConstantReconnectionPolicy,
                                 ConstantSpeculativeExecutionPolicy, FallthroughRetryPolicy)
 from tests.driver_config_schema import validate_report
 from tests.integration import (TestCluster, get_client_options, use_single_node, remove_cluster,
-                               xfail_scylla_version_lt)
+                               xfail_scylla_version_lt, scylla_only)
 
 
 def setup_module():
@@ -313,6 +313,7 @@ class DriverConfigReportingTest(unittest.TestCase):
         finally:
             cluster.shutdown()
 
+    @scylla_only
     def test_the_server_side_timeout_is_reported_against_scylla(self):
         """
         USING TIMEOUT is a ScyllaDB extension, so this key is reported only on a

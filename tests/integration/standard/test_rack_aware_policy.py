@@ -4,13 +4,16 @@ import unittest
 from cassandra.cluster import Cluster
 from cassandra.policies import ConstantReconnectionPolicy, RackAwareRoundRobinPolicy
 
-from tests.integration import PROTOCOL_VERSION, get_cluster, use_multidc
+from tests.integration import PROTOCOL_VERSION, get_cluster, use_multidc, scylla_only
 
 LOGGER = logging.getLogger(__name__)
 
 def setup_module():
     use_multidc({'DC1': {'RC1': 2, 'RC2': 2}, 'DC2': {'RC1': 3}})
 
+# Cassandra fails to start this topology: "Token allocation failed: the number of racks 2 in datacenter DC1
+# is lower than its replication factor 3"
+@scylla_only
 class RackAwareRoundRobinPolicyTests(unittest.TestCase):
     @classmethod
     def setup_class(cls):
