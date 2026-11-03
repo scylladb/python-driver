@@ -43,6 +43,16 @@ Removed
   ``get_schema_parser()`` is now ignored, and the driver no longer queries
   ``system.local.dse_version`` when ``release_version`` is unknown.
 
+Features
+--------
+* Extend ``TABLETS_ROUTING_V2`` to ``BATCH`` requests: when a ``BatchStatement``
+  is routed by a prepared statement whose partition key is bound by markers,
+  and the statement's routing key is computed from them, ``BATCH`` requests
+  sent over a V2 connection name that statement, as long as the batch still
+  has its keyspace, table and routing key, and the routing information the
+  server returns for that statement's tablet is cached under its table
+  (SCYLLADB-4807).
+
 Bug Fixes
 ---------
 * Exclude Cython-generated C sources from distributions while retaining the

@@ -775,6 +775,13 @@ BatchType.UNLOGGED = BatchType("UNLOGGED", 1)
 BatchType.COUNTER = BatchType("COUNTER", 2)
 
 
+# The statement a batch takes its routing attributes from, together with the
+# keyspace, the table and the routing key it gave the batch (see
+# BatchStatement._get_routing_statement). The routing key is the one the server
+# computes the token of the statement from.
+_RoutingStatement = namedtuple('_RoutingStatement', ['index', 'keyspace', 'table', 'routing_key'])
+
+
 class BatchStatement(Statement):
     """
     A protocol-level batch of operations which are applied atomically
@@ -798,6 +805,7 @@ class BatchStatement(Statement):
     _statements_and_parameters = None
     _session = None
     _is_lwt = False
+    _routing_statement = None
 
     def __init__(self, batch_type=BatchType.LOGGED, retry_policy=None,
                  consistency_level=None, serial_consistency_level=None,
@@ -863,6 +871,7 @@ class BatchStatement(Statement):
         self.keyspace = None
         self.table = None
         self.routing_key = None
+        self._routing_statement = None
         if self.custom_payload:
             self.custom_payload.clear()
 
@@ -927,6 +936,50 @@ class BatchStatement(Statement):
                 self.routing_key = statement.routing_key
                 self.keyspace = statement.keyspace
                 self.table = statement.table
+                if self._routed_by_server_routing_key(statement):
+                    # It's appended right after this, so its index is the
+                    # current length.
+                    self._routing_statement = _RoutingStatement(
+                        len(self._statements_and_parameters),
+                        self.keyspace, self.table, self.routing_key)
+
+    @staticmethod
+    def _routed_by_server_routing_key(statement):
+        """
+        Whether the routing key of `statement` is the one the server computes
+        its token from.
+
+        The server only computes it from the partition key bind indices it sent
+        in the PREPARED metadata, and ignores the routing hint of a BATCH whose
+        routing statement has none. :attr:`~.Statement.routing_key` may come
+        from elsewhere: from indices the driver guessed from the names of the
+        bind markers, or from indices or a routing key the user set. Such a
+        statement isn't named, since the tablet_version_block would be chosen
+        for a partition the server doesn't check it against.
+        """
+        if not isinstance(statement, BoundStatement) or statement._routing_key is not None:
+            return False
+        prepared = statement.prepared_statement
+        return bool(prepared._pk_indexes) and prepared.routing_key_indexes == prepared._pk_indexes
+
+    def _get_routing_statement(self):
+        """
+        Return the statement this batch is routed by, for the routing hint of
+        ``TABLETS_ROUTING_V2``, as a ``_RoutingStatement``, or :const:`None`.
+
+        The routing attributes of a batch are public, so they may have changed
+        since the statement gave them to the batch. The statement only counts
+        while the batch targets its table, since the routing information the
+        server returns is filed under it, and while the batch is routed by its
+        routing key, since the tablet_version_block is chosen for the partition
+        of the routing key and the server checks it against the partition the
+        statement writes.
+        """
+        rs = self._routing_statement
+        if (rs is not None and rs.keyspace == self.keyspace and rs.table == self.table
+                and rs.routing_key == self.routing_key):
+            return rs
+        return None
 
     def _update_custom_payload(self, statement):
         if statement.custom_payload:
