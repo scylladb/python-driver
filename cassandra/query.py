@@ -463,6 +463,11 @@ class PreparedStatement(object):
     _result_metadata_and_id = (None, None)
     column_encryption_policy = None
     routing_key_indexes = None
+    # The partition key bind indices the server sent in the PREPARED metadata.
+    # Unlike routing_key_indexes, which the driver may guess from the names of
+    # the bind markers, or the user may set, these are the ones the server
+    # computes the token from.
+    _pk_indexes = None
     _routing_key_index_set = None
     serial_consistency_level = None  # TODO never used?
     _is_lwt = False
@@ -562,9 +567,13 @@ class PreparedStatement(object):
                     except KeyError:  # we're missing a partition key component in the prepared
                         pass          # statement; just leave routing_key_indexes as None
 
-        return PreparedStatement(column_metadata, query_id, routing_key_indexes,
-                                 query, prepared_keyspace, protocol_version, result_metadata,
-                                 result_metadata_id, is_lwt, column_encryption_policy)
+        prepared_statement = PreparedStatement(column_metadata, query_id, routing_key_indexes,
+                                               query, prepared_keyspace, protocol_version, result_metadata,
+                                               result_metadata_id, is_lwt, column_encryption_policy)
+        # A copy: routing_key_indexes may be the same list, and changing it in
+        # place mustn't change these.
+        prepared_statement._pk_indexes = list(pk_indexes) if pk_indexes else None
+        return prepared_statement
 
     def bind(self, values):
         """
