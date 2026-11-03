@@ -76,7 +76,7 @@ from cassandra.protocol import (QueryMessage, ResultMessage,
                                 PreparedQueryNotFound,
                                 IsBootstrappingErrorMessage,
                                 TruncateError, ServerError,
-                                BatchMessage, RESULT_KIND_PREPARED,
+                                BatchMessage, NO_ROUTING_STATEMENT, RESULT_KIND_PREPARED,
                                 RESULT_KIND_SET_KEYSPACE, RESULT_KIND_ROWS,
                                 RESULT_KIND_SCHEMA_CHANGE, ProtocolHandler,
                                 RESULT_KIND_VOID, ProtocolException)
@@ -4216,9 +4216,36 @@ class Session(object):
                     "2 or higher (supported in Cassandra 2.0 and higher).  Consider "
                     "setting Cluster.protocol_version to 2 to support this operation.")
             statement_keyspace = query.keyspace if ProtocolVersion.uses_keyspace_flag(self._protocol_version) else None
+            # As for EXECUTE, the routing hint is connection-independent, and the
+            # serializer emits it only when the serving connection negotiated
+            # TABLETS_ROUTING_V2 (see BatchMessage.send_body). The server ignores
+            # the block of a batch that names no routing statement. Otherwise,
+            # it checks the block against the tablet of the partition the
+            # routing statement writes, so the block is chosen for that
+            # partition even if the batch is routed by another routing key.
+            routing_statement = query._get_routing_statement()
+            if routing_statement is None:
+                routing_statement_index = NO_ROUTING_STATEMENT
+                tablet_version_block = 0
+            else:
+                routing_statement_index = routing_statement.index
+                if routing_statement.routing_key == routing_key:
+                    # Unless the user routes the batch by another key, it's
+                    # routed by this one, whose token is already computed.
+                    routing_statement_token = routing_token
+                else:
+                    routing_statement_token = None
+                    metadata = self.cluster.metadata
+                    token_map = metadata.token_map
+                    if token_map is not None and metadata.can_support_partitioner():
+                        routing_statement_token = token_map.token_class.from_key(routing_statement.routing_key)
+                tablet_version_block = self._compute_tablet_version_block(
+                    query, routing_statement.routing_key, routing_statement_token)
             message = BatchMessage(
                 query.batch_type, query._statements_and_parameters, cl,
-                serial_cl, timestamp, statement_keyspace)
+                serial_cl, timestamp, statement_keyspace,
+                routing_statement_index=routing_statement_index,
+                tablet_version_block=tablet_version_block)
         elif isinstance(query, GraphStatement):
             # the statement_keyspace is not aplicable to GraphStatement
             message = QueryMessage(query.query, cl, serial_cl, fetch_size,
@@ -4241,7 +4268,8 @@ class Session(object):
     def _compute_tablet_version_block(self, query, routing_key: Optional[bytes],
                                       routing_token: Optional[Token]) -> int:
         """
-        Compute the tablet_version_block byte for a BoundStatement.
+        Compute the tablet_version_block byte for a BoundStatement, or for the
+        routing statement of a BatchStatement.
 
         Always returns an int in [0, 255]. A non-token-aware query (no routing
         key) can never resolve to a tablet, so the server never version-checks
@@ -4257,11 +4285,14 @@ class Session(object):
         both when there is no routing key and when no token map was available, so
         telling those two cases apart needs the routing key as well -- taking it
         as an argument rather than re-reading ``query.routing_key`` keeps the two
-        values here guaranteed to describe the same statement.
+        values here guaranteed to describe the same statement. For a batch, they
+        describe the partition its routing statement writes, which the batch
+        isn't necessarily routed by.
 
         This is computed once per request at message construction; the value is
         connection-independent, and the serializer emits it only on connections
-        that negotiated TABLETS_ROUTING_V2 (see ExecuteMessage.send_body).
+        that negotiated TABLETS_ROUTING_V2 (see ExecuteMessage.send_body and
+        BatchMessage.send_body).
         """
         if routing_key is None:
             # Non-token-aware query: the server won't version-check it, so skip

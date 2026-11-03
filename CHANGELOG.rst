@@ -1,6 +1,13 @@
 Unreleased
 ==========
 
+Features
+--------
+* Extend ``TABLETS_ROUTING_V2`` to ``BATCH`` requests: a ``BatchStatement``
+  routed by a prepared statement whose partition key is bound by markers now
+  names it in every ``BATCH`` request, and the routing information the server
+  returns for that statement's tablet is cached under its table (SCYLLADB-4807).
+
 Bug Fixes
 ---------
 * Tablet updates no longer mutate a table's tablet list in place, so a
