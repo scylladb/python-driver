@@ -3,6 +3,7 @@ import logging
 import unittest
 
 from cassandra.cluster import ExecutionProfile
+from cassandra.connection import DefaultEndPoint
 from cassandra.policies import WhiteListRoundRobinPolicy
 
 from tests.integration import use_cluster, get_node, get_cluster, local, TestCluster
@@ -39,6 +40,10 @@ class TestIpAddressChange(unittest.TestCase):
 
     def test_change_address_during_live_session(self):
         node3 = get_node(3)
+        old_endpoint = DefaultEndPoint(*node3.network_interfaces['binary'])
+        old_host = self.cluster.metadata.get_host(old_endpoint)
+        assert old_host is not None
+        host_id = old_host.host_id
 
         LOGGER.debug("Stop node3")
         node3.stop()
@@ -52,9 +57,16 @@ class TestIpAddressChange(unittest.TestCase):
         node3.start(wait_for_binary_proto=True)
 
         def new_address_found():
-            addresses = [str(host.endpoint.address) for host in self.cluster.metadata.all_hosts()]
-            LOGGER.debug(addresses)
-            assert new_ip in addresses
+            metadata = self.cluster.metadata
+            current = metadata.get_host_by_host_id(host_id)
+            assert current is not None
+            assert current is not old_host
+            assert current.host_id == host_id
+            assert current.endpoint == DefaultEndPoint(new_ip, old_endpoint.port)
+            assert old_host.endpoint == old_endpoint
+            assert old_host._is_removed
+            assert metadata.get_host(old_endpoint) is None
+            assert metadata.get_host(current.endpoint) is current
 
         wait_until_not_raised(new_address_found, 0.5, 100)
 
@@ -66,5 +78,6 @@ class TestIpAddressChange(unittest.TestCase):
             local_info = self.session.execute("SELECT * FROM system.local WHERE key='local'", execution_profile="new_node").one()
             LOGGER.debug(local_info._asdict())
             assert local_info.broadcast_address == new_ip
+            assert local_info.host_id == host_id
 
         wait_until_not_raised(new_node_connectable, 0.5, 100)
