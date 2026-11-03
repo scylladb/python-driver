@@ -1891,9 +1891,9 @@ class ControlConnectionTest(unittest.TestCase):
 
         def move_owner_before_local_row(lookup_endpoint):
             if lookup_endpoint == endpoint:
-                old_endpoint = endpoint_owner.endpoint
-                endpoint_owner.endpoint = endpoint
-                metadata.update_host(endpoint_owner, old_endpoint)
+                self.cluster.replace_host_endpoint(
+                    endpoint_owner, endpoint,
+                    endpoint_owner.datacenter, endpoint_owner.rack)
             return get_host(lookup_endpoint)
 
         metadata.get_host = Mock(side_effect=move_owner_before_local_row)
@@ -2027,7 +2027,10 @@ class ControlConnectionTest(unittest.TestCase):
 
         def change_after_batch(moves):
             replacements = replace_hosts_endpoints(moves)
-            replacements[0].endpoint = DefaultEndPoint('192.168.1.10')
+            current = replacements[0]
+            self.cluster.replace_host_endpoint(
+                current, DefaultEndPoint('192.168.1.10'),
+                current.datacenter, current.rack)
             return replacements
 
         self.cluster.replace_hosts_endpoints = Mock(side_effect=change_after_batch)
@@ -2072,10 +2075,9 @@ class ControlConnectionTest(unittest.TestCase):
     def test_new_host_does_not_displace_live_unix_endpoint_owner(self):
         self.control_connection.refresh_node_list_and_token_map()
         owner = self.cluster.metadata.get_host_by_host_id(HOST_ID_2)
-        old_endpoint = owner.endpoint
         unix_endpoint = UnixSocketEndPoint('/tmp/maintenance.sock')
-        owner.endpoint = unix_endpoint
-        self.cluster.metadata.update_host(owner, old_endpoint)
+        owner = self.cluster.replace_host_endpoint(
+            owner, unix_endpoint, owner.datacenter, owner.rack)
 
         self.connection.peer_results[1].append([
             '192.168.1.9', '10.0.0.9', 'a', 'dc1', 'rack1',

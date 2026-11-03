@@ -11,6 +11,14 @@ Features
   ``Session.execute_concurrent_async()``, which returns a
   ``concurrent.futures.Future`` without blocking the caller.
 
+Compatibility Changes
+---------------------
+* ``Host.endpoint`` is now read-only, like ``Host.host_id``. Assigning or
+  deleting either property raises ``AttributeError``. Endpoint moves publish
+  a new ``Host`` with the same UUID and retire the previous object, whose
+  endpoint stays unchanged. Use cluster metadata to find the current host
+  instead of assigning an endpoint directly (#924).
+
 Bug Fixes
 ---------
 * Avoid loading optional NumPy during ordinary driver imports. NumPy is now
