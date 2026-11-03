@@ -1232,7 +1232,9 @@ def test_retired_failure_admission_does_not_wait_for_pool_work(
             if supersede == 'pool':
                 session._pools[host] = successor
             elif supersede == 'endpoint':
-                host.endpoint = DefaultEndPoint('127.0.0.2')
+                with patch.object(cluster, '_notify_host_removed'), \
+                        patch.object(cluster, 'on_add'):
+                    cluster.replace_host_endpoint(host, DefaultEndPoint('127.0.0.2'))
             elif supersede == 'host':
                 host._is_removed = True
             elif supersede == 'session':
@@ -1266,7 +1268,7 @@ def test_retired_failure_admission_does_not_wait_for_pool_work(
         assert not worker.is_alive()
         assert not errors
         assert admitted == [supersede is None]
-        assert host.is_up is (supersede is not None)
+        assert host.is_up is (supersede not in (None, 'endpoint'))
         assert cluster.on_down_potentially_blocking.call_count == int(supersede is None)
         assert not successor.is_shutdown
     finally:

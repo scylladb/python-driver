@@ -21,7 +21,7 @@ from threading import RLock
 from unittest.mock import Mock, patch
 
 from concurrent.futures import Future
-from cassandra.cluster import Session
+from cassandra.cluster import Cluster, Session
 from cassandra.driver_config import DriverConfigReporter
 
 
@@ -52,6 +52,29 @@ def new_session_with_pool_state(pools=None):
     session._pool_generations = {}
     session._pool_intents = {}
     return session
+
+
+def move_host(host, endpoint):
+    """Publish and retire a route while the caller controls pool cleanup.
+
+    Socket and request race tests use mock sessions so they can finish stale
+    work separately from lifecycle notifications. Use the production move API
+    with those notifications stubbed to preserve that separation.
+    """
+    old_endpoint = host.endpoint
+    with Cluster(contact_points=[]) as cluster:
+        cluster.metadata.add_or_return_host(host)
+        cluster._notify_host_removed = Mock()
+        cluster.on_add = Mock()
+        replacement = cluster.replace_host_endpoint(host, endpoint)
+        assert cluster.metadata.get_host_by_host_id(host.host_id) is replacement
+        assert cluster.metadata.get_host(endpoint) is replacement
+        assert cluster.metadata.get_host(old_endpoint) is None
+        assert replacement is not host
+        assert replacement.host_id == host.host_id
+        assert host.endpoint == old_endpoint
+        assert host._is_removed
+        return replacement
 
 
 def mock_session_pools(f):

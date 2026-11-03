@@ -43,7 +43,7 @@ from cassandra.metadata import Metadata
 from cassandra.pool import Host, _HostReconnectionHandler
 from cassandra.policies import ExponentialReconnectionPolicy, HostDistance, RetryPolicy, RoundRobinPolicy, DowngradingConsistencyRetryPolicy, SimpleConvictionPolicy
 from cassandra.query import SimpleStatement, named_tuple_factory, tuple_factory
-from tests.unit.utils import (mock_session_pools, new_session_with_pool_state,
+from tests.unit.utils import (mock_session_pools, move_host, new_session_with_pool_state,
                               run_isolated_subprocess)
 from tests import connection_class
 import pytest
@@ -3076,7 +3076,7 @@ class SessionPoolRaceTest(unittest.TestCase):
         with patch('cassandra.cluster.HostConnection', side_effect=factory):
             future = session.add_or_renew_pool(host, is_host_addition=True)
             assert factory.creation_started.wait(5)
-            host.endpoint = DefaultEndPoint('127.0.0.2')
+            move_host(host, DefaultEndPoint('127.0.0.2'))
             factory.release_creation.set()
             assert future.result(timeout=5) is False
 
@@ -5200,7 +5200,7 @@ class SessionTest(unittest.TestCase):
         callback.assert_called_once()
         assert callback.call_args.args[0] == {'host1': [keyspace_error]}
 
-    def test_remove_pool_after_host_endpoint_changes(self):
+    def test_remove_pool_by_equal_host_at_another_endpoint(self):
         host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
         pool = Mock(host=host)
         shutdown_future = Future()
@@ -5209,7 +5209,6 @@ class SessionTest(unittest.TestCase):
         session.cluster.executor.submit.return_value = shutdown_future
         session.is_shutdown = False
 
-        host.endpoint = DefaultEndPoint("127.0.0.2")
         same_host_at_another_endpoint = Host(
             "127.0.0.3", SimpleConvictionPolicy, host_id=host.host_id)
 

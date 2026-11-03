@@ -39,6 +39,7 @@ from cassandra.protocol import (ReadTimeoutErrorMessage, WriteTimeoutErrorMessag
 from cassandra.policies import RetryPolicy, ExponentialBackoffRetryPolicy, SimpleConvictionPolicy
 from cassandra.pool import Host, NoConnectionsAvailable
 from cassandra.query import SimpleStatement, PreparedStatement, BoundStatement
+from tests.unit.utils import move_host
 from tests.util import assertEqual, assertIsInstance
 import pytest
 
@@ -91,8 +92,9 @@ class ResponseFutureTests(unittest.TestCase):
         rf = self.make_response_future(session)
         assert rf._query(host) == 1
 
-        new_pool, _ = self.make_owned_pool(host)
-        session._pools[host] = new_pool
+        replacement = move_host(host, DefaultEndPoint('127.0.0.2'))
+        new_pool, _ = self.make_owned_pool(replacement)
+        session._pools = {replacement: new_pool}
         rf._on_timeout()
 
         old_pool.return_connection.assert_called_once_with(
@@ -110,10 +112,39 @@ class ResponseFutureTests(unittest.TestCase):
 
         replacement = Host('127.0.0.1', SimpleConvictionPolicy, host_id=host_id)
         assert rf._query(replacement) is None
-        host.endpoint = DefaultEndPoint('127.0.0.2')
+        moved = move_host(host, DefaultEndPoint('127.0.0.2'))
+        new_pool, new_connection = self.make_owned_pool(moved)
+        session._pools = {moved: new_pool}
         assert rf._query(host) is None
         pool.borrow_connection.assert_not_called()
+        new_pool.borrow_connection.assert_not_called()
         connection.send_msg.assert_not_called()
+        new_connection.send_msg.assert_not_called()
+
+    def test_admitted_request_completes_through_original_pool_after_endpoint_move(self):
+        host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
+        session = self.make_owned_pool_session(host)
+        old_pool, connection = self.make_owned_pool(host)
+        session._pools[host] = old_pool
+        rf = self.make_response_future(session)
+        assert rf._query(host) == 1
+
+        replacement = move_host(host, DefaultEndPoint('127.0.0.2'))
+        new_pool, _ = self.make_owned_pool(replacement)
+        session._pools = {replacement: new_pool}
+        response = ResultMessage(RESULT_KIND_ROWS)
+        response.column_names = ['value']
+        response.column_types = []
+        response.parsed_rows = [(42,)]
+        connection._requests.pop(1)(response)
+
+        assert rf._event.is_set()
+        assert rf.result().one() == (['value'], [(42,)])
+        assert rf._request_pool is old_pool
+        assert connection.in_flight == 0
+        old_pool.return_connection.assert_called_once_with(connection)
+        new_pool.return_connection.assert_not_called()
+        new_pool.borrow_connection.assert_not_called()
 
     def test_explicit_host_from_previous_cluster_uses_current_host(self):
         host_id = uuid.uuid4()
@@ -171,7 +202,7 @@ class ResponseFutureTests(unittest.TestCase):
 
         def change_endpoint(**kwargs):
             result = borrow(**kwargs)
-            host.endpoint = DefaultEndPoint('127.0.0.2')
+            move_host(host, DefaultEndPoint('127.0.0.2'))
             return result
 
         pool.borrow_connection.side_effect = change_endpoint
@@ -198,7 +229,7 @@ class ResponseFutureTests(unittest.TestCase):
 
         def change_endpoint(**kwargs):
             result = borrow(**kwargs)
-            second_host.endpoint = DefaultEndPoint('127.0.0.3')
+            move_host(second_host, DefaultEndPoint('127.0.0.3'))
             return result
 
         second_pool.borrow_connection.side_effect = change_endpoint
@@ -217,14 +248,15 @@ class ResponseFutureTests(unittest.TestCase):
         rf = self.make_response_future(session)
         assert rf._query(host) == 1
 
-        new_pool, new_connection = self.make_owned_pool(host, request_id=2)
-        session._pools[host] = new_pool
-        assert rf._query(host) == 2
+        replacement = move_host(host, DefaultEndPoint('127.0.0.2'))
+        new_pool, new_connection = self.make_owned_pool(replacement, request_id=2)
+        session._pools = {replacement: new_pool}
+        assert rf._query(replacement) == 2
         new_connection.send_msg.assert_called_once()
         old_connection.send_msg.assert_called_once()
         assert rf._request_pool is new_pool
 
-    def test_endpoint_change_waits_until_send_begins(self):
+    def test_endpoint_move_waits_to_retire_host_until_send_begins(self):
         host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
         session = self.make_owned_pool_session(host)
         pool, connection = self.make_owned_pool(host)
@@ -237,8 +269,7 @@ class ResponseFutureTests(unittest.TestCase):
         def send_msg(message, stream_id, cb, **kwargs):
             def change_endpoint():
                 change_started.set()
-                with host.lock:
-                    host.endpoint = DefaultEndPoint('127.0.0.2')
+                move_host(host, DefaultEndPoint('127.0.0.2'))
                 change_done.set()
 
             thread = Thread(target=change_endpoint)
@@ -247,6 +278,7 @@ class ResponseFutureTests(unittest.TestCase):
             assert change_started.wait(1)
             assert not change_done.wait(0.01)
             assert host.endpoint == old_endpoint
+            assert not host._is_removed
             connection._requests[stream_id] = cb
             return 128
 
@@ -255,7 +287,8 @@ class ResponseFutureTests(unittest.TestCase):
         assert rf._query(host) == 1
         assert change_done.wait(1)
         threads[0].join(1)
-        assert host.endpoint != old_endpoint
+        assert host._is_removed
+        assert host.endpoint == old_endpoint
 
     def test_sends_to_different_hosts_can_progress_together(self):
         first_host = Host('127.0.0.1', SimpleConvictionPolicy,

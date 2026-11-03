@@ -24,14 +24,16 @@ from unittest.mock import Mock, NonCallableMagicMock, MagicMock, patch
 
 from cassandra.cluster import Cluster, Session, ShardAwareOptions
 from cassandra._lifecycle import ConnectionFailureReservation, PoolOwnershipReservation
-from cassandra.connection import Connection, ConnectionBusy, ConnectionException, ConnectionSendError, DefaultEndPoint
+from cassandra.connection import (ClientRoutesEndPoint, Connection, ConnectionBusy,
+                                  ConnectionException, ConnectionSendError,
+                                  DefaultEndPoint, SniEndPoint, UnixSocketEndPoint)
 from cassandra.pool import HostConnection
 from cassandra.pool import Host, NoConnectionsAvailable
 from cassandra.policies import HostDistance, SimpleConvictionPolicy
 import pytest
 
 from tests.unit.util import HashableMock
-from tests.unit.utils import new_session_with_pool_state
+from tests.unit.utils import move_host, new_session_with_pool_state
 
 LOGGER = logging.getLogger(__name__)
 
@@ -96,7 +98,9 @@ def test_connection_failure_respects_socket_ownership(
     elif ownership == 'retired_host':
         host._is_removed = True
     elif ownership == 'moved_endpoint':
-        host.endpoint = DefaultEndPoint('127.0.0.2')
+        moved = move_host(host, DefaultEndPoint('127.0.0.2'))
+        winner = HostConnection(moved, HostDistance.LOCAL, session)
+        session._pools = {moved: winner}
     elif ownership == 'shutdown_session':
         session.is_shutdown = True
 
@@ -123,7 +127,7 @@ def test_connection_failure_respects_socket_ownership(
         session.cluster.on_down.assert_not_called()
         session.submit.assert_not_called()
         assert not current.is_shutdown
-        if ownership in ('draining', 'retired_pool', 'unpublished_pool'):
+        if ownership in ('draining', 'retired_pool', 'unpublished_pool', 'moved_endpoint'):
             assert current._connections.get(0) is replacement
             replacement.close.assert_not_called()
 
@@ -149,7 +153,9 @@ def test_failure_policy_cannot_affect_replacement(socket_pool, convicted, change
                 elif change == 'pool':
                     session._pools[host] = winner
                 elif change == 'endpoint':
-                    host.endpoint = DefaultEndPoint('127.0.0.2')
+                    moved = move_host(host, DefaultEndPoint('127.0.0.2'))
+                    winner = HostConnection(moved, HostDistance.LOCAL, session)
+                    session._pools = {moved: winner}
                 else:
                     host._is_removed = True
         except Exception as error:
@@ -175,7 +181,7 @@ def test_failure_policy_cannot_affect_replacement(socket_pool, convicted, change
     session.cluster.on_down.assert_not_called()
     session.submit.assert_not_called()
     assert not session._pools[host].is_shutdown
-    if change in ('socket', 'pool'):
+    if change in ('socket', 'pool', 'endpoint'):
         assert session._pools[host]._connections[0] is replacement
         replacement.close.assert_not_called()
 
@@ -200,7 +206,7 @@ def test_down_admission_rechecks_failed_socket(socket_pool, change):
                 session._pools[host] = Mock(
                     host=host, endpoint=host.endpoint, is_shutdown=False)
             elif change == 'endpoint':
-                host.endpoint = DefaultEndPoint('127.0.0.2')
+                move_host(host, DefaultEndPoint('127.0.0.2'))
             else:
                 host._health_generation += 1
         return HostDistance.IGNORED
@@ -208,7 +214,7 @@ def test_down_admission_rechecks_failed_socket(socket_pool, change):
     cluster.profile_manager.distance.side_effect = distance
     try:
         pool.return_connection(original)
-        assert host.is_up
+        assert host.is_up is (change != 'endpoint')
         assert pool.is_shutdown
         if change == 'pool':
             assert not session._pools[host].is_shutdown
@@ -236,7 +242,7 @@ def test_retirement_cleanup_cannot_down_superseding_owner(socket_pool, change):
                 if change == 'pool':
                     session._pools[host] = successor
                 elif change == 'endpoint':
-                    host.endpoint = DefaultEndPoint('127.0.0.2')
+                    move_host(host, DefaultEndPoint('127.0.0.2'))
                 elif change == 'host':
                     host._is_removed = True
                 elif change == 'session':
@@ -758,24 +764,43 @@ class _PoolTests(unittest.TestCase):
         assert a != c, 'Two Host instances with different host IDs should not be equal.'
         assert a != a.address, 'A Host should not compare equal to its address.'
 
-    def test_host_id_is_read_only(self):
+    def test_host_identity_and_endpoint_are_read_only(self):
         host_id = uuid.uuid4()
         host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=host_id)
 
-        with pytest.raises(AttributeError):
-            host.host_id = uuid.uuid4()
+        endpoint = host.endpoint
+        original_hash = hash(host)
+        hosts_by_id = {host: 'pool'}
+        hosts = {host}
+        for name, value in (('host_id', uuid.uuid4()),
+                            ('endpoint', DefaultEndPoint('127.0.0.2'))):
+            for operation in (setattr, delattr):
+                with self.subTest(attribute=name, operation=operation.__name__):
+                    with pytest.raises(AttributeError):
+                        if operation is setattr:
+                            operation(host, name, value)
+                        else:
+                            operation(host, name)
+                    assert hash(host) == original_hash
+                    assert hosts_by_id[host] == 'pool'
+                    assert host in hosts
+                    assert host.host_id == host_id
+                    assert host.endpoint is endpoint
 
-        assert host.host_id == host_id
-
-    def test_host_hash_is_stable_when_endpoint_changes(self):
+    def test_host_hash_is_shared_by_endpoint_replacements(self):
         host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
         hosts_by_id = {host: "pool"}
         hosts = {host}
 
-        host.endpoint = DefaultEndPoint('127.0.0.2')
+        replacement = Host('127.0.0.2', SimpleConvictionPolicy,
+                           host_id=host.host_id)
 
         assert hosts_by_id[host] == "pool"
+        assert hosts_by_id[replacement] == "pool"
+        assert hash(replacement) == hash(host)
         assert host in hosts
+        assert replacement in hosts
+        assert host.endpoint == DefaultEndPoint('127.0.0.1')
 
     def test_host_ordering_uses_host_id(self):
         first = Host('127.0.0.2', SimpleConvictionPolicy, host_id=uuid.UUID(int=1))
@@ -783,19 +808,47 @@ class _PoolTests(unittest.TestCase):
 
         assert first < second
 
-    def test_host_id_is_set_before_conviction_policy_is_created(self):
+    def test_identity_and_endpoint_are_set_before_conviction_policy_is_created(self):
         host_id = uuid.UUID(int=1)
         hosts = set()
+        endpoints = ('127.0.0.1', DefaultEndPoint('127.0.0.1', 9142),
+                     UnixSocketEndPoint('/tmp/maintenance.sock'),
+                     SniEndPoint('proxy.example', 'node', 9042),
+                     ClientRoutesEndPoint(host_id, Mock(), '127.0.0.1', 9042))
+        for endpoint in endpoints:
+            with self.subTest(endpoint=endpoint):
+                normalized = (DefaultEndPoint(endpoint)
+                              if isinstance(endpoint, str) else endpoint)
 
-        def conviction_policy_factory(host):
-            assert host.host_id == host_id
-            hosts.add(host)
-            return SimpleConvictionPolicy(host)
+                def conviction_policy_factory(host):
+                    assert host.host_id == host_id
+                    assert host.endpoint == normalized
+                    if not isinstance(endpoint, str):
+                        assert host.endpoint is endpoint
+                    hosts.add(host)
+                    return SimpleConvictionPolicy(host)
 
-        host = Host(
-            '127.0.0.1', conviction_policy_factory, host_id=host_id)
+                host = Host(endpoint, conviction_policy_factory, host_id=host_id)
+                assert host in hosts
 
-        assert host in hosts
+    def test_health_policy_and_reconnection_state_remain_mutable(self):
+        host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
+        policy = Mock()
+        host.conviction_policy = policy
+        host.set_up()
+        assert host.is_up
+        policy.reset.assert_called_once_with()
+        error = ConnectionException('socket failed')
+        result = host.signal_connection_failure(error)
+        assert result is policy.add_failure.return_value
+        policy.add_failure.assert_called_once_with(error)
+        host.set_down()
+        assert not host.is_up
+        handler = Mock()
+        assert host.get_and_set_reconnection_handler(handler) is None
+        assert host.is_currently_reconnecting()
+        assert host.get_and_set_reconnection_handler(None) is handler
+        assert not host.is_currently_reconnecting()
 
 
 class HostConnectionTests(_PoolTests):
@@ -818,7 +871,7 @@ class HostConnectionTests(_PoolTests):
         pool = self.make_pool(host, session)
 
         original_endpoint = host.endpoint
-        host.endpoint = DefaultEndPoint('127.0.0.2')
+        move_host(host, DefaultEndPoint('127.0.0.2'))
         pool._replace(first)
 
         assert pool.endpoint == original_endpoint
@@ -1155,7 +1208,7 @@ def test_first_connection_retired_after_keyspace_publication(
         assert pool._connections == {0: candidate}
         with session._lock, host.lock:
             if change == 'endpoint':
-                host.endpoint = DefaultEndPoint('127.0.0.2')
+                move_host(host, DefaultEndPoint('127.0.0.2'))
             elif change == 'host':
                 host._is_removed = True
             elif change == 'session':
@@ -1297,7 +1350,10 @@ def test_connection_completion_rechecks_ownership(
         assert entered.wait(5)
         with session._lock, host.lock:
             if change == 'endpoint':
-                host.endpoint = DefaultEndPoint('127.0.0.2')
+                moved = move_host(host, DefaultEndPoint('127.0.0.2'))
+                winner = HostConnection(moved, HostDistance.IGNORED, session)
+                request.addfinalizer(winner.shutdown)
+                session._pools = {moved: winner}
             elif change == 'pool':
                 winner = HostConnection(host, HostDistance.IGNORED, session)
                 request.addfinalizer(winner.shutdown)

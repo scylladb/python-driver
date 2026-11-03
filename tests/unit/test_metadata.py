@@ -1326,10 +1326,11 @@ class HostsTests(unittest.TestCase):
         metadata.add_or_return_host(moved)
         metadata.add_or_return_host(replacement)
 
-        moved.endpoint = new_endpoint
-        metadata.update_host(moved, old_endpoint)
+        current = Host(new_endpoint, SimpleConvictionPolicy, host_id=moved.host_id)
+        metadata.replace_host_endpoint(moved, current)
         assert metadata.get_host(old_endpoint) is replacement
-        assert metadata.get_host(new_endpoint) is moved
+        assert metadata.get_host(new_endpoint) is current
+        assert moved.endpoint == old_endpoint
 
     def test_iterate_all_hosts_and_modify(self):
         """

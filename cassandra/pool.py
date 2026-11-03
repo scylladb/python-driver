@@ -53,11 +53,6 @@ class Host(object):
     Represents a single Cassandra node.
     """
 
-    endpoint = None
-    """
-    The :class:`~.connection.EndPoint` to connect to the node.
-    """
-
     broadcast_address = None
     """
     broadcast address configured for the node, *if available*:
@@ -181,12 +176,22 @@ class Host(object):
         if host_id.int == 0:
             raise ValueError("host_id may not be the nil UUID")
 
-        self.endpoint = endpoint if isinstance(endpoint, EndPoint) else DefaultEndPoint(endpoint)
+        self._endpoint = endpoint if isinstance(endpoint, EndPoint) else DefaultEndPoint(endpoint)
         self._host_id = host_id
         self._is_removed = False
         self.conviction_policy = conviction_policy_factory(self)
         self.set_location_info(datacenter, rack)
         self.lock = RLock()
+
+    @property
+    def endpoint(self):
+        """
+        The read-only :class:`~.connection.EndPoint` to connect to the node.
+
+        When the endpoint changes, the driver replaces this Host with a new
+        object carrying the same :attr:`host_id` and retires the old object.
+        """
+        return self._endpoint
 
     @property
     def address(self):
