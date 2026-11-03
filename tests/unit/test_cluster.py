@@ -39,6 +39,7 @@ from cassandra.connection import (Connection, ConnectionBusy, ConnectionExceptio
 from cassandra.protocol import OverloadedErrorMessage
 from cassandra.ssl_session_cache import SSLSessionCache
 from cassandra.driver_config import DriverConfigReporter
+from cassandra.metadata import Metadata
 from cassandra.pool import Host, _HostReconnectionHandler
 from cassandra.policies import ExponentialReconnectionPolicy, HostDistance, RetryPolicy, RoundRobinPolicy, DowngradingConsistencyRetryPolicy, SimpleConvictionPolicy
 from cassandra.query import SimpleStatement, named_tuple_factory, tuple_factory
@@ -2872,9 +2873,13 @@ class _BlockedFailurePoolFactory(object):
 
 class SessionPoolRaceTest(unittest.TestCase):
 
+    def setUp(self):
+        self.metadata = Metadata()
+
     def _host(self, address="127.0.0.1"):
-        return Host(
-            address, SimpleConvictionPolicy, host_id=uuid.uuid4())
+        host = Host(address, SimpleConvictionPolicy, host_id=uuid.uuid4())
+        self.metadata.add_or_return_host(host)
+        return host
 
     def _pool(self, host, keyspace=None, distance=HostDistance.LOCAL):
         pool = Mock(
@@ -2895,7 +2900,10 @@ class SessionPoolRaceTest(unittest.TestCase):
 
         executor = ThreadPoolExecutor(max_workers=workers)
         self.addCleanup(executor.shutdown)
+        for host in pools or ():
+            self.metadata.add_or_return_host(host)
         session.cluster = Mock(
+            metadata=self.metadata,
             executor=executor, connect_timeout=5, is_shutdown=False,
             allow_control_connection_query_fallback=(
                 ControlConnectionQueryFallback.Disabled))
@@ -3200,6 +3208,7 @@ class SessionPoolRaceTest(unittest.TestCase):
             "127.0.0.2", SimpleConvictionPolicy, host_id=host_id)
         winner = self._pool(replacement_host)
         session = self._session(workers=1)
+        self.metadata.add_or_return_host(removed_host)
         old_distance_started = Event()
         release_old_distance = Event()
         replacement_distance_started = Event()
@@ -3226,6 +3235,8 @@ class SessionPoolRaceTest(unittest.TestCase):
                     is_host_addition=False)
                 assert old_distance_started.wait(5)
 
+                self.metadata.remove_host(removed_host)
+                self.metadata.add_or_return_host(replacement_host)
                 with removed_host.lock:
                     removed_host._is_removed = True
                     removed_host.set_down()
@@ -4119,6 +4130,8 @@ class SessionPoolRaceTest(unittest.TestCase):
         release_replacement_distance = Event()
         self.addCleanup(release_replacement_distance.set)
 
+        self.metadata.remove_host(removed_host)
+        self.metadata.add_or_return_host(replacement_host)
         with removed_host.lock:
             removed_host._is_removed = True
             removed_host.set_down()
@@ -4374,6 +4387,8 @@ class SessionPoolRaceTest(unittest.TestCase):
         release_replacement_distance = Event()
         self.addCleanup(release_replacement_distance.set)
 
+        self.metadata.remove_host(removed_host)
+        self.metadata.add_or_return_host(replacement_host)
         with removed_host.lock:
             removed_host._is_removed = True
             removed_host.set_down()
@@ -4426,6 +4441,8 @@ class SessionPoolRaceTest(unittest.TestCase):
         session = self._session({removed_host: old_pool}, workers=1)
         factory = self._blocking_pool_factory(winner)
 
+        self.metadata.remove_host(removed_host)
+        self.metadata.add_or_return_host(replacement_host)
         with removed_host.lock:
             removed_host._is_removed = True
             removed_host.set_down()
@@ -4458,6 +4475,8 @@ class SessionPoolRaceTest(unittest.TestCase):
         old_pool = self._pool(removed_host)
         session = self._session({removed_host: old_pool}, workers=1)
 
+        self.metadata.remove_host(removed_host)
+        self.metadata.add_or_return_host(replacement_host)
         with removed_host.lock:
             removed_host._is_removed = True
             removed_host.set_down()
@@ -5230,8 +5249,10 @@ class SessionTest(unittest.TestCase):
         session = new_session_with_pool_state({original_host: old_pool})
         session.keyspace = None
         session.is_shutdown = False
+        metadata = Metadata()
+        metadata.add_or_return_host(current_host)
         session.cluster = Mock(
-            is_shutdown=False,
+            metadata=metadata, is_shutdown=False,
             allow_control_connection_query_fallback=ControlConnectionQueryFallback.Disabled)
         session._profile_manager = Mock()
         session._profile_manager.distance.return_value = HostDistance.LOCAL
