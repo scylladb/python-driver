@@ -34,10 +34,12 @@ from cassandra.protocol import (ReadTimeoutErrorMessage, WriteTimeoutErrorMessag
                                 InvalidRequestException,
                                 RESULT_KIND_ROWS, RESULT_KIND_SET_KEYSPACE,
                                 RESULT_KIND_SCHEMA_CHANGE, RESULT_KIND_PREPARED,
-                                ProtocolHandler)
+                                ProtocolHandler, ColumnMetadata, _NO_ROUTING_STATEMENT)
+from cassandra.cqltypes import Int32Type
 from cassandra.policies import RetryPolicy, ExponentialBackoffRetryPolicy, SimpleConvictionPolicy
 from cassandra.pool import Host, NoConnectionsAvailable
-from cassandra.query import SimpleStatement, PreparedStatement, BoundStatement
+from cassandra.query import SimpleStatement, PreparedStatement, BoundStatement, BatchStatement
+from cassandra.tablets import Tablet
 from tests.unit.utils import move_host
 from tests.util import assertEqual, assertIsInstance
 import pytest
@@ -3648,6 +3650,230 @@ class ResponseFutureTests(unittest.TestCase):
 
         assert rf.message.skip_meta is False
         assert rf.message.result_metadata_id == b'meta_hash'
+
+    # -------------------------------------------------------------------------
+    # BatchMessage construction: TABLETS_ROUTING_V2 routing hint
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _make_keyed_prepared_statement():
+        return PreparedStatement.from_message(
+            query_id=b'qid',
+            column_metadata=[ColumnMetadata('ks', 'tbl', 'pk', Int32Type)],
+            pk_indexes=[0],
+            cluster_metadata=None,
+            query="INSERT INTO ks.tbl (pk) VALUES (?)",
+            prepared_keyspace='ks',
+            protocol_version=4,
+            result_metadata=[],
+            result_metadata_id=None,
+            is_lwt=False,
+        )
+
+    def _create_batch_future(self, batch, tablet=None, tablets_by_token=None,
+                             has_token_map=True, can_support_partitioner=True):
+        """
+        Drive the real Session._create_response_future (with a mock session) for
+        `batch`, with `tablet` as the only cached tablet, or with the cached
+        tablets in `tablets_by_token`, returning the ResponseFuture. The token
+        of a routing key is ('token', routing_key), unless there's no token map
+        or the partitioner can't hash keys.
+        """
+        session = self.make_session()
+        profile = session._maybe_get_execution_profile.return_value
+        profile.consistency_level = ConsistencyLevel.ONE
+        profile.serial_consistency_level = None
+        profile.continuous_paging_options = None
+        profile.speculative_execution_policy = None
+        profile.load_balancing_policy.make_query_plan.return_value = ['ip1']
+        session.default_fetch_size = 5000
+        session.use_client_timestamp = False
+        session._protocol_version = 4
+        session._compute_tablet_version_block = \
+            lambda *args: Session._compute_tablet_version_block(session, *args)
+        session.cluster.metadata.token_map.token_class.from_key.side_effect = lambda key: ('token', key)
+        session.cluster.metadata.can_support_partitioner.return_value = can_support_partitioner
+        if not has_token_map:
+            session.cluster.metadata.token_map = None
+        if tablets_by_token is None:
+            session.cluster.metadata._tablets.get_tablet_for_key.return_value = tablet
+        else:
+            session.cluster.metadata._tablets.get_tablet_for_key.side_effect = \
+                lambda keyspace, table, token: tablets_by_token.get(token)
+        return Session._create_response_future(
+            session, batch, parameters=None, trace=False, custom_payload=None, timeout=1)
+
+    def test_create_batch_message_names_the_routing_statement(self):
+        """
+        A batch routed by a bound statement names it in the routing hint, with a
+        block of the cached tablet_version of the tablet it is routed to.
+        """
+        tablet_version = 0x0123456789ABCDEF
+        batch = BatchStatement()
+        batch.add("INSERT INTO ks.tbl (pk) VALUES (0)")
+        batch.add(self._make_keyed_prepared_statement(), (1,))
+
+        rf = self._create_batch_future(batch, Tablet(tablet_version=tablet_version))
+
+        session = rf.session
+        session.cluster.metadata._tablets.get_tablet_for_key.assert_called_once_with('ks', 'tbl', rf._routing_token)
+        assert rf.message.routing_statement_index == 1
+        block = rf.message.tablet_version_block
+        assert (tablet_version >> (block >> 4) * 4) & 0xF == block & 0xF
+
+    def test_create_batch_message_with_block_of_routing_statement_partition(self):
+        """
+        A batch routed by another routing key than the one of the partition its
+        routing statement writes gets a block of the tablet of that partition:
+        that's the tablet the server checks the block against.
+        """
+        statement_tablet_version = 0x0123456789ABCDEF
+        # Differs from the one above in every nibble, so a block chosen for
+        # this tablet can't match the tablet of the statement.
+        routing_key_tablet_version = 0xFEDCBA9876543210
+        batch = BatchStatement()
+        batch.add(self._make_keyed_prepared_statement(), (1,))
+        batch.routing_key = Int32Type.serialize(2, 4)
+
+        rf = self._create_batch_future(batch, tablets_by_token={
+            ('token', Int32Type.serialize(1, 4)): Tablet(tablet_version=statement_tablet_version),
+            ('token', Int32Type.serialize(2, 4)): Tablet(tablet_version=routing_key_tablet_version),
+        })
+
+        # The batch is sent where the routing key it was given says, ...
+        assert rf._routing_token == ('token', Int32Type.serialize(2, 4))
+        # ... but the block is chosen for the tablet of the partition the
+        # routing statement writes.
+        assert rf.message.routing_statement_index == 0
+        block = rf.message.tablet_version_block
+        assert (statement_tablet_version >> (block >> 4) * 4) & 0xF == block & 0xF
+        from_key = rf.session.cluster.metadata.token_map.token_class.from_key
+        assert sorted(c.args[0] for c in from_key.call_args_list) == \
+            [Int32Type.serialize(1, 4), Int32Type.serialize(2, 4)]
+
+    def test_create_batch_message_hashes_the_routing_key_once(self):
+        """
+        A batch routed by the routing key of its routing statement gets the
+        token of that key computed once, both for routing and for the block.
+        """
+        tablet_version = 0x0123456789ABCDEF
+        batch = BatchStatement()
+        batch.add(self._make_keyed_prepared_statement(), (1,))
+
+        rf = self._create_batch_future(batch, Tablet(tablet_version=tablet_version))
+
+        rf.session.cluster.metadata.token_map.token_class.from_key.assert_called_once_with(
+            Int32Type.serialize(1, 4))
+        rf.session.cluster.metadata._tablets.get_tablet_for_key.assert_called_once_with(
+            'ks', 'tbl', ('token', Int32Type.serialize(1, 4)))
+        assert rf.message.routing_statement_index == 0
+        block = rf.message.tablet_version_block
+        assert (tablet_version >> (block >> 4) * 4) & 0xF == block & 0xF
+
+    def test_create_batch_message_with_random_block_without_token(self):
+        """
+        Without a token map, or when the partitioner can't hash keys, there's no
+        token, so there's no tablet to choose the block for, whether the batch
+        is routed by the routing key of its routing statement or by another one.
+        The server computes the token itself, so the routing statement is still
+        named, and the block is random, so that the server most likely returns
+        routing information.
+        """
+        for without_token in ({'has_token_map': False}, {'can_support_partitioner': False}):
+            for routing_key in (None, Int32Type.serialize(2, 4)):
+                with self.subTest(**without_token, routing_key=routing_key):
+                    batch = BatchStatement()
+                    batch.add(self._make_keyed_prepared_statement(), (1,))
+                    if routing_key is not None:
+                        batch.routing_key = routing_key
+
+                    with patch('cassandra.cluster.random_tablet_version_block', return_value=0x5A):
+                        rf = self._create_batch_future(batch, Tablet(tablet_version=0x0123456789ABCDEF),
+                                                       **without_token)
+
+                    metadata = rf.session.cluster.metadata
+                    # Without a token map, nothing could compute a token.
+                    if metadata.token_map is not None:
+                        metadata.token_map.token_class.from_key.assert_not_called()
+                    metadata._tablets.get_tablet_for_key.assert_not_called()
+                    assert rf._routing_token is None
+                    assert rf.message.routing_statement_index == 0
+                    assert rf.message.tablet_version_block == 0x5A
+
+    def test_create_batch_message_with_random_block_on_cache_miss(self):
+        """Without a cached tablet_version, the block is random, so that the
+        server most likely returns routing information."""
+        batch = BatchStatement()
+        batch.add(self._make_keyed_prepared_statement(), (1,))
+
+        with patch('cassandra.cluster.random_tablet_version_block', return_value=0x5A):
+            rf = self._create_batch_future(batch, None)
+
+        assert rf.message.routing_statement_index == 0
+        assert rf.message.tablet_version_block == 0x5A
+
+    def test_create_batch_message_without_routing_statement(self):
+        """
+        A batch routed by no statement the server can compute the token from
+        names no routing statement, and its block is 0: the server ignores it.
+        """
+        batch = BatchStatement()
+        batch.add(SimpleStatement("INSERT INTO ks.tbl (pk) VALUES (1)", keyspace='ks',
+                                  routing_key=Int32Type.serialize(1, 4)))
+
+        rf = self._create_batch_future(batch, Tablet(tablet_version=0x0123456789ABCDEF))
+
+        assert rf.message.routing_statement_index == _NO_ROUTING_STATEMENT
+        assert rf.message.tablet_version_block == 0
+        rf.session.cluster.metadata._tablets.get_tablet_for_key.assert_not_called()
+
+    def test_create_batch_message_without_routing_statement_after_keyspace_or_table_change(self):
+        """
+        Once the user changes the keyspace or the table of a batch, the routing
+        information returned for its routing statement would be cached under
+        another table, so the batch names no routing statement, and its block
+        is 0.
+        """
+        for attribute, value in (('keyspace', 'other_ks'), ('table', 'other')):
+            with self.subTest(attribute=attribute):
+                batch = BatchStatement()
+                batch.add(self._make_keyed_prepared_statement(), (1,))
+                tablet = Tablet(tablet_version=0x0123456789ABCDEF)
+                assert self._create_batch_future(batch, tablet).message.routing_statement_index == 0
+
+                setattr(batch, attribute, value)
+                rf = self._create_batch_future(batch, tablet)
+
+                assert rf.message.routing_statement_index == _NO_ROUTING_STATEMENT
+                assert rf.message.tablet_version_block == 0
+                rf.session.cluster.metadata._tablets.get_tablet_for_key.assert_not_called()
+
+    def test_create_batch_message_without_routing_statement_for_routing_key_set_before_any_statement(self):
+        """
+        A batch whose routing key was set before any statement was added names
+        no routing statement, and its block is 0. It's routed by that routing
+        key. Setting the same routing key after the statement was added keeps
+        the statement named.
+        """
+        routing_key = Int32Type.serialize(2, 4)
+        tablet = Tablet(tablet_version=0x0123456789ABCDEF)
+
+        batch = BatchStatement()
+        batch.routing_key = routing_key
+        batch.add(self._make_keyed_prepared_statement(), (1,))
+        rf = self._create_batch_future(batch, tablet)
+
+        assert rf._routing_token == ('token', routing_key)
+        assert rf.message.routing_statement_index == _NO_ROUTING_STATEMENT
+        assert rf.message.tablet_version_block == 0
+
+        batch = BatchStatement()
+        batch.add(self._make_keyed_prepared_statement(), (1,))
+        batch.routing_key = routing_key
+        rf = self._create_batch_future(batch, tablet)
+
+        assert rf._routing_token == ('token', routing_key)
+        assert rf.message.routing_statement_index == 0
 
     def test_late_response_after_final_is_ignored(self):
         # e.g. a speculative response arriving after a client timeout or after another speculative response won

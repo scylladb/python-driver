@@ -22,6 +22,15 @@ Removed
   ``get_schema_parser()`` is now ignored, and the driver no longer queries
   ``system.local.dse_version`` when ``release_version`` is unknown.
 
+Features
+--------
+* Extend ``TABLETS_ROUTING_V2`` to ``BATCH`` requests: when a ``BatchStatement``
+  is routed by a prepared statement whose partition key is bound by markers,
+  ``BATCH`` requests sent over a V2 connection name that statement, as long as
+  the batch still targets its keyspace and table, and the routing information
+  the server returns for that statement's tablet is cached under its table
+  (SCYLLADB-4807).
+
 Bug Fixes
 ---------
 * Schema metadata reads no longer fail with ``AttributeError`` when a later
