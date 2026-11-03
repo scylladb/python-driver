@@ -920,6 +920,7 @@ def test_down_health_inspection_cannot_undo_pool_publication(
     reservation = None
     if pool_failure:
         failed = new_session_with_pool_state()
+        failed.cluster = cluster
         failed.is_shutdown = False
         intent = object()
         generation = object()

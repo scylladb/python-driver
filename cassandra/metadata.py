@@ -16,6 +16,7 @@ from binascii import unhexlify
 from bisect import bisect_left
 from collections import defaultdict
 from collections.abc import Mapping
+from contextlib import contextmanager
 from enum import Enum
 from functools import total_ordering
 from hashlib import md5
@@ -422,6 +423,16 @@ class Metadata(object):
             for _, replacement in replacements:
                 self._hosts[replacement.host_id] = replacement
                 self._host_id_by_endpoint[replacement.endpoint] = replacement.host_id
+
+    @contextmanager
+    def _host_ownership_guard(self, host):
+        """Keep exact Host ownership stable through a short state publication.
+
+        Callers acquire Session, Host and any Connection locks first. Policy
+        callbacks, network waits and cleanup must run outside this guard.
+        """
+        with self._hosts_lock:
+            yield self._hosts.get(host.host_id) is host
 
     def _update_host_location(self, host, datacenter, rack):
         """Publish a current Host's location with fresh replica-map caches."""

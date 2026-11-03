@@ -4574,6 +4574,7 @@ class Session(object):
                                      expected_pool, endpoint=_NOT_SET):
         return (not self.is_shutdown and
                 not host._is_removed and
+                self.cluster.metadata.get_host_by_host_id(host.host_id) is host and
                 (endpoint is _NOT_SET or host.endpoint == endpoint) and
                 self._pool_generations.get(host) is generation and
                 self._pools.get(host) is expected_pool)
@@ -4581,35 +4582,38 @@ class Session(object):
     def _stale_pool_creation_result_locked(self, host, expected_pool,
                                            intent, distance,
                                            ignored_intent_is_success=False):
-        current_pool = self._pools.get(host)
-        current_intent = self._pool_intents_locked().get(host)
-        retained_pool_is_live = (
-            not self.is_shutdown and
-            not host._is_removed and
-            current_pool is not None and
-            current_pool is not expected_pool and
-            not current_pool.is_shutdown and
-            self._pool_matches_host(host, current_pool))
-        if (retained_pool_is_live and
-                current_intent is intent):
-            current_pool.host_distance = distance
-        ignored_intent_owns_cleanup = (
-            ignored_intent_is_success and
-            not self.is_shutdown and
-            not host._is_removed and
-            current_intent is not None and
-            current_intent is not intent and
-            current_intent.distance == HostDistance.IGNORED)
-        return ((self.is_shutdown and not host._is_removed) or
-                retained_pool_is_live or
-                ignored_intent_owns_cleanup)
+        with self.cluster.metadata._host_ownership_guard(host) as owns_host:
+            if not owns_host:
+                return False
+            current_pool = self._pools.get(host)
+            current_intent = self._pool_intents_locked().get(host)
+            retained_pool_is_live = (
+                not self.is_shutdown and
+                not host._is_removed and
+                current_pool is not None and
+                current_pool is not expected_pool and
+                not current_pool.is_shutdown and
+                self._pool_matches_host(host, current_pool))
+            if (retained_pool_is_live and
+                    current_intent is intent):
+                current_pool.host_distance = distance
+            ignored_intent_owns_cleanup = (
+                ignored_intent_is_success and
+                not self.is_shutdown and
+                not host._is_removed and
+                current_intent is not None and
+                current_intent is not intent and
+                current_intent.distance == HostDistance.IGNORED)
+            return ((self.is_shutdown and not host._is_removed) or
+                    retained_pool_is_live or
+                    ignored_intent_owns_cleanup)
 
     def _handle_pool_creation_failure(self, host, generation,
                                       expected_pool, intent, distance,
                                       dispatch_failure, owning_result,
                                       endpoint=_NOT_SET):
         with self._lock:
-            with host.lock:
+            with host.lock, self.cluster.metadata._host_ownership_guard(host):
                 owns_intent = (
                     self._pool_intents_locked().get(host) is intent)
                 if (not owns_intent or
@@ -4644,8 +4648,9 @@ class Session(object):
                 with self._lock:
                     if self.is_shutdown:
                         return None
-                    with host.lock:
-                        if host._is_removed:
+                    with (host.lock,
+                          self.cluster.metadata._host_ownership_guard(host) as owns_host):
+                        if host._is_removed or not owns_host:
                             removed_future = Future()
                             removed_future.set_result(False)
                             return removed_future
@@ -4678,10 +4683,11 @@ class Session(object):
                     terminal_result = None
                     return_none = True
                 else:
-                    with host.lock:
+                    with (host.lock,
+                          self.cluster.metadata._host_ownership_guard(host) as owns_host):
                         pool_intents = self._pool_intents_locked()
                         current_intent = pool_intents.get(host)
-                        if host._is_removed:
+                        if not owns_host or host._is_removed:
                             if current_intent is intent:
                                 pool_intents.pop(host, None)
                             terminal_result = False
@@ -4785,7 +4791,7 @@ class Session(object):
 
         def run_add_or_renew_pool():
             with self._lock:
-                with host.lock:
+                with host.lock, self.cluster.metadata._host_ownership_guard(host):
                     if not self._owns_pool_generation_locked(
                             host, generation, expected_pool, endpoint):
                         return self._stale_pool_creation_result_locked(
@@ -4858,34 +4864,33 @@ class Session(object):
                 with new_pool._membership_lock:
                     with self._lock:
                         with host.lock:
-                            if (not ownership.owns_locked(new_pool) or
-                                    not self._owns_pool_generation_locked(
-                                        host, generation, expected_pool, endpoint)):
-                                stale_candidate = True
-                                stale_result = \
-                                    self._stale_pool_creation_result_locked(
-                                        host, expected_pool, intent, distance,
-                                        ignored_intent_is_success=True)
-                            else:
-                                keyspace = self.keyspace
-                                if new_pool._keyspace == keyspace:
-                                    current_intent = \
-                                        self._pool_intents_locked().get(host)
-                                    if (current_intent is not intent and
-                                            expected_pool is not None and
-                                            not expected_pool.is_shutdown):
-                                        new_pool.host_distance = \
-                                            expected_pool.host_distance
-                                    with (
-                                        new_pool._lock_usable_connection()
-                                    ) as connected:
-                                        self._pools[host] = new_pool
-                                        self._pool_generations[host] = object()
-                                        ownership.published = True
-                                        ownership.expected_pool = None
-                                        if connected:
-                                            host._health_generation += 1
-                                        publish_pool = True
+                            with new_pool._lock_usable_connection() as connected:
+                                with self.cluster.metadata._host_ownership_guard(host):
+                                    if (not ownership.owns_locked(new_pool) or
+                                            not self._owns_pool_generation_locked(
+                                                host, generation, expected_pool, endpoint)):
+                                        stale_candidate = True
+                                        stale_result = \
+                                            self._stale_pool_creation_result_locked(
+                                                host, expected_pool, intent, distance,
+                                                ignored_intent_is_success=True)
+                                    else:
+                                        keyspace = self.keyspace
+                                        if new_pool._keyspace == keyspace:
+                                            current_intent = \
+                                                self._pool_intents_locked().get(host)
+                                            if (current_intent is not intent and
+                                                    expected_pool is not None and
+                                                    not expected_pool.is_shutdown):
+                                                new_pool.host_distance = \
+                                                    expected_pool.host_distance
+                                            self._pools[host] = new_pool
+                                            self._pool_generations[host] = object()
+                                            ownership.published = True
+                                            ownership.expected_pool = None
+                                            if connected:
+                                                host._health_generation += 1
+                                            publish_pool = True
 
                 if stale_candidate:
                     log.debug(
@@ -5034,8 +5039,9 @@ class Session(object):
             with self._lock:
                 if self.is_shutdown:
                     break
-                with host.lock:
-                    if host._is_removed or host._lifecycle_pending:
+                with (host.lock,
+                      self.cluster.metadata._host_ownership_guard(host) as owns_host):
+                    if not owns_host or host._is_removed or host._lifecycle_pending:
                         continue
                     # In-flight on_add/on_up owns pool creation for a down host;
                     # superseding it would settle its result False with no retry.
@@ -5060,10 +5066,11 @@ class Session(object):
                 if self.is_shutdown:
                     terminal_result = None
                 else:
-                    with host.lock:
+                    with (host.lock,
+                          self.cluster.metadata._host_ownership_guard(host) as owns_host):
                         current_intent = \
                             self._pool_intents_locked().get(host)
-                        if host._is_removed:
+                        if not owns_host or host._is_removed:
                             if current_intent is intent:
                                 self._pool_intents_locked().pop(host, None)
                             terminal_result = False
