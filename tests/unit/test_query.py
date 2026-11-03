@@ -248,3 +248,59 @@ class PreparedStatementMetadataPairTest(unittest.TestCase):
             ps.result_metadata = []
 
         assert ps.result_metadata_and_id == (meta, b'hash')
+
+
+class PreparedStatementPkIndexesTest(unittest.TestCase):
+    """
+    PreparedStatement._pk_indexes keeps the partition key bind indices the
+    server sent in the PREPARED metadata, apart from routing_key_indexes,
+    which the driver may guess and the user may set.
+    """
+
+    @staticmethod
+    def _prepare(bind_names, pk_indexes):
+        # Cluster metadata of ks.tbl, PRIMARY KEY ((pk1, pk2)), for the driver
+        # to guess routing_key_indexes from when the server sent no indices.
+        from cassandra import metadata
+        table = metadata.TableMetadata('ks', 'tbl')
+        table.partition_key = [metadata.ColumnMetadata(table, name, 'int') for name in ('pk1', 'pk2')]
+        keyspace = metadata.KeyspaceMetadata('ks', True, 'NetworkTopologyStrategy', {'dc1': '1'})
+        keyspace.tables['tbl'] = table
+        cluster_metadata = metadata.Metadata()
+        cluster_metadata.keyspaces['ks'] = keyspace
+        return PreparedStatement.from_message(
+            query_id=b"query-id",
+            column_metadata=[ColumnMetadata('ks', 'tbl', name, Int32Type) for name in bind_names],
+            pk_indexes=pk_indexes,
+            cluster_metadata=cluster_metadata,
+            query="",
+            prepared_keyspace='ks',
+            protocol_version=4,
+            result_metadata=[],
+            result_metadata_id=None,
+            is_lwt=False,
+        )
+
+    def test_keeps_the_indices_the_server_sent(self):
+        prepared = self._prepare(['v', 'pk2', 'pk1'], pk_indexes=[2, 1])
+
+        assert prepared._pk_indexes == [2, 1]
+        assert prepared.routing_key_indexes == [2, 1]
+
+    def test_changing_routing_key_indexes_in_place_keeps_them(self):
+        prepared = self._prepare(['pk1', 'pk2'], pk_indexes=[0, 1])
+        prepared.routing_key_indexes[0] = 1
+
+        assert prepared._pk_indexes == [0, 1]
+
+    def test_none_without_indices_from_the_server(self):
+        """
+        The driver guesses routing_key_indexes from the names of the bind
+        markers, but the server sent no indices.
+        """
+        for pk_indexes in (None, []):
+            with self.subTest(pk_indexes=pk_indexes):
+                prepared = self._prepare(['pk1', 'pk2'], pk_indexes=pk_indexes)
+
+                assert prepared.routing_key_indexes == [0, 1]
+                assert prepared._pk_indexes is None
