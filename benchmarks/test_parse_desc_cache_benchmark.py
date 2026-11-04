@@ -47,17 +47,27 @@ import pytest
 # the repo root.
 pytest.importorskip("pytest_benchmark")
 
-from cassandra import cqltypes
-from cassandra.policies import ColDesc
-from cassandra.parsing import ParseDesc
-from cassandra.deserializers import make_deserializers
-from cassandra.bytesio import BytesIOReader
-from cassandra.obj_parser import ListParser
-from cassandra.row_parser import (
-    clear_parse_desc_cache,
-    get_parse_desc_cache_size,
-    make_recv_results_rows,
-)
+# The modules below are Cython extensions.  In a source checkout where they
+# have not been built, importing them raises ImportError during collection
+# rather than skipping the file.  Skip the whole module in that case so
+# pytest does not error out at collection time.
+try:
+    from cassandra import cqltypes
+    from cassandra.policies import ColDesc
+    from cassandra.parsing import ParseDesc
+    from cassandra.deserializers import make_deserializers
+    from cassandra.bytesio import BytesIOReader
+    from cassandra.obj_parser import ListParser
+    from cassandra.row_parser import (
+        clear_parse_desc_cache,
+        get_parse_desc_cache_size,
+        make_recv_results_rows,
+    )
+except ImportError as _import_error:  # pragma: no cover
+    raise pytest.skip(
+        "Cython extensions are not built: %s" % _import_error,
+        allow_module_level=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -258,14 +268,28 @@ def test_integration_cython_cached(benchmark, nrows, ncols):
 
 @pytest.mark.parametrize("nrows,ncols", [(1, 10), (100, 5), (1000, 5)])
 def test_integration_cython_uncached(benchmark, nrows, ncols):
-    """Integration: Cython recv_results_rows with cache miss (fresh metadata each call)."""
+    """Integration: Cython recv_results_rows on the uncached path.
+
+    The metadata list is built *outside* the timed region, exactly as
+    production does it: the server sends the column metadata inline for
+    non-prepared statements and it is decoded in recv_results_metadata(),
+    not in recv_results_rows().  Building a fresh list inside the timed
+    region would charge metadata decoding to the uncached path and
+    overstate the benefit of the cache.
+
+    The uncached branch is selected by the response carrying inline
+    metadata (self.column_metadata is not None), which is the same
+    condition the driver uses to decide not to consult the cache.
+    """
     binary_buf = _build_integration_binary_buf(nrows, ncols)
+    col_meta = _build_column_metadata(ncols)
 
     def run():
-        # Fresh metadata list each call forces a cache miss
-        fresh_meta = _build_column_metadata(ncols)
         msg = _MockResultMessage()
-        _cython_recv_results_rows(msg, io.BytesIO(binary_buf), 4, {}, fresh_meta, None)
+        # Force the uncached path by presenting the metadata as inline
+        # response metadata.
+        msg.column_metadata = col_meta
+        _cython_recv_results_rows(msg, io.BytesIO(binary_buf), 4, {}, col_meta, None)
         return msg.parsed_rows
 
     rows = benchmark(run)
@@ -279,7 +303,14 @@ def test_integration_cython_uncached(benchmark, nrows, ncols):
 
 
 def test_integration_cython_cache_hit():
-    """Cython cache returns same column_names/column_types on repeated calls."""
+    """Cython cache serves repeated calls of the same metadata.
+
+    The cached ParseDesc is reused, but each response receives its own
+    column_names/column_types lists: those are public mutable attributes and
+    the row factory is user code that receives the same list objects, so
+    sharing them across responses would let one execution's mutation
+    relabel later executions.
+    """
     col_meta = _build_column_metadata(5)
     binary_buf = _build_integration_binary_buf(1, 5)
 
@@ -289,9 +320,12 @@ def test_integration_cython_cache_hit():
     msg2 = _MockResultMessage()
     _cython_recv_results_rows(msg2, io.BytesIO(binary_buf), 4, {}, col_meta, None)
 
-    # Same col_meta object -> cache hit -> same column_names/types objects
-    assert msg1.column_names is msg2.column_names
-    assert msg1.column_types is msg2.column_types
+    # Same col_meta object -> cache hit -> the ParseDesc is reused, but the
+    # per-response lists are independent.
+    assert msg1.column_names is not msg2.column_names
+    assert msg1.column_types is not msg2.column_types
+    assert msg1.column_names == msg2.column_names
+    assert msg1.column_types == msg2.column_types
 
 
 def test_integration_cython_cache_miss_different_metadata():
