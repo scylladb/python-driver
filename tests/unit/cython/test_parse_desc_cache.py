@@ -196,6 +196,33 @@ class ParseDescCacheTest(unittest.TestCase):
         self.assertEqual(msg.column_names, ["col_%d" % i for i in range(ncols)])
 
     @cythontest
+    def test_parse_desc_state_is_immutable(self):
+        """A ParseDesc must not carry mutable state.
+
+        A ParseDesc is cached and shared between the executions of a
+        prepared statement, so a consumer able to mutate it would corrupt
+        it -- and every later execution -- for everyone else.
+        """
+        from cassandra import cqltypes
+        from cassandra.parsing import ParseDesc
+        from cassandra.policies import ColDesc
+
+        desc = ParseDesc(
+            ["a", "b"],
+            [cqltypes.UTF8Type, cqltypes.Int32Type],
+            None,
+            [ColDesc("ks", "tbl", "a"), ColDesc("ks", "tbl", "b")],
+            [],
+            5,
+        )
+        with self.assertRaises(TypeError):
+            desc.colnames[0] = "clobbered"
+        with self.assertRaises(TypeError):
+            desc.coltypes[0] = cqltypes.BooleanType
+        with self.assertRaises(TypeError):
+            desc.coldescs[0] = ColDesc("ks", "tbl", "z")
+
+    @cythontest
     def test_get_cache_size(self):
         """get_parse_desc_cache_size() reports correct count."""
         self.assertEqual(get_parse_desc_cache_size(), 0)

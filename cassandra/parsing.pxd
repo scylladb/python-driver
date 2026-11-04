@@ -16,11 +16,16 @@ from cassandra.bytesio cimport BytesIOReader
 from cassandra.deserializers cimport Deserializer
 
 cdef class ParseDesc:
-    cdef public object colnames
-    cdef public object coltypes
+    # These are tuples, not lists: a ParseDesc is cached and shared between
+    # the executions of a prepared statement, so mutable state here could be
+    # corrupted by any consumer and would then affect every later execution.
+    # (colnames/coltypes/coldescs hold only immutable values: str, cqltype
+    # classes and ColDesc namedtuples.)
+    cdef public tuple colnames
+    cdef public tuple coltypes
     cdef public object column_encryption_policy
-    cdef public list coldescs
-    cdef Deserializer[::1] deserializers
+    cdef public tuple coldescs
+    cdef tuple deserializers
     cdef public int protocol_version
     cdef Py_ssize_t rowsize
 
