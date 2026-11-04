@@ -1,3 +1,12 @@
+Unreleased
+==========
+
+Bug Fixes
+---------
+* Tablet updates no longer mutate a table's tablet list in place, so a
+  concurrent lookup cannot fail with ``IndexError``, miss its tablet, or route
+  to the wrong one (#1086).
+
 3.29.13
 ========
 Nov 2, 2026

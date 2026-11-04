@@ -131,6 +131,75 @@ class GetTabletForKeyTest(unittest.TestCase):
         self.assertIsNone(tablets.get_tablet_for_key("ks", "tb", Token(50)))
 
 
+class _Token:
+    def __init__(self, v):
+        self.value = v
+
+
+class TabletsCopyOnWriteTest(unittest.TestCase):
+    """Writers must publish new lists, never mutate one a lock-free reader may hold (#1086)."""
+
+    def _ranges(self, lst):
+        return [(t.first_token, t.last_token) for t in lst]
+
+    def _make(self):
+        h1, h2 = uuid4(), uuid4()
+        tablets = [Tablet(0, 100, [(h1, 0)]), Tablet(100, 200, [(h2, 0)]),
+                   Tablet(200, 300, [(h1, 0)]), Tablet(300, 400, [(h2, 0)])]
+        return Tablets({("ks", "tb"): tablets}), h1, h2
+
+    def _assert_snapshot_unchanged(self, mutate, expected_after):
+        tablets, h1, h2 = self._make()
+        snapshot = tablets._tablets[("ks", "tb")]
+        before = list(snapshot)
+        mutate(tablets, h1, h2)
+        self.assertEqual(snapshot, before)
+        self.assertEqual(self._ranges(tablets._tablets[("ks", "tb")]), expected_after)
+
+    def test_add_overlapping_tablet_keeps_snapshot(self):
+        self._assert_snapshot_unchanged(
+            lambda t, h1, h2: t.add_tablet("ks", "tb", Tablet(50, 350, [(h1, 0)])),
+            [(50, 350)])
+
+    def test_add_non_overlapping_tablet_keeps_snapshot(self):
+        self._assert_snapshot_unchanged(
+            lambda t, h1, h2: t.add_tablet("ks", "tb", Tablet(400, 500, [(h1, 0)])),
+            [(0, 100), (100, 200), (200, 300), (300, 400), (400, 500)])
+
+    def test_drop_tablets_by_host_id_keeps_snapshot(self):
+        self._assert_snapshot_unchanged(
+            lambda t, h1, h2: t.drop_tablets_by_host_id(h1),
+            [(100, 200), (300, 400)])
+
+    def test_drop_tablets_by_host_id(self):
+        tablets, h1, h2 = self._make()
+        tablets._tablets[("ks", "other")] = [Tablet(0, 10, [(h2, 0)])]
+        tablets.drop_tablets_by_host_id(h2)
+        self.assertEqual(self._ranges(tablets._tablets[("ks", "tb")]), [(0, 100), (200, 300)])
+        self.assertEqual(tablets._tablets[("ks", "other")], [])
+        self.assertIsNone(tablets.get_tablet_for_key("ks", "tb", _Token(150)))
+        self.assertEqual(tablets.get_tablet_for_key("ks", "tb", _Token(250)).first_token, 200)
+
+    def test_add_tablet_during_lookup(self):
+        tablets, h1, _ = self._make()
+        last = tablets._tablets[("ks", "tb")][3]
+
+        class RacingToken:
+            reads = 0
+
+            @property
+            def value(self):
+                # Second read happens after bisect and the bounds check, right before indexing.
+                RacingToken.reads += 1
+                if RacingToken.reads == 2:
+                    tablets.add_tablet("ks", "tb", Tablet(-1, 1000, [(h1, 0)]))
+                return 350
+
+        self.assertIs(tablets.get_tablet_for_key("ks", "tb", RacingToken()), last)
+        self.assertEqual(RacingToken.reads, 2)
+        self.assertEqual(self._ranges(tablets._tablets[("ks", "tb")]), [(-1, 1000)])
+
+
 class TabletLeaderTest(unittest.TestCase):
     """Tests for Tablet.leader, the leader-first replica ordering V2 provides."""
 
