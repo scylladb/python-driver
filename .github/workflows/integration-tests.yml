@@ -47,7 +47,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14", "3.14t", "3.15", "3.15t"]
+        # Re-enable free-threaded Python (3.14t and 3.15t) once the thread-safety
+        # issues in https://github.com/scylladb/python-driver/issues/718 are fixed.
+        python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
         event_loop_manager: ["libev", "asyncio", "asyncore"]
         exclude:
           - python-version: "3.12"
@@ -56,11 +58,7 @@ jobs:
             event_loop_manager: "asyncore"
           - python-version: "3.14"
             event_loop_manager: "asyncore"
-          - python-version: "3.14t"
-            event_loop_manager: "asyncore"
           - python-version: "3.15"
-            event_loop_manager: "asyncore"
-          - python-version: "3.15t"
             event_loop_manager: "asyncore"
 
     steps:
@@ -89,8 +87,4 @@ jobs:
       env:
         EVENT_LOOP_MANAGER: ${{ matrix.event_loop_manager }}
         PROTOCOL_VERSION: 4
-      run: |
-        if [[ "${{ matrix.python-version }}" =~ t$ ]]; then
-          export PYTHON_GIL=0
-        fi
-        uv run pytest -v tests/integration/standard/ tests/integration/cqlengine/
+      run: uv run pytest -v tests/integration/standard/ tests/integration/cqlengine/
