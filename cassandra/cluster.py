@@ -2839,13 +2839,32 @@ class Cluster(object):
                 # the host. Aggregate replacement handling therefore owns
                 # cleanup and makes sure retry work exists.
                 with host.lock:
-                    if host._is_removed:
+                    if not self._lifecycle.addition_is_current(
+                            host, addition_token):
                         return
                     host.set_down()
                 sessions = tuple(self.sessions)
-                self.profile_manager.on_down(host)
+                try:
+                    self.profile_manager.on_down(host)
+                except Exception:
+                    log.exception(
+                        "Error in policy DOWN cleanup for failed replacement "
+                        "host %s", host)
                 for session in sessions:
-                    session.remove_pool(host)
+                    if not self._lifecycle.addition_is_current(
+                            host, addition_token):
+                        return
+                    try:
+                        session.remove_pool(host)
+                    except Exception:
+                        log.exception(
+                            "Error removing pool in session %s for failed "
+                            "replacement host %s",
+                            session, host)
+
+                if not self._lifecycle.addition_is_current(
+                        host, addition_token):
+                    return
 
                 authentication_failed = any(
                     result is None for result in futures_results)
@@ -2856,8 +2875,12 @@ class Cluster(object):
                     # as terminal. Supersede that task as well as any handler
                     # it managed to install, and allow a later DOWN event to
                     # start fresh handling.
-                    old_reconnector = self._lifecycle.supersede_down(host)
-                    self._lifecycle.release_addition(host, addition_token)
+                    with host.lock:
+                        if not self._lifecycle.addition_is_current(
+                                host, addition_token):
+                            return
+                        old_reconnector = self._lifecycle.supersede_down(host)
+                        self._lifecycle.release_addition(host, addition_token)
                     if old_reconnector:
                         old_reconnector.cancel()
                 else:
@@ -2866,33 +2889,43 @@ class Cluster(object):
                         on_add_reconnection=on_add_reconnection,
                         start=False)
 
-                # Reconcile only after every partial replacement pool is gone
-                # and retry ownership has been established. Freeze the host
-                # set while removal of this object is excluded, so a stale
+                # Reconcile only after attempting every partial replacement
+                # pool removal and establishing retry ownership. Freeze the
+                # host set while removal of this object is excluded, so a stale
                 # callback cannot discover and duplicate-create a newer
                 # same-endpoint replacement.
-                with host.lock:
-                    if host._is_removed:
-                        if pending_reconnector:
-                            host._clear_reconnection_handler(
-                                pending_reconnector)
-                            pending_reconnector.cancel()
-                        return
-                    reconciliation_hosts = tuple(
-                        self.metadata.all_hosts())
-
                 try:
+                    with host.lock:
+                        if not self._lifecycle.addition_is_current(
+                                host, addition_token):
+                            return
+                        reconciliation_hosts = tuple(
+                            self.metadata.all_hosts())
+
                     for session in sessions:
-                        session.update_created_pools(
-                            excluded_host=host,
-                            hosts=reconciliation_hosts)
+                        if not self._lifecycle.addition_is_current(
+                                host, addition_token):
+                            return
+                        try:
+                            session.update_created_pools(
+                                excluded_host=host,
+                                hosts=reconciliation_hosts)
+                        except Exception:
+                            log.exception(
+                                "Error reconciling pools in session %s after "
+                                "failed replacement host %s",
+                                session, host)
                 finally:
                     if pending_reconnector:
                         with host.lock:
                             active = (
-                                not host._is_removed and
+                                self._lifecycle.addition_is_current(
+                                    host, addition_token) and
                                 host._reconnection_handler is
                                 pending_reconnector)
+                            if not active:
+                                host._clear_reconnection_handler(
+                                    pending_reconnector)
                         if active:
                             log.debug(
                                 "Starting reconnector for host %s", host)

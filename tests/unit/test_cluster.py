@@ -874,6 +874,280 @@ class ClusterTest(unittest.TestCase):
             on_add_reconnection=ANY, start=False)
         listener.on_add.assert_not_called()
 
+    def _replacement_callback_failure_setup(self):
+        cluster = Cluster()
+        self.addCleanup(cluster.shutdown)
+        cluster.profile_manager = Mock()
+        cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+        cluster.control_connection.on_add = Mock()
+        cluster.control_connection.on_remove = Mock()
+        cluster._prepare_all_queries = Mock()
+        cluster.scheduler.schedule = Mock()
+        cluster._make_connection_factory = Mock(return_value=Mock())
+        host = Host('127.0.0.1', SimpleConvictionPolicy,
+                    host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        sibling = Host('127.0.0.2', SimpleConvictionPolicy,
+                       host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(sibling)
+        events = Mock()
+        events.attach_mock(cluster.profile_manager.on_down, 'policy')
+        futures = (Future(), Future())
+        sessions = []
+        for index, future in enumerate(futures):
+            session = new_session_with_pool_state()
+            session.cluster = cluster
+            session._profile_manager = cluster.profile_manager
+            session.is_shutdown = False
+            session.shutdown = Mock()
+            session.on_remove = Mock()
+            # Pool shutdown remains pending while synchronous removal clears
+            # both indexes. Recovery must not wait for this future.
+            session.submit = Mock(return_value=Future())
+            session.add_or_renew_pool = Mock(return_value=future)
+            session.remove_pool = Mock(wraps=session.remove_pool)
+            session.update_created_pools = Mock(return_value=set())
+            events.attach_mock(session.remove_pool, 'remove_%d' % index)
+            events.attach_mock(session.update_created_pools,
+                               'reconcile_%d' % index)
+            sessions.append(session)
+        cluster.sessions = tuple(sessions)
+        listener = Mock()
+        cluster.register_listener(listener)
+        state = SimpleNamespace(
+            cluster=cluster, host=host, sibling=sibling,
+            sessions=tuple(sessions), future=futures[1], events=events,
+            listener=listener, reconnector=None)
+        start_reconnector = cluster._start_reconnector
+
+        def install(*args, **kwargs):
+            handler = start_reconnector(*args, **kwargs)
+            handler.start = Mock(wraps=handler.start)
+            handler.cancel = Mock(wraps=handler.cancel)
+            events.attach_mock(handler.start, 'start')
+            state.reconnector = handler
+            return handler
+
+        cluster._start_reconnector = Mock(side_effect=install)
+        events.attach_mock(cluster._start_reconnector, 'install')
+        cluster.on_add(
+            host, refresh_nodes=False, reconcile_pools_on_failure=True)
+        for session in sessions:
+            session._pools[host] = Mock(host=host)
+            session._pool_generations[host] = object()
+        futures[0].set_result(True)
+        return state
+
+    def test_replacement_recovery_continues_after_callback_errors(self):
+        for failing_stages in (('policy',), ('remove_0',),
+                               ('reconcile_0',),
+                               ('policy', 'remove_0', 'reconcile_0')):
+            with self.subTest(failing_stages=failing_stages):
+                state = self._replacement_callback_failure_setup()
+                for stage in failing_stages:
+                    getattr(state.events, stage).side_effect = RuntimeError(
+                        stage)
+                if 'policy' in failing_stages:
+                    def detach_sessions_then_fail(_host):
+                        state.cluster.sessions = ()
+                        raise RuntimeError('policy')
+
+                    state.events.policy.side_effect = detach_sessions_then_fail
+
+                # Reconciliation callbacks can publish more topology. Later
+                # sessions must still receive the snapshot taken beforehand.
+                discovered_host = Host(
+                    '127.0.0.3', SimpleConvictionPolicy, host_id=uuid.uuid4())
+                if 'reconcile_0' in failing_stages:
+                    def publish_then_fail(*args, **kwargs):
+                        state.cluster.metadata.add_or_return_host(
+                            discovered_host)
+                        raise RuntimeError('reconcile_0')
+
+                    state.events.reconcile_0.side_effect = publish_then_fail
+
+                with self.assertLogs(
+                        'cassandra.cluster', level='ERROR') as logs:
+                    state.future.set_result(False)
+
+                assert [c[0] for c in state.events.mock_calls] == [
+                    'policy', 'remove_0', 'remove_1', 'install',
+                    'reconcile_0', 'reconcile_1', 'start']
+                assert len(logs.records) == len(failing_stages)
+                for stage, record in zip(failing_stages, logs.records):
+                    assert str(record.exc_info[1]) == stage
+                    assert str(state.host) in record.getMessage()
+                    if stage != 'policy':
+                        assert str(state.sessions[0]) in record.getMessage()
+                for index, session in enumerate(state.sessions):
+                    if 'remove_%d' % index not in failing_stages:
+                        assert state.host not in session._pools
+                        assert state.host not in session._pool_generations
+                        session.submit.assert_called_once()
+                first, second = state.sessions
+                snapshot = first.update_created_pools.call_args.kwargs['hosts']
+                assert isinstance(snapshot, tuple)
+                assert set(snapshot) == {state.host, state.sibling}
+                for session in (first, second):
+                    session.update_created_pools.assert_called_once_with(
+                        excluded_host=state.host, hosts=snapshot)
+                    assert (session.update_created_pools.call_args
+                            .kwargs['hosts'] is snapshot)
+                state.cluster._start_reconnector.assert_called_once_with(
+                    state.host, is_host_addition=True,
+                    on_add_reconnection=ANY, start=False)
+                assert state.host._reconnection_handler is state.reconnector
+                state.reconnector.start.assert_called_once_with()
+                state.reconnector.cancel.assert_not_called()
+                assert state.host.is_up is False
+                state.listener.on_add.assert_not_called()
+
+    def test_replacement_recovery_preserves_newer_handler(self):
+        state = self._replacement_callback_failure_setup()
+        newer_handler = Mock()
+
+        def replace_handler_then_fail(*args, **kwargs):
+            state.host.get_and_set_reconnection_handler(newer_handler)
+            raise RuntimeError('reconciliation failed')
+
+        state.sessions[0].update_created_pools.side_effect = (
+            replace_handler_then_fail)
+        with self.assertLogs('cassandra.cluster', level='ERROR'):
+            state.future.set_result(False)
+
+        state.sessions[1].update_created_pools.assert_called_once()
+        state.reconnector.start.assert_not_called()
+        state.reconnector.cancel.assert_called_once_with()
+        newer_handler.cancel.assert_not_called()
+        assert state.host._reconnection_handler is newer_handler
+
+    def test_replacement_recovery_stops_when_retired_during_callback(self):
+        for action in ('remove', 'shutdown'):
+            with self.subTest(action=action):
+                state = self._replacement_callback_failure_setup()
+                callback_started = Event()
+                release_callback = Event()
+
+                def block_then_fail(*args, **kwargs):
+                    callback_started.set()
+                    assert release_callback.wait(5)
+                    raise RuntimeError('reconciliation failed')
+
+                state.sessions[0].update_created_pools.side_effect = (
+                    block_then_fail)
+                completion = Thread(
+                    target=lambda: state.future.set_result(False))
+                with self.assertLogs('cassandra.cluster', level='ERROR'):
+                    completion.start()
+                    try:
+                        assert callback_started.wait(5)
+                        if action == 'remove':
+                            state.cluster.remove_host(
+                                state.host, trigger_reconciliation=False)
+                        else:
+                            state.cluster.shutdown()
+                    finally:
+                        release_callback.set()
+                        completion.join(5)
+
+                assert not completion.is_alive()
+                state.sessions[1].update_created_pools.assert_not_called()
+                state.reconnector.start.assert_not_called()
+                assert state.reconnector.cancel.called
+                assert state.host._reconnection_handler is None
+                state.listener.on_add.assert_not_called()
+
+    def test_replacement_auth_failure_survives_cleanup_errors(self):
+        state = self._replacement_callback_failure_setup()
+        cluster, host = state.cluster, state.host
+        cluster.executor.shutdown()
+        cluster.executor = Mock()
+        cluster.executor.submit.return_value = Future()
+        cluster._discount_down_events = False
+        # Queue DOWN before the aggregate result classifies authentication.
+        cluster.on_down(host, is_host_addition=True)
+        restart_task, *restart_args = cluster.executor.submit.call_args.args
+        existing_handler = Mock()
+        host.get_and_set_reconnection_handler(existing_handler)
+        state.events.reset_mock()
+        for stage in ('policy', 'remove_0', 'reconcile_0'):
+            getattr(state.events, stage).side_effect = RuntimeError(stage)
+
+        with self.assertLogs('cassandra.cluster', level='ERROR') as logs:
+            state.future.set_result(None)
+
+        assert len(logs.records) == 3
+        assert [c[0] for c in state.events.mock_calls] == [
+            'policy', 'remove_0', 'remove_1', 'reconcile_0', 'reconcile_1']
+        assert not host._lifecycle_pending
+        existing_handler.cancel.assert_called_once_with()
+        restart_task(*restart_args)
+        cluster._start_reconnector.assert_not_called()
+        cluster.scheduler.schedule.assert_not_called()
+        assert not host.is_currently_reconnecting()
+        assert not host._currently_handling_node_down
+        state.listener.on_add.assert_not_called()
+
+        state.events.policy.side_effect = None
+        state.events.remove_0.side_effect = None
+        state.events.reconcile_0.side_effect = None
+        cluster.on_down(host, is_host_addition=False)
+        assert cluster.executor.submit.call_count == 2
+        restart_task, *restart_args = cluster.executor.submit.call_args.args
+        restart_task(*restart_args)
+        assert host._reconnection_handler is state.reconnector
+        assert state.reconnector.is_host_addition
+        assert state.reconnector.on_add is host._pending_host_addition_callback
+        cluster.scheduler.schedule.assert_called_once()
+
+    def test_replacement_callback_failure_stops_after_retirement(self):
+        for stage in ('policy', 'remove_0', 'reconcile_0'):
+            for action in ('remove', 'shutdown', 'supersede'):
+                with self.subTest(stage=stage, action=action):
+                    state = self._replacement_callback_failure_setup()
+                    cluster, host = state.cluster, state.host
+                    newer_handler = Mock()
+                    replacement = None
+
+                    def retire_then_fail(*args, **kwargs):
+                        nonlocal replacement
+                        if action == 'remove':
+                            cluster.remove_host(
+                                host, trigger_reconciliation=False)
+                            replacement, _ = cluster.add_host(
+                                host.endpoint, signal=False,
+                                host_id=uuid.uuid4())
+                            replacement.get_and_set_reconnection_handler(
+                                newer_handler)
+                        elif action == 'shutdown':
+                            cluster.shutdown()
+                        else:
+                            cluster._lifecycle.claim_addition(host)
+                            host.get_and_set_reconnection_handler(
+                                newer_handler)
+                        raise RuntimeError('retired during ' + stage)
+
+                    getattr(state.events, stage).side_effect = retire_then_fail
+                    with self.assertLogs('cassandra.cluster', level='ERROR'):
+                        state.future.set_result(False)
+
+                    state.sessions[1].update_created_pools.assert_not_called()
+                    if stage != 'reconcile_0':
+                        state.sessions[1].remove_pool.assert_not_called()
+                        cluster._start_reconnector.assert_not_called()
+                    else:
+                        state.reconnector.start.assert_not_called()
+                        assert state.reconnector.cancel.called
+                    newer_handler.cancel.assert_not_called()
+                    if replacement is not None:
+                        assert (cluster.metadata.get_host(host.endpoint) is
+                                replacement)
+                        assert (replacement._reconnection_handler is
+                                newer_handler)
+                    elif action == 'supersede':
+                        assert host._reconnection_handler is newer_handler
+                    state.listener.on_add.assert_not_called()
+
     def test_replacement_auth_failure_invalidates_queued_restart(self):
         cluster = Cluster()
         cluster.scheduler.shutdown()
