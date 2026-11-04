@@ -70,6 +70,61 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
         table_sql = self.cluster.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].as_cql_query()
         assert "<frozen>" not in table_sql
 
+    def test_two_clusters_keep_their_own_udt_mapping(self):
+        """
+        Two clusters in the same process may map the same UDT to different
+        classes.  The mapping is a per-cluster setting (see
+        Cluster.register_user_type), so neither cluster may affect the
+        other's.
+        """
+        c1 = TestCluster()
+        c2 = TestCluster()
+        try:
+            s1 = c1.connect(self.keyspace_name, wait_for_all_pools=True)
+            s1.execute("CREATE TYPE user (age int, name text)")
+            s1.execute("CREATE TABLE mytable (a int PRIMARY KEY, b frozen<user>)")
+
+            User1 = namedtuple('user1', ('age', 'name'))
+            User2 = namedtuple('user2', ('age', 'name'))
+            c1.register_user_type(self.keyspace_name, "user", User1)
+
+            s1.execute("INSERT INTO mytable (a, b) VALUES (%s, %s)", (0, User1(42, 'bob')))
+
+            # cluster 1 gets its own class back
+            row = s1.execute("SELECT b FROM mytable WHERE a=0").one()
+            assert type(row.b) is User1
+
+            # cluster 2 registers the same UDT to a different class
+            c2.register_user_type(self.keyspace_name, "user", User2)
+            s2 = c2.connect(self.keyspace_name, wait_for_all_pools=True)
+            row = s2.execute("SELECT b FROM mytable WHERE a=0").one()
+            assert type(row.b) is User2
+
+            # ... and cluster 1 still gets its own class back
+            row = s1.execute("SELECT b FROM mytable WHERE a=0").one()
+            assert type(row.b) is User1
+            assert 42 == row.b.age
+            assert 'bob' == row.b.name
+
+            # a cluster that never registered the UDT must not clear the
+            # mapping of the clusters that did
+            c3 = TestCluster()
+            try:
+                s3 = c3.connect(self.keyspace_name, wait_for_all_pools=True)
+                row = s3.execute("SELECT b FROM mytable WHERE a=0").one()
+                assert type(row.b) is not User1
+                assert type(row.b) is not User2
+            finally:
+                c3.shutdown()
+
+            row = s1.execute("SELECT b FROM mytable WHERE a=0").one()
+            assert type(row.b) is User1
+            row = s2.execute("SELECT b FROM mytable WHERE a=0").one()
+            assert type(row.b) is User2
+        finally:
+            c1.shutdown()
+            c2.shutdown()
+
     def test_can_insert_unprepared_registered_udts(self):
         """
         Test the insertion of unprepared, registered UDTs
