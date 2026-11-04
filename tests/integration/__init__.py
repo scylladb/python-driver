@@ -14,10 +14,13 @@
 
 import re
 import os
+import errno
 from typing import Callable
 from cassandra.cluster import Cluster
 
 from tests import connection_class, EVENT_LOOP_MANAGER
+from tests.integration._ccm_logs import (
+    ccm_boundary, directory_exists, copy_cluster_logs)
 
 if connection_class is not None:
     Cluster.connection_class = connection_class
@@ -31,6 +34,9 @@ import sys
 import time
 import traceback
 import platform
+from pathlib import Path
+from contextlib import contextmanager
+from uuid import uuid4
 from threading import Event
 from subprocess import call
 from itertools import groupby
@@ -74,8 +80,116 @@ path = os.path.join(os.path.abspath(os.path.dirname(__file__)), 'ccm')
 if not os.path.exists(path):
     os.mkdir(path)
 
+_failed_reports = []
+_preserved_ccm_log_scopes = set()
+_log_artifact_dir = os.environ.get(
+    'INTEGRATION_LOG_ARTIFACT_DIR', 'integration-test-logs')
+_provisional_log_failure = None
+_log_snapshot_count = 0
+_current_log_failure = None
+
 cass_version = None
 cql_version = None
+
+
+def _new_log_failure_dir():
+    failure_name = 'failure-%04d-%s' % (
+        len(_failed_reports) + 1, uuid4().hex[:8])
+    return Path(_log_artifact_dir) / failure_name
+
+
+def record_failed_test_report(report):
+    global _current_log_failure, _provisional_log_failure
+    if report.failed:
+        if _current_log_failure is None:
+            _current_log_failure = (
+                _provisional_log_failure or _new_log_failure_dir())
+            _provisional_log_failure = None
+        _failed_reports.append(report)
+        destination = Path(_log_artifact_dir)
+        try:
+            _current_log_failure.mkdir(parents=True, exist_ok=True)
+            line = '%s %s [%s]\n' % (
+                report.when, report.nodeid, _current_log_failure.name)
+            with (destination / 'failed-tests.txt').open('a') as failed_tests:
+                failed_tests.write(line)
+            failure_report = _current_log_failure / 'failed-tests.txt'
+            with failure_report.open('a') as failed_tests:
+                failed_tests.write(line)
+        except OSError as exc:
+            log.warning("Failed to preserve test report: %s", exc)
+
+    # Reports arrive after the phase's fixtures and finalizers finish.
+    # Keep provisional captures until teardown's final report arrives.
+    if report.when == 'teardown' and _current_log_failure is not None:
+        preserve_ccm_logs_on_failure()
+    _preserved_ccm_log_scopes.clear()
+    if report.when == 'teardown':
+        # Failed captures already live at their final artifact path.
+        # Only discard a provisional directory when no test phase failed.
+        if _provisional_log_failure is not None:
+            try:
+                shutil.rmtree(_provisional_log_failure)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                log.warning("Failed to discard temporary ccm logs: %s", exc)
+            try:
+                Path(_log_artifact_dir).rmdir()
+            except OSError as exc:
+                if exc.errno not in (
+                        errno.ENOENT, errno.ENOTEMPTY, errno.EEXIST):
+                    log.warning(
+                        "Failed to discard temporary ccm logs: %s", exc)
+        _provisional_log_failure = None
+        _current_log_failure = None
+
+
+def _ccm_directory_exists(directory):
+    return directory_exists(directory, ccm_boundary(Path(path)))
+
+
+def preserve_ccm_logs_on_failure(cluster_name=None):
+    global _provisional_log_failure, _log_snapshot_count
+    try:
+        ccm_root = Path(path)
+        if not _ccm_directory_exists(ccm_root):
+            return
+        cluster_roots = ([ccm_root / cluster_name] if cluster_name else
+                         list(ccm_root.iterdir()))
+        for cluster_root in cluster_roots:
+            if (cluster_root.name in _preserved_ccm_log_scopes or
+                    not _ccm_directory_exists(cluster_root)):
+                continue
+            _preserved_ccm_log_scopes.add(cluster_root.name)
+            if _current_log_failure is None:
+                if _provisional_log_failure is None:
+                    _provisional_log_failure = _new_log_failure_dir()
+                destination = _provisional_log_failure
+            else:
+                destination = _current_log_failure
+            _log_snapshot_count += 1
+            snapshot = destination / ('snapshot-%06d' % _log_snapshot_count)
+            _preserve_ccm_cluster_logs(
+                cluster_root, snapshot / 'ccm' / cluster_root.name)
+    except OSError as exc:
+        log.warning("Failed to preserve ccm diagnostics: %s", exc)
+
+
+@contextmanager
+def preserve_ccm_logs_before_cleanup(cluster_name):
+    preserve_ccm_logs_on_failure(cluster_name)
+    try:
+        yield
+    finally:
+        # Cleanup may leave a new incarnation at the same path, even
+        # when it raises after partially completing the operation.
+        _preserved_ccm_log_scopes.discard(cluster_name)
+
+
+def _preserve_ccm_cluster_logs(ccm_root, ccm_destination):
+    return copy_cluster_logs(
+        ccm_root, ccm_destination, ccm_boundary(Path(path)))
 
 
 def get_server_versions():
@@ -383,18 +497,20 @@ def remove_cluster():
     if CCM_CLUSTER:
         check_log_error()
         log.debug("Removing cluster {0}".format(CCM_CLUSTER.name))
-        tries = 0
-        while tries < 100:
-            try:
-                CCM_CLUSTER.remove()
-                CCM_CLUSTER = None
-                return
-            except OSError:
-                ex_type, ex, tb = sys.exc_info()
-                log.warning("{0}: {1} Backtrace: {2}".format(ex_type.__name__, ex, traceback.extract_tb(tb)))
-                del tb
-                tries += 1
-                time.sleep(1)
+        with preserve_ccm_logs_before_cleanup(CCM_CLUSTER.name):
+            tries = 0
+            while tries < 100:
+                try:
+                    CCM_CLUSTER.remove()
+                    CCM_CLUSTER = None
+                    return
+                except OSError:
+                    ex_type, ex, tb = sys.exc_info()
+                    log.warning("{0}: {1} Backtrace: {2}".format(
+                        ex_type.__name__, ex, traceback.extract_tb(tb)))
+                    del tb
+                    tries += 1
+                    time.sleep(1)
 
         raise RuntimeError("Failed to remove cluster after 100 attempts")
 
@@ -443,7 +559,8 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
         try:
             CCM_CLUSTER = CCMClusterFactory.load(path, cluster_name)
             log.debug("Found existing CCM cluster, {0}; clearing.".format(cluster_name))
-            CCM_CLUSTER.clear()
+            with preserve_ccm_logs_before_cleanup(cluster_name):
+                CCM_CLUSTER.clear()
             CCM_CLUSTER.set_install_dir(**ccm_options)
             CCM_CLUSTER.set_configuration_options(configuration_options)
             CCM_CLUSTER.set_dse_configuration_options(dse_options)
@@ -459,7 +576,8 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
             # Make sure we cleanup old cluster dir if it exists
             cluster_path = os.path.join(path, cluster_name)
             if os.path.exists(cluster_path):
-                shutil.rmtree(cluster_path)
+                with preserve_ccm_logs_before_cleanup(cluster_name):
+                    shutil.rmtree(cluster_path)
 
             if SCYLLA_VERSION:
                 # `experimental: True` enable all experimental features.
@@ -541,12 +659,14 @@ def teardown_package():
         return
     # when multiple modules are run explicitly, this runs between them
     # need to make sure CCM_CLUSTER is properly cleared for that case
+    preserve_ccm_logs_on_failure()
     remove_cluster()
     for cluster_name in [CLUSTER_NAME, MULTIDC_CLUSTER_NAME]:
         try:
             cluster = CCMClusterFactory.load(path, cluster_name)
             try:
-                cluster.remove()
+                with preserve_ccm_logs_before_cleanup(cluster_name):
+                    cluster.remove()
                 log.info('Removed cluster: %s' % cluster_name)
             except Exception:
                 log.exception('Failed to remove cluster: %s' % cluster_name)
