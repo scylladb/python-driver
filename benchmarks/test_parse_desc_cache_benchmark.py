@@ -203,7 +203,7 @@ def _cached_parse_desc_py(
             and cached[1] is column_encryption_policy
             and cached[2] == protocol_version
         ):
-            return cached[3], cached[4], cached[5]
+            return cached[3], list(cached[4]), list(cached[5])
 
     column_names = [md[2] for md in column_metadata]
     column_types = [md[3] for md in column_metadata]
@@ -217,7 +217,7 @@ def _cached_parse_desc_py(
     )
 
     if len(cache) >= _PY_CACHE_MAX_SIZE:
-        cache.clear()
+        cache.pop(next(iter(cache)), None)
 
     cache[cache_key] = (
         column_metadata,
@@ -227,7 +227,7 @@ def _cached_parse_desc_py(
         column_names,
         column_types,
     )
-    return desc, column_names, column_types
+    return desc, list(column_names), list(column_types)
 
 
 # ---------------------------------------------------------------------------

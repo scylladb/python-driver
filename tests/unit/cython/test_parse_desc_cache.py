@@ -24,8 +24,6 @@ import io
 import struct
 import unittest
 
-from tests.unit.cython.utils import cythontest
-
 try:
     from cassandra.row_parser import (
         clear_parse_desc_cache,
@@ -34,11 +32,29 @@ try:
     )
     from cassandra.obj_parser import ListParser
 
+    class _RecordingParser(ListParser):
+        """Remembers the ParseDesc it was handed, to assert cache identity."""
+
+        def parse_rows(self, reader, desc):
+            self.desc = desc
+            return ListParser.parse_rows(self, reader, desc)
+
     _HAS_ROW_PARSER = True
-    _recv_results_rows = make_recv_results_rows(ListParser())
+    _recording_parser = _RecordingParser()
+    _recv_results_rows = make_recv_results_rows(_recording_parser)
 except ImportError:
     _HAS_ROW_PARSER = False
     _recv_results_rows = None
+
+
+# The Cython row_parser extension must be importable for these tests to run.
+# The shared ``cythontest`` decorator only checks that Cython is installed at
+# all, which is not enough: the extension may be missing (source checkout
+# without a build), in which case clear_parse_desc_cache()/
+# get_parse_desc_cache_size() would be undefined and the tests would fail
+# with NameError instead of skipping.
+require_row_parser = unittest.skipUnless(
+    _HAS_ROW_PARSER, "cassandra.row_parser Cython extension is not available")
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +113,12 @@ def _recv(binary_buf, col_meta, protocol_version=4, ce_policy=None):
     return msg
 
 
+def _desc(binary_buf, col_meta, protocol_version=4):
+    """Run recv_results_rows and return the ParseDesc it parsed with."""
+    _recv(binary_buf, col_meta, protocol_version)
+    return _recording_parser.desc
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -113,20 +135,80 @@ class ParseDescCacheTest(unittest.TestCase):
         if _HAS_ROW_PARSER:
             clear_parse_desc_cache()
 
-    @cythontest
-    def test_cache_hit_returns_same_objects(self):
-        """Repeated calls with the same col_meta object should return
-        identical column_names and column_types objects (cache hit)."""
+    @require_row_parser
+    def test_cache_hit_returns_independent_lists(self):
+        """Repeated calls with the same col_meta object hit the cache, but each
+        response gets its own column_names/column_types lists.
+
+        The lists are public, mutable attributes (ResultSet.column_names and
+        the list handed to the user's row factory), so they must not be shared
+        between responses.
+        """
         col_meta = _build_column_metadata(5)
         buf = _build_binary_buf(1, 5)
 
         msg1 = _recv(buf, col_meta)
         msg2 = _recv(buf, col_meta)
 
-        self.assertIs(msg1.column_names, msg2.column_names)
-        self.assertIs(msg1.column_types, msg2.column_types)
+        # Same values, but distinct list objects.
+        self.assertIsNot(msg1.column_names, msg2.column_names)
+        self.assertIsNot(msg1.column_types, msg2.column_types)
+        self.assertEqual(msg1.column_names, msg2.column_names)
+        self.assertEqual(msg1.column_types, msg2.column_types)
 
-    @cythontest
+    @require_row_parser
+    def test_cache_hit_reuses_same_parse_desc(self):
+        """The expensive ParseDesc object itself is still reused across
+        executions of the same prepared statement."""
+        col_meta = _build_column_metadata(5)
+        buf = _build_binary_buf(1, 5)
+
+        desc1 = _desc(buf, col_meta)
+        desc2 = _desc(buf, col_meta)
+        desc3 = _desc(buf, col_meta)
+
+        self.assertIs(desc1, desc2)
+        self.assertIs(desc2, desc3)
+        self.assertEqual(get_parse_desc_cache_size(), 1)
+
+    @require_row_parser
+    def test_mutating_one_response_does_not_affect_the_next(self):
+        """A consumer mutating a response's column_names/column_types must not
+        relabel later responses of the same prepared statement."""
+        col_meta = _build_column_metadata(5)
+        buf = _build_binary_buf(1, 5)
+
+        msg1 = _recv(buf, col_meta)
+        original_names = list(msg1.column_names)
+        original_types = list(msg1.column_types)
+
+        # Simulate user code (or a custom row factory) mutating the metadata
+        # it received.
+        msg1.column_names[0] = 'CLOBBERED'
+        msg1.column_types[0] = 'CLOBBERED_TYPE'
+
+        msg2 = _recv(buf, col_meta)
+
+        self.assertEqual(list(msg2.column_names), original_names)
+        self.assertEqual(list(msg2.column_types), original_types)
+        self.assertNotIn('CLOBBERED', msg2.column_names)
+        self.assertNotIn('CLOBBERED_TYPE', msg2.column_types)
+
+    @require_row_parser
+    def test_mutation_on_cache_miss_does_not_affect_the_next(self):
+        """The same guarantee holds for the first (cache-miss) execution."""
+        col_meta = _build_column_metadata(5)
+        buf = _build_binary_buf(1, 5)
+
+        msg1 = _recv(buf, col_meta)
+        original_names = list(msg1.column_names)
+
+        msg1.column_names[0] = 'CLOBBERED'
+
+        msg2 = _recv(buf, col_meta)
+        self.assertEqual(list(msg2.column_names), original_names)
+
+    @require_row_parser
     def test_cache_miss_different_metadata(self):
         """Different metadata list objects should produce cache misses."""
         buf = _build_binary_buf(1, 5)
@@ -139,31 +221,52 @@ class ParseDescCacheTest(unittest.TestCase):
         self.assertIsNot(msg_a.column_names, msg_b.column_names)
         self.assertEqual(msg_a.column_names, msg_b.column_names)
 
-    @cythontest
+    @require_row_parser
     def test_protocol_version_invalidates_cache(self):
         """Changed protocol_version should invalidate the cache entry."""
         col_meta = _build_column_metadata(5)
         buf = _build_binary_buf(1, 5)
 
-        msg_v4 = _recv(buf, col_meta, protocol_version=4)
-        msg_v5 = _recv(buf, col_meta, protocol_version=5)
+        desc_v4 = _desc(buf, col_meta, protocol_version=4)
+        # Same metadata, different protocol version -> the cached entry does
+        # not match (the protocol version is part of the cache key check), so
+        # a new ParseDesc is built and stored under the same metadata id.
+        desc_v5 = _desc(buf, col_meta, protocol_version=5)
 
-        self.assertIsNot(msg_v4.column_names, msg_v5.column_names)
+        self.assertIsNot(desc_v4, desc_v5)
+        self.assertEqual(desc_v5.protocol_version, 5)
 
-    @cythontest
+        # The cache still holds a single entry (keyed by the metadata id),
+        # but it was rebuilt for the new protocol version: decoding with v4
+        # again must not reuse the v5 entry.
+        self.assertEqual(get_parse_desc_cache_size(), 1)
+
+        # Going back to v4 must produce a correct (rebuilt) decode as well.
+        desc_v4_again = _desc(buf, col_meta, protocol_version=4)
+        self.assertIsNot(desc_v4_again, desc_v4)
+        self.assertIsNot(desc_v4_again, desc_v5)
+        self.assertEqual(desc_v4_again.protocol_version, 4)
+
+    @require_row_parser
     def test_clear_cache_invalidates_entries(self):
         """clear_parse_desc_cache() should invalidate cached entries."""
         col_meta = _build_column_metadata(5)
         buf = _build_binary_buf(1, 5)
 
-        msg1 = _recv(buf, col_meta)
+        _recv(buf, col_meta)
+        self.assertEqual(get_parse_desc_cache_size(), 1)
+
         clear_parse_desc_cache()
+        self.assertEqual(get_parse_desc_cache_size(), 0)
+
         msg2 = _recv(buf, col_meta)
+        self.assertEqual(list(msg2.column_names),
+                         list(_build_column_metadata(5)[i][2]
+                              for i in range(5)))
+        # The entry was rebuilt after the clear.
+        self.assertEqual(get_parse_desc_cache_size(), 1)
 
-        self.assertIsNot(msg1.column_names, msg2.column_names)
-        self.assertEqual(msg1.column_names, msg2.column_names)
-
-    @cythontest
+    @require_row_parser
     def test_cache_bounded_size(self):
         """Cache should evict entries when exceeding the max size (256)."""
         buf = _build_binary_buf(1, 5)
@@ -179,7 +282,41 @@ class ParseDescCacheTest(unittest.TestCase):
             "Cache should be bounded to 256 entries, got %d" % cache_size,
         )
 
-    @cythontest
+    @require_row_parser
+    def test_cache_evicts_one_entry_at_a_time(self):
+        """Overflowing the cache evicts a single (oldest) entry rather than
+        clearing the whole cache.
+
+        Clearing everything would make an application that legitimately uses
+        slightly more than the maximum number of prepared statements rebuild
+        every ParseDesc on every execution.
+        """
+        buf = _build_binary_buf(1, 5)
+
+        # Fill the cache exactly to its limit.
+        metas = [_build_column_metadata(5) for _ in range(256)]
+        for meta in metas:
+            _recv(buf, meta)
+        self.assertEqual(get_parse_desc_cache_size(), 256)
+
+        # One more entry: exactly one entry is evicted to make room, so the
+        # cache stays at its limit instead of being wiped.
+        oldest_desc = _desc(buf, metas[0])
+        extra = _build_column_metadata(5)
+        extra_desc = _desc(buf, extra)
+        self.assertEqual(get_parse_desc_cache_size(), 256)
+
+        # The most recently inserted metadata is still cached: asking for it
+        # again is a hit and must not change the cache size.
+        self.assertIs(_desc(buf, extra), extra_desc)
+        self.assertEqual(get_parse_desc_cache_size(), 256)
+
+        # The oldest entry was the one evicted, so re-requesting it is a miss
+        # that re-inserts it -- again evicting one entry to stay bounded.
+        self.assertIsNot(_desc(buf, metas[0]), oldest_desc)
+        self.assertEqual(get_parse_desc_cache_size(), 256)
+
+    @require_row_parser
     def test_parsed_rows_correctness(self):
         """Verify parsed row data is correct through the cached path."""
         ncols, nrows = 5, 3
@@ -195,7 +332,7 @@ class ParseDescCacheTest(unittest.TestCase):
                 self.assertEqual(val, "test_val")
         self.assertEqual(msg.column_names, ["col_%d" % i for i in range(ncols)])
 
-    @cythontest
+    @require_row_parser
     def test_parse_desc_state_is_immutable(self):
         """A ParseDesc must not carry mutable state.
 
@@ -222,7 +359,7 @@ class ParseDescCacheTest(unittest.TestCase):
         with self.assertRaises(TypeError):
             desc.coldescs[0] = ColDesc("ks", "tbl", "z")
 
-    @cythontest
+    @require_row_parser
     def test_get_cache_size(self):
         """get_parse_desc_cache_size() reports correct count."""
         self.assertEqual(get_parse_desc_cache_size(), 0)
