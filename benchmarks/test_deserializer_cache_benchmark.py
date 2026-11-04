@@ -103,10 +103,22 @@ def find_deserializer_uncached(cqltype):
 
 
 def make_deserializers_uncached(ctypes):
-    """Original implementation without caching."""
+    """Original implementation without caching (as it was on master).
+
+    Returns a Cython memoryview built with obj_array().
+    """
     from cassandra.deserializers import obj_array
 
     return obj_array([find_deserializer_uncached(ct) for ct in ctypes])
+
+
+def make_deserializers_uncached_tuple(ctypes):
+    """Uncached lookups, but returning an immutable tuple.
+
+    Isolates the effect of the deserializer cache from the change of
+    container type (memoryview -> tuple).
+    """
+    return tuple([find_deserializer_uncached(ct) for ct in ctypes])
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +176,16 @@ class TestDeserializerCacheCorrectness:
         # Should be the exact same cached object
         assert r1 is r2
 
+    def test_make_deserializers_result_is_immutable(self):
+        """The cached result must not be mutable by callers.
+
+        The result is shared between all callers, so a mutation would
+        corrupt the cache for every later consumer.
+        """
+        result = make_deserializers(SIMPLE_TYPES)
+        with pytest.raises(TypeError):
+            result[0] = cqltypes.BooleanType
+
 
 # ---------------------------------------------------------------------------
 # Benchmarks
@@ -196,6 +218,10 @@ class TestMakeDeserializersBenchmark:
         benchmark(make_deserializers_uncached, SIMPLE_TYPES)
 
     @pytest.mark.benchmark(group="make_deser_5types")
+    def test_uncached_tuple_5types(self, benchmark):
+        benchmark(make_deserializers_uncached_tuple, SIMPLE_TYPES)
+
+    @pytest.mark.benchmark(group="make_deser_5types")
     def test_cached_5types(self, benchmark):
         make_deserializers(SIMPLE_TYPES)  # ensure warm
         benchmark(make_deserializers, SIMPLE_TYPES)
@@ -205,6 +231,10 @@ class TestMakeDeserializersBenchmark:
     @pytest.mark.benchmark(group="make_deser_10types")
     def test_uncached_10types(self, benchmark):
         benchmark(make_deserializers_uncached, MIXED_TYPES)
+
+    @pytest.mark.benchmark(group="make_deser_10types")
+    def test_uncached_tuple_10types(self, benchmark):
+        benchmark(make_deserializers_uncached_tuple, MIXED_TYPES)
 
     @pytest.mark.benchmark(group="make_deser_10types")
     def test_cached_10types(self, benchmark):

@@ -187,7 +187,7 @@ cdef class DesVarcharType(DesUTF8Type):
 cdef class _DesParameterizedType(Deserializer):
 
     cdef object subtypes
-    cdef Deserializer[::1] deserializers
+    cdef tuple deserializers
     cdef Py_ssize_t subtypes_len
 
     def __init__(self, cqltype):
@@ -459,19 +459,25 @@ cdef int _CACHE_MAX_SIZE = 256
 # Using the cqltype objects themselves (rather than id()) as keys ensures
 # the dict holds strong references, preventing GC and id() reuse issues
 # with non-singleton parameterized types.
+#
+# The cached value is an immutable tuple of Deserializers.  It is shared
+# between all callers, so it must not be handed out in a mutable form: a
+# single mutation would corrupt the cached entry for every subsequent
+# consumer.
 cdef dict _make_deserializers_cache = {}
 
 def make_deserializers(cqltypes):
-    """Create an array of Deserializers for each given cqltype in cqltypes.
+    """Return a tuple of Deserializers, one for each cqltype in cqltypes.
 
-    The returned array may be a cached object shared across callers.
-    Callers must not modify the returned array."""
+    The returned tuple may be a cached object shared across callers.  It is
+    immutable, so callers cannot corrupt the cached entry."""
     cdef tuple key = tuple(cqltypes)
     try:
         return _make_deserializers_cache[key]
     except KeyError:
         pass
-    result = obj_array([find_deserializer(ct) for ct in cqltypes])
+    # Iterate the key: cqltypes may be a one-shot iterator already consumed above.
+    result = tuple([find_deserializer(ct) for ct in key])
     if len(_make_deserializers_cache) >= _CACHE_MAX_SIZE:
         _make_deserializers_cache.clear()
     _make_deserializers_cache[key] = result
@@ -550,7 +556,12 @@ def get_deserializer_cache_sizes():
 
 
 def obj_array(list objs):
-    """Create a (Cython) array of objects given a list of objects"""
+    """Create a (Cython) array of objects given a list of objects
+
+    Note: make_deserializers() no longer uses this -- it returns an
+    immutable tuple instead, so that the shared, cached result cannot be
+    mutated by a caller.  This helper is kept for backwards compatibility.
+    """
     cdef object[:] arr
     cdef Py_ssize_t i
     arr = cython_array(shape=(len(objs),), itemsize=sizeof(void *), format="O")

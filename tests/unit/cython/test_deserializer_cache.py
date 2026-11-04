@@ -95,6 +95,39 @@ class DeserializerCacheTest(unittest.TestCase):
         result = make_deserializers(types)
         self.assertEqual(len(result), 3)
 
+    @cythontest
+    def test_make_cache_accepts_iterator(self):
+        """A one-shot iterator yields all deserializers on a cache miss."""
+        result = make_deserializers(iter([cqltypes.Int32Type, cqltypes.UTF8Type]))
+        self.assertEqual(len(result), 2)
+        self.assertIs(result[0], find_deserializer(cqltypes.Int32Type))
+        self.assertIs(result[1], find_deserializer(cqltypes.UTF8Type))
+
+    @cythontest
+    def test_make_cache_result_is_immutable(self):
+        """The cached result must not be mutable by callers.
+
+        The result is shared between all callers, so a single mutation
+        would corrupt the cached entry for every later consumer. The
+        result is therefore an immutable tuple.
+        """
+        types = [cqltypes.Int32Type, cqltypes.UTF8Type]
+        result = make_deserializers(types)
+        with self.assertRaises(TypeError):
+            result[0] = cqltypes.BooleanType
+
+    @cythontest
+    def test_make_cache_result_not_corruptible(self):
+        """A caller cannot corrupt the cache for subsequent callers."""
+        types = [cqltypes.Int32Type, cqltypes.UTF8Type]
+        first = make_deserializers(types)
+        with self.assertRaises(TypeError):
+            first[0] = cqltypes.BooleanType
+        second = make_deserializers(types)
+        self.assertIs(first, second)
+        self.assertIsNot(
+            second[0], find_deserializer(cqltypes.BooleanType))
+
     # -- VectorType subtype-dependent dispatch ------------------------------
     #
     # VectorType.apply_parameters() (see cassandra/cqltypes.py) creates a
