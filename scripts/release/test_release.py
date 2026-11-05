@@ -233,6 +233,65 @@ class GuardTests(unittest.TestCase):
             with self.assertRaises(release.Invalid):
                 release.restore("release-state", Path("/unused"))
 
+    def test_restore_state_rechecks_checkpoint_on_failed_job_rerun(self):
+        for required in (False, True):
+            with (
+                self.subTest(required=required),
+                patch.object(release, "restore", return_value=True) as restore,
+                patch.object(release, "output") as output,
+            ):
+                release.restore_state(Path("/state"), required)
+                restore.assert_called_once_with(
+                    "release-state", Path("/state")
+                )
+                output.assert_called_once_with(retained="true")
+
+    def test_fresh_signing_requires_an_absent_checkpoint(self):
+        with (
+            patch.object(release, "restore", return_value=False),
+            patch.object(release, "output") as output,
+        ):
+            release.restore_state(Path("/state"))
+            output.assert_called_once_with(retained="false")
+
+    def test_expected_checkpoint_missing_cannot_trigger_new_signatures(self):
+        with (
+            patch.object(release, "restore", return_value=False),
+            patch.object(release, "output") as output,
+        ):
+            with self.assertRaisesRegex(release.Invalid, "manual recovery"):
+                release.restore_state(Path("/state"), require_retained=True)
+            output.assert_not_called()
+
+    def test_checkpoint_lookup_failure_cannot_trigger_new_signatures(self):
+        with (
+            patch.object(
+                release, "restore", side_effect=release.Invalid("denied")
+            ),
+            patch.object(release, "output") as output,
+        ):
+            with self.assertRaisesRegex(release.Invalid, "denied"):
+                release.restore_state(Path("/state"))
+            output.assert_not_called()
+
+    def test_restore_cli_preserves_the_required_checkpoint_guard(self):
+        with (
+            patch.object(
+                release.sys,
+                "argv",
+                [
+                    "release.py",
+                    "restore",
+                    "--state",
+                    "/state",
+                    "--require-retained",
+                ],
+            ),
+            patch.object(release, "restore_state") as restore,
+        ):
+            self.assertEqual(release.main(), 0)
+            restore.assert_called_once_with(Path("/state"), True)
+
     def test_preflight_blocker_stops_upload_preparation(self):
         with (
             patch.object(release, "verify_state", return_value={}),

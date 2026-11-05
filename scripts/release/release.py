@@ -199,6 +199,16 @@ def restore(name, directory):
     return True
 
 
+def restore_state(directory, require_retained=False):
+    """Recheck this run's checkpoint even when preparation was not rerun."""
+    retained = restore("release-state", directory)
+    require(
+        retained or not require_retained,
+        "Expected signed checkpoint is missing; manual recovery required.",
+    )
+    output(retained=str(retained).lower())
+
+
 def replace_once(text, pattern, replacement):
     text, count = re.subn(
         pattern, lambda match: replacement(match), text, flags=re.M
@@ -953,6 +963,7 @@ def main():
         "operation",
         choices=[
             "prepare",
+            "restore",
             "collect",
             "sign",
             "verify",
@@ -981,10 +992,13 @@ def main():
         default=Path(os.environ.get("RUNNER_TEMP", "/tmp")) / "pending",
     )
     parser.add_argument("--version", default=os.environ.get("RELEASE_VERSION"))
+    parser.add_argument("--require-retained", action="store_true")
     args = parser.parse_args()
     try:
         if args.operation == "prepare":
             prepare(args.candidate, args.version)
+        elif args.operation == "restore":
+            restore_state(args.state, args.require_retained)
         elif args.operation == "collect":
             collect(args.builds, args.pending, args.version)
         elif args.operation == "sign":

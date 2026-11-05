@@ -113,6 +113,24 @@ class ReleaseVersionTests(unittest.TestCase):
 
 
 class ReleasePublicationGuardTests(unittest.TestCase):
+    def test_failed_publication_rerun_selects_existing_signed_checkpoint(self):
+        with (
+            patch.object(release, "restore", return_value=True) as restore,
+            patch.object(release, "output") as output,
+        ):
+            release.restore_state(Path("/state"))
+            restore.assert_called_once_with("release-state", Path("/state"))
+            output.assert_called_once_with(retained="true")
+
+    def test_missing_expected_checkpoint_cannot_enable_signing(self):
+        with (
+            patch.object(release, "restore", return_value=False),
+            patch.object(release, "output") as output,
+        ):
+            with self.assertRaisesRegex(release.Invalid, "manual recovery"):
+                release.restore_state(Path("/state"), require_retained=True)
+            output.assert_not_called()
+
     def test_only_missing_pypi_files_are_selected(self):
         expected = {"linux.whl": "linux-hash", "windows.whl": "windows-hash"}
         uploaded = [

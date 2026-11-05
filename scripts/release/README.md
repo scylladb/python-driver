@@ -29,8 +29,10 @@ external matrix has its own `skip-integration-matrix` input. Open issues carryin
 `release-blocker` are checked across every page before validation and immediately
 before publication. Releases are serialized without cancelling an active run.
 
-For a real release, the `release` environment requires approval before helpers
-from the launch SHA sign the
+For a real release, only the `publish` job references the approval-protected
+`release` environment. Preparation, builds, project and matrix tests, metadata
+checks and downstream docs have no approval gate or release secrets. After
+approval, that one job signs and publishes: helpers from the launch SHA sign the
 exact tested tree as `ScyllaDB Publisher <publish.code@scylladb.com>`, with:
 
 - Primary certificate: `786703A4F7AC1E986C7CFB2318ED6CC7EBE7C5F9`
@@ -68,8 +70,8 @@ is suppressed for pushes made by `scylladb-publisher`.
 `dry-run` needs no environment approval. Its signing job uses `release-dry-run`,
 which is restricted to `master`, has no required reviewers and contains only
 `GPG_PRIVATE_KEY` and `GPG_PASSPHRASE`. It uses the existing Python signing
-certificate and has no publisher credential. Real signing and publication keep
-using the approval-protected `release` environment.
+certificate and has no publisher credential or OIDC permission. Real signing and
+publication run together in the single approval-protected `publish` job.
 
 `dry-run` performs preparation, builds, tests, signing and public verification,
 and retains the signed checkpoint. It stops before PyPI upload, Git pushes,
@@ -124,7 +126,10 @@ Use **Re-run failed jobs** or **Re-run all jobs** on the original workflow run.
 Do not dispatch a new run for the same published version. Preparation restores
 that run's candidate and original date. If `release-state` already exists,
 builds and signing are skipped and the retained bytes and signed history are
-verified. A rerun of just the failed publication job downloads the same state.
+verified. The credential job rechecks this run's checkpoint even when only the
+failed publication job is rerun and preparation still has its original outputs.
+It downloads the same signed state and never re-signs it. An expected checkpoint
+that disappears or cannot be read blocks the run instead of enabling signing.
 Existing PyPI files must match the original hashes; only missing files are
 uploaded. GitHub draft uploads resume at missing assets. Already published
 releases must be immutable and complete. Existing signatures are never replaced,
