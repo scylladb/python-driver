@@ -768,42 +768,66 @@ class HostConnection(object):
             return
         new_connection = None
         published = False
+        reserved = False
         retry = False
         attempt = None
         expected = _NOT_SET
-        with self._lock:
-            shard_id = connection.features.shard_id
-            with self._connection_guard() as current_owner:
-                current = self._connections.get(shard_id)
-                if (not current_owner or
-                        (current is not None and current is not connection) or
-                        (current is None and
-                         self._replacement_connections.get(shard_id) is not connection)):
-                    return
-                self._connections.pop(shard_id, None)
-            log.debug("Replacing connection (%s) to %s",
-                      id(connection), self.host)
-            self._replacement_connections[shard_id] = connection
-            try:
+        shard_id = connection.features.shard_id
+        try:
+            # Reserve the slot and an attempt token under the work lock.
+            with self._lock:
+                with self._connection_guard() as current_owner:
+                    current = self._connections.get(shard_id)
+                    if (not current_owner or
+                            (current is not None and current is not connection) or
+                            (current is None and
+                             self._replacement_connections.get(shard_id) is not connection)):
+                        return
+                    self._connections.pop(shard_id, None)
+                log.debug("Replacing connection (%s) to %s",
+                          id(connection), self.host)
+                self._replacement_connections[shard_id] = connection
+                reserved = True
                 if (self.host.sharding_info and not
                         self._session.cluster.shard_aware_options.disable):
                     self._submit_shard_attempt(shard_id)
-                    return
-                attempt = self._begin_shard_attempt(shard_id)
+                else:
+                    attempt = self._begin_shard_attempt(shard_id)
                 if attempt is None:
+                    # A shard attempt took over, or none could start: drop
+                    # the reservation in the same lock hold.
+                    reserved = False
+                    if self._replacement_connections.get(shard_id) is connection:
+                        self._replacement_connections.pop(shard_id)
                     return
-                new_connection = self._session.cluster.connection_factory(
-                    self.endpoint,
-                    on_orphaned_stream_released=self.on_orphaned_stream_released)
-                log.debug("Received replacement connection (%s) to %s, "
-                          "assigned shard_id=%s", id(new_connection),
-                          self.host,
-                          new_connection.features.shard_id)
+
+            # Connecting and USE wait for the reactor, which may first need
+            # the work lock to retire this pool, so prepare the candidate
+            # without it. The attempt token fences this unlocked work.
+            new_connection = self._session.cluster.connection_factory(
+                self.endpoint,
+                on_orphaned_stream_released=self.on_orphaned_stream_released)
+            log.debug("Received replacement connection (%s) to %s, "
+                      "assigned shard_id=%s", id(new_connection),
+                      self.host,
+                      new_connection.features.shard_id)
+            with self._connection_guard(attempt) as current_owner:
                 expected = self._connections.get(new_connection.features.shard_id)
-                if expected is None or expected.orphaned_threshold_reached:
-                    published = self._sync_keyspace(
-                        new_connection, attempt=attempt, expected=expected)
-            except Exception as exc:
+            # A lost owner falls through to closing the unpublished candidate.
+            if current_owner and (
+                    expected is None or expected.orphaned_threshold_reached):
+                published = None
+                while published is None:
+                    self._presync_keyspace(new_connection, attempt, expected)
+                    # Publish under the work lock. _sync_keyspace() revalidates
+                    # ownership, the attempt, the slot and the keyspace, and
+                    # returns None if the target keyspace changed meanwhile.
+                    with self._lock:
+                        published = self._sync_keyspace(
+                            new_connection, attempt=attempt, expected=expected,
+                            allow_use=False)
+        except Exception as exc:
+            with self._lock:
                 # Only the original owner may retry a failed connection.
                 with self._connection_guard(
                         attempt, new_connection, expected) as current_owner:
@@ -827,12 +851,13 @@ class HostConnection(object):
                             log.warning(
                                 "Failed scheduling reconnection to %s: %s",
                                 self.endpoint, retry_exc)
-            finally:
-                if attempt is not None:
-                    self._finish_shard_attempt(attempt)
-                if (not retry and
-                        self._replacement_connections.get(shard_id) is connection):
-                    self._replacement_connections.pop(shard_id)
+        finally:
+            if attempt is not None:
+                self._finish_shard_attempt(attempt)
+            if reserved and not retry:
+                with self._lock:
+                    if self._replacement_connections.get(shard_id) is connection:
+                        self._replacement_connections.pop(shard_id)
         if new_connection is not None and not published:
             log.debug("Closing unpublished replacement connection (%s) to %s",
                       id(new_connection), self.host)
@@ -1059,21 +1084,28 @@ class HostConnection(object):
                 self.disable_advanced_shard_aware(10 * 60)
 
             if expected is None or expected.orphaned_threshold_reached:
-                with self._lock:
-                    retained = self._sync_keyspace(
-                        conn, attempt=attempt, expected=expected)
-                    if retained:
-                        old_conn = expected
-                        if old_conn is not None:
-                            remaining = old_conn.in_flight - len(old_conn.orphaned_request_ids)
-                            if remaining:
-                                self._trash.add(old_conn)
-                                log.debug("Draining replaced connection (%s) "
-                                          "to %s, shard_id=%s: %i requests",
-                                          id(old_conn), self.host,
-                                          old_conn.features.shard_id,
-                                          remaining)
-                                old_conn = None
+                retained = None
+                while retained is None:
+                    # The reactor delivers the USE reply, and it may first
+                    # need the work lock to retire this pool after another
+                    # socket fails. Never wait for USE while holding it.
+                    self._presync_keyspace(conn, attempt, expected)
+                    with self._lock:
+                        retained = self._sync_keyspace(
+                            conn, attempt=attempt, expected=expected,
+                            allow_use=False)
+                        if retained:
+                            old_conn = expected
+                            if old_conn is not None:
+                                remaining = old_conn.in_flight - len(old_conn.orphaned_request_ids)
+                                if remaining:
+                                    self._trash.add(old_conn)
+                                    log.debug("Draining replaced connection (%s) "
+                                              "to %s, shard_id=%s: %i requests",
+                                              id(old_conn), self.host,
+                                              old_conn.features.shard_id,
+                                              remaining)
+                                    old_conn = None
                 if retained:
                     log.debug("Published connection (%s) to %s, shard_id=%s",
                               id(conn), self.host, conn.features.shard_id)
@@ -1124,11 +1156,23 @@ class HostConnection(object):
                     continue
                 self._submit_shard_attempt(shard_id)
 
-    def _sync_keyspace(self, conn, attempt=None, expected=_NOT_SET):
+    def _presync_keyspace(self, conn, attempt=None, expected=_NOT_SET):
+        """Run USE for the current target before taking the work lock."""
+        with self._connection_guard(attempt, conn, expected) as current:
+            target = self._keyspace if current else None
+        if target and conn.keyspace != target:
+            conn.set_keyspace_blocking(target)
+
+    def _sync_keyspace(self, conn, attempt=None, expected=_NOT_SET,
+                       allow_use=True):
         """Synchronize and publish only while pool, attempt and slot still own.
 
         Network waits carry no ownership guards. Revalidate after each wait,
         including corrective USE when the pool target changed concurrently.
+
+        A caller holding the work lock passes allow_use=False: a pending USE
+        then returns None instead of waiting, so the caller can release the
+        lock, run _presync_keyspace() and retry.
         """
         while True:
             with self._connection_guard(attempt, conn, expected) as current:
@@ -1136,6 +1180,8 @@ class HostConnection(object):
                     return False
                 target = self._keyspace
             if target and conn.keyspace != target:
+                if not allow_use:
+                    return None
                 conn.set_keyspace_blocking(target)
             with self._connection_guard(attempt, conn, expected) as current:
                 if not current:

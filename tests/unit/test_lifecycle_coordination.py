@@ -1016,7 +1016,7 @@ def test_duplicate_failed_callback_allows_same_pool_use_response(
         class WorkLock:
             def acquire(self, blocking=True):
                 # A nonblocking ownership probe is not the common checkpoint:
-                # the first callback must actually wait behind pending USE.
+                # record whether the first callback waits for pool work.
                 if blocking and get_ident() == first.ident:
                     first_blocking.set()
                 return work_lock.acquire(blocking)
@@ -1078,7 +1078,9 @@ def test_duplicate_failed_callback_allows_same_pool_use_response(
             if first_failure_waiting:
                 original.is_defunct = True
                 first.start()
-                assert first_blocking.wait(5), 'first failure did not wait for USE'
+                # The pending USE holds no pool work to wait behind.
+                first.join(5)
+                assert not first.is_alive(), 'first failure waited for USE'
             reactor.start()
             progressed = reactor_done.wait(2)
         finally:
@@ -1105,6 +1107,192 @@ def test_duplicate_failed_callback_allows_same_pool_use_response(
         assert progressed, 'duplicate failure blocked same-pool USE response'
     finally:
         pool.shutdown()
+
+
+@pytest.mark.parametrize('host_down', [False, True], ids=['replace', 'down'])
+def test_reactor_first_failure_does_not_wait_for_pending_use(topology, host_down):
+    """A fresh socket failure handled on the reactor must not wait for pool
+    work that is itself waiting for a USE response from the same reactor."""
+    from cassandra.protocol import ResultMessage, RESULT_KIND_SET_KEYSPACE
+    from cassandra.shard_info import _ShardingInfo
+
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    session = new_session_with_pool_state()
+    session.cluster = cluster
+    session.keyspace = None
+    session.is_shutdown = False
+    session.submit = Mock()
+    original = _PublicationConnection(host.endpoint, compression=False)
+    original.features = ProtocolFeatures(shard_id=1)
+    candidate = _PublicationConnection(host.endpoint, compression=False)
+    candidate.features = ProtocolFeatures(shard_id=0)
+    cluster.connection_factory = Mock(side_effect=[original, candidate])
+    cluster.shard_aware_options.disable_shardaware_port = True
+    pool = HostConnection(host, HostDistance.LOCAL, session)
+    session._pools[host] = pool
+    session.keyspace = pool._keyspace = original.keyspace = 'ks'
+    host.sharding_info = _ShardingInfo(0, 2, '', '', 0, None, None)
+    host.signal_connection_failure = Mock(return_value=host_down)
+    cluster.on_down = Mock()
+    original.in_flight = 1
+    original.last_error = ConnectionResetError('socket reset')
+
+    use_pending = Event()
+    reactor_done = Event()
+    response_lock = Lock()
+    responses = []
+    cleanup_started = False
+    errors = []
+
+    def send(message, request_id, cb, **kwargs):
+        assert message.query.startswith('USE ')
+        with response_lock:
+            respond_now = cleanup_started
+            if not respond_now:
+                responses.append(cb)
+        if respond_now:
+            # Cleanup already drained: a late USE must not wait forever.
+            cb(ResultMessage(RESULT_KIND_SET_KEYSPACE))
+        use_pending.set()
+        return 0
+
+    def respond(cleanup=False):
+        nonlocal cleanup_started
+        with response_lock:
+            cleanup_started |= cleanup
+            callbacks = list(responses)
+            responses.clear()
+        for callback in callbacks:
+            callback(ResultMessage(RESULT_KIND_SET_KEYSPACE))
+
+    def run(fn):
+        try:
+            fn()
+        except BaseException as exc:
+            errors.append(exc)
+
+    def reactor_loop():
+        # The reactor first sees the EOF of an established pooled socket,
+        # and only afterwards could deliver the pending USE response.
+        original.is_defunct = True
+        pool.return_connection(original)
+        respond()
+        reactor_done.set()
+
+    candidate.send_msg = send
+    worker = Thread(target=run, args=(lambda: pool._open_connection_to_missing_shard(0),), daemon=True)
+    reactor = Thread(target=run, args=(reactor_loop,), daemon=True)
+    try:
+        worker.start()
+        assert use_pending.wait(5)
+        reactor.start()
+        progressed = reactor_done.wait(3)
+    finally:
+        respond(cleanup=True)
+        for thread in (worker, reactor):
+            if thread.ident is not None:
+                thread.join(5)
+    assert progressed, 'reactor blocked on pool work waiting for its own USE response'
+    assert not worker.is_alive() and not reactor.is_alive()
+    assert not errors
+    # The failure was handled, not skipped.
+    host.signal_connection_failure.assert_called_once_with(original.last_error)
+    assert original.signaled_error
+    if host_down:
+        assert pool.is_shutdown
+        assert candidate.is_closed
+    else:
+        assert not pool.is_shutdown
+        session.submit.assert_any_call(pool._replace, original)
+        assert pool._connections.get(0) is candidate
+
+
+def test_shutdown_does_not_wait_for_replacement_use(topology):
+    """Pool shutdown must not wait behind a non-shard-aware replacement
+    whose USE reply only the reactor can deliver."""
+    from cassandra.protocol import ResultMessage, RESULT_KIND_SET_KEYSPACE
+
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    session = new_session_with_pool_state()
+    session.cluster = cluster
+    session.keyspace = None
+    session.is_shutdown = False
+    session.submit = Mock()
+    original = _PublicationConnection(host.endpoint, compression=False)
+    original.features = ProtocolFeatures(shard_id=0)
+    candidate = _PublicationConnection(host.endpoint, compression=False)
+    candidate.features = ProtocolFeatures(shard_id=0)
+    cluster.connection_factory = Mock(side_effect=[original, candidate])
+    pool = HostConnection(host, HostDistance.LOCAL, session)
+    session._pools[host] = pool
+    session.keyspace = pool._keyspace = original.keyspace = 'ks'
+    host.sharding_info = None
+    host.signal_connection_failure = Mock(return_value=False)
+    original.last_error = ConnectionResetError('socket reset')
+    original.is_defunct = True
+    pool.return_connection(original, stream_was_orphaned=True)
+    session.submit.assert_called_once_with(pool._replace, original)
+
+    use_pending = Event()
+    reactor_done = Event()
+    response_lock = Lock()
+    responses = []
+    cleanup_started = False
+    errors = []
+
+    def send(message, request_id, cb, **kwargs):
+        assert message.query.startswith('USE ')
+        with response_lock:
+            respond_now = cleanup_started
+            if not respond_now:
+                responses.append(cb)
+        if respond_now:
+            # Cleanup already drained: a late USE must not wait forever.
+            cb(ResultMessage(RESULT_KIND_SET_KEYSPACE))
+        use_pending.set()
+        return 0
+
+    def respond(cleanup=False):
+        nonlocal cleanup_started
+        with response_lock:
+            cleanup_started |= cleanup
+            callbacks = list(responses)
+            responses.clear()
+        for callback in callbacks:
+            callback(ResultMessage(RESULT_KIND_SET_KEYSPACE))
+
+    def run(fn):
+        try:
+            fn()
+        except BaseException as exc:
+            errors.append(exc)
+
+    def reactor_loop():
+        pool.shutdown()
+        respond()
+        reactor_done.set()
+
+    candidate.send_msg = send
+    worker = Thread(target=run, args=(lambda: pool._replace(original),), daemon=True)
+    reactor = Thread(target=run, args=(reactor_loop,), daemon=True)
+    try:
+        worker.start()
+        assert use_pending.wait(5)
+        reactor.start()
+        progressed = reactor_done.wait(3)
+    finally:
+        respond(cleanup=True)
+        for thread in (worker, reactor):
+            if thread.ident is not None:
+                thread.join(5)
+    assert progressed, 'shutdown waited for the replacement USE reply'
+    assert not worker.is_alive() and not reactor.is_alive()
+    assert not errors
+    assert pool.is_shutdown
+    assert candidate.is_closed
+    assert pool._connections.get(0) is None
 
 
 @pytest.mark.parametrize('independent_healthy_pool', [False, True])
@@ -1540,7 +1728,6 @@ def test_current_failure_contention_allows_other_host_response(
         host.signal_connection_failure = Mock(return_value=True)
 
     io_waiting = Event()
-    contended = Event()
     reactor_done = Event()
     response_lock = Lock()
     responses = []
@@ -1577,24 +1764,6 @@ def test_current_failure_contention_allows_other_host_response(
         return future
 
     cluster.on_down_potentially_blocking = Mock(side_effect=admit)
-    work_lock = pools[0]._lock
-
-    class ObservedLock:
-        def acquire(self, blocking=True):
-            if failure.ident == get_ident() and io_waiting.is_set():
-                contended.set()
-            return work_lock.acquire(blocking)
-
-        def release(self):
-            work_lock.release()
-
-        def __enter__(self):
-            self.acquire()
-
-        def __exit__(self, *args):
-            self.release()
-
-    pools[0]._lock = ObservedLock()
 
     def run(fn):
         try:
@@ -1604,10 +1773,7 @@ def test_current_failure_contention_allows_other_host_response(
 
     def process_responses():
         # One reactor must finish the other host's failure callback before
-        # it can deliver the USE response that releases the pool work lock.
-        if supersede == 'pool':
-            with session._lock, hosts[0].lock:
-                session._pools[hosts[0]] = successor
+        # it can deliver the pending USE response.
         pools[1].return_connection(connections[1])
         respond()
         reactor_done.set()
@@ -1619,8 +1785,14 @@ def test_current_failure_contention_allows_other_host_response(
     try:
         worker.start()
         assert io_waiting.wait(5)
+        if supersede == 'pool':
+            with session._lock, hosts[0].lock:
+                session._pools[hosts[0]] = successor
+        # The pending USE holds no pool work, so a failure on its pool
+        # completes without waiting for the reply.
         failure.start()
-        assert contended.wait(5)
+        failure.join(5)
+        assert not failure.is_alive(), 'failure waited for pending USE'
         reactor.start()
         assert reactor_done.wait(2), 'cross-host failure blocked reactor progress'
     finally:
@@ -1637,7 +1809,7 @@ def test_current_failure_contention_allows_other_host_response(
     assert all(connection.in_flight == 0 for connection in connections)
     for future in delivery_futures:
         future.result(timeout=5)
-    assert delivered == ([hosts[1]] if supersede else [hosts[1], hosts[0]])
+    assert delivered == ([hosts[1]] if supersede else [hosts[0], hosts[1]])
     assert hosts[0].is_up is bool(supersede)
     assert not hosts[1].is_up
     hosts[1].signal_connection_failure.assert_called_once()
