@@ -1797,6 +1797,42 @@ def test_current_shard_replacement_preserves_draining_requests(socket_pool):
     pool.shutdown()
 
 
+def test_replace_skips_slot_taken_after_reservation_check(socket_pool):
+    host, session, pool, original, candidate = socket_pool
+    winner = HashableMock(spec=Connection, features=ProtocolFeatures(shard_id=0))
+    # Another socket takes the slot between is_current() and the work lock.
+    pool._connections[0] = winner
+    connects = session.cluster.connection_factory.call_count
+    with patch.object(ConnectionFailureReservation, 'is_current',
+                      return_value=True):
+        pool._replace(original)
+
+    assert pool._connections == {0: winner}
+    assert not pool._replacement_connections
+    assert session.cluster.connection_factory.call_count == connects
+    assert not pool._connecting
+    pool._connections.clear()
+    pool.shutdown()
+
+
+def test_current_shard_replacement_closes_drained_connection(socket_pool):
+    host, session, pool, original, candidate = socket_pool
+    host.sharding_info = Mock(shards_count=1)
+    pool._get_shard_aware_endpoint = Mock(return_value=None)
+    original.orphaned_threshold_reached = True
+    original.in_flight = 1
+    original.orphaned_request_ids = {1}
+
+    pool._open_connection_to_missing_shard(0)
+
+    # Only orphaned requests remain: nothing to drain, close it right away.
+    assert pool._connections == {0: candidate}
+    assert original not in pool._trash
+    original.close.assert_called_once()
+    candidate.close.assert_not_called()
+    pool.shutdown()
+
+
 @pytest.mark.parametrize('completed_before_submit', [False, True])
 @pytest.mark.parametrize('outcome', ['success', 'failure', 'cancelled'])
 def test_completed_shard_work_is_not_retained(
