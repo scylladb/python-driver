@@ -1,0 +1,214 @@
+# Adapted from python-driver-matrix at dcb16da4c0c7f87e64fcc7751e3214343f6fc3b2.
+# Keep the runner pin and its version resolution/test steps in sync.
+name: Release integration matrix
+on:
+  workflow_call:
+    inputs:
+      release-version:
+        required: true
+        type: string
+permissions:
+  contents: read
+
+jobs:
+  integration-test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        scylla: [LATEST, PRIOR, LTS-LATEST, LTS-PRIOR]
+    env:
+      WORKSPACE: ${{ github.workspace }}
+      CCM_DIR: ${{ github.workspace }}/scylla-ccm
+      PYTHON_DRIVER_DIR: ${{ github.workspace }}/driver
+    steps:
+      - name: Checkout matrix
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: scylladb/python-driver-matrix
+          ref: dcb16da4c0c7f87e64fcc7751e3214343f6fc3b2
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Select Scylla version query
+        id: scylla-query
+        env:
+          SCYLLA_VERSION: ${{ matrix.scylla }}
+        run: |
+          set -euo pipefail
+
+          target="${SCYLLA_VERSION:-LATEST}"
+          filters=""
+          fallback_repo=""
+          needs_resolution=true
+
+          # get-version treats dots as version-component separators. The regex components below
+          # match only calendar-release Docker tags shaped like YYYY.MINOR.PATCH, for example
+          # 2026.1.4. The selector after "and" then chooses from those matching tags:
+          # LAST.LAST.LAST = newest patch in the newest minor of the newest calendar major,
+          # LAST-1 = the second-newest calendar release overall (robust global position filter
+          # that still resolves when the newest minor only has a single patch release),
+          # LAST.1.LAST = newest LTS patch in the newest calendar major, and LAST-1.1.LAST =
+          # newest LTS patch in the previous calendar major.
+          case "$target" in
+            LTS-LATEST)
+              filters='^[0-9]{4}$.^[0-9]+$.^[0-9]+$ and LAST.1.LAST'
+              ;;
+            LTS-PRIOR)
+              filters='^[0-9]{4}$.^[0-9]+$.^[0-9]+$ and LAST-1.1.LAST'
+              fallback_repo="scylladb/scylla-enterprise"
+              ;;
+            LATEST)
+              filters='^[0-9]{4}$.^[0-9]+$.^[0-9]+$ and LAST.LAST.LAST'
+              ;;
+            PRIOR)
+              filters='^[0-9]{4}$.^[0-9]+$.^[0-9]+$ and LAST-1'
+              ;;
+            *)
+              needs_resolution=false
+              ;;
+          esac
+
+          {
+            echo "target=$target"
+            echo "needs_resolution=$needs_resolution"
+            echo "repo=scylladb/scylla"
+            echo "fallback_repo=$fallback_repo"
+            echo "filters=$filters"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve Scylla version
+        if: ${{ steps.scylla-query.outputs.needs_resolution == 'true' }}
+        id: get-scylla-version
+        uses: scylladb-actions/get-version@a1dc4fedfb5684242148020b24e4150b1fe7ad08 # v0.4.5
+        with:
+          source: dockerhub-imagetag
+          repo: ${{ steps.scylla-query.outputs.repo }}
+          filters: ${{ steps.scylla-query.outputs.filters }}
+          github-token: ${{ github.token }}
+
+      - name: Resolve Scylla version fallback
+        if: ${{ steps.scylla-query.outputs.fallback_repo != '' && (steps.get-scylla-version.outputs.versions == '' || steps.get-scylla-version.outputs.versions == '[]') }}
+        id: get-scylla-version-fallback
+        uses: scylladb-actions/get-version@a1dc4fedfb5684242148020b24e4150b1fe7ad08 # v0.4.5
+        with:
+          source: dockerhub-imagetag
+          repo: ${{ steps.scylla-query.outputs.fallback_repo }}
+          filters: ${{ steps.scylla-query.outputs.filters }}
+          github-token: ${{ github.token }}
+
+      - name: Normalize inputs
+        id: resolve
+        env:
+          DRIVER_REF_INPUT: ${{ format('{0}-scylla', inputs.release-version) }}
+          SCYLLA_VERSION_TARGET: ${{ steps.scylla-query.outputs.target }}
+          SCYLLA_VERSION_NEEDS_RESOLUTION: ${{ steps.scylla-query.outputs.needs_resolution }}
+          SCYLLA_VERSION_RESOLVED: ${{ steps.get-scylla-version.outputs.versions }}
+          SCYLLA_VERSION_FALLBACK: ${{ steps.get-scylla-version-fallback.outputs.versions }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+
+          def first_version(versions_json: str) -> str:
+              if not versions_json:
+                  return ""
+              versions = json.loads(versions_json)
+              if isinstance(versions, str):
+                  return versions
+              if isinstance(versions, list):
+                  return versions[0] if versions else ""
+              raise SystemExit(f"Unexpected get-version output: {versions!r}")
+
+          def ccm_version(version: str) -> str:
+              if re.fullmatch(r"\d+(?:\.\d+)+", version):
+                  return f"release:{version}"
+              return version
+
+          driver_ref = os.environ["DRIVER_REF_INPUT"]
+          scylla_target = os.environ["SCYLLA_VERSION_TARGET"]
+          if os.environ["SCYLLA_VERSION_NEEDS_RESOLUTION"] == "true":
+              scylla_version = first_version(os.environ.get("SCYLLA_VERSION_RESOLVED", ""))
+              scylla_version = scylla_version or first_version(os.environ.get("SCYLLA_VERSION_FALLBACK", ""))
+              if not scylla_version:
+                  raise SystemExit(f"Unable to resolve Scylla version target {scylla_target}")
+          else:
+              scylla_version = scylla_target
+          scylla_version = ccm_version(scylla_version)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"driver_ref={driver_ref}\n")
+              fh.write(f"scylla_version_target={scylla_target}\n")
+              fh.write(f"scylla_version={scylla_version}\n")
+          PY
+
+      - name: Checkout launch commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: scylladb/python-driver
+          ref: ${{ github.sha }}
+          path: driver
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download candidate bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-candidate
+          path: ${{ runner.temp }}/candidate
+
+      - name: Load candidate locally for version-specific matrix patches
+        working-directory: driver
+        env:
+          RELEASE_VERSION: ${{ inputs.release-version }}
+        run: |
+          python3 - <<'PYTHON'
+          import json, os, pathlib, subprocess
+          candidate = pathlib.Path(os.environ['RUNNER_TEMP']) / 'candidate'
+          info = json.loads((candidate / 'candidate.json').read_text())
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+          assert info['baseline'] == os.environ['GITHUB_SHA']
+          assert info['version'] == os.environ['RELEASE_VERSION']
+          git('bundle', 'verify', str(candidate / 'source.bundle'))
+          git('fetch', str(candidate / 'source.bundle'), 'refs/heads/release-candidate')
+          assert git('rev-parse', 'FETCH_HEAD') == info['candidate']
+          assert git('rev-parse', 'FETCH_HEAD^{tree}') == info['tree']
+          git('checkout', '--detach', info['candidate'])
+          git('-c', 'tag.gpgSign=false', 'tag', info['tag'], info['candidate'])
+          PYTHON
+
+      - name: Checkout CCM repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: scylladb/scylla-ccm
+          ref: ad068edc3524309b54428c1babb31ab7e7af2c89
+          path: scylla-ccm
+          persist-credentials: false
+
+      - name: Run integration tests
+        env:
+          DRIVER_REF: ${{ steps.resolve.outputs.driver_ref }}
+          DRIVER_TYPE: scylla
+          PROTOCOLS: '3,4'
+          SCYLLA_VERSION: ${{ steps.resolve.outputs.scylla_version }}
+          TESTS: tests.integration.standard
+        run: |
+          set -euo pipefail
+          versions="${DRIVER_REF:-1}"
+          args=(./scripts/run_test.sh python3 ./main.py "$PYTHON_DRIVER_DIR" --driver-type "$DRIVER_TYPE" --versions "$versions" --protocols "$PROTOCOLS" --scylla-version "$SCYLLA_VERSION")
+          if [ -n "$TESTS" ]; then
+            args+=(--tests "$TESTS")
+          fi
+          "${args[@]}"
+
+      - name: Retain integration reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-matrix-${{ matrix.scylla }}-${{ github.run_attempt }}
+          path: xunit/
+          if-no-files-found: warn
