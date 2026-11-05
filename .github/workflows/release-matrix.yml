@@ -24,7 +24,7 @@ jobs:
       PYTHON_DRIVER_DIR: ${{ github.workspace }}/driver
     steps:
       - name: Checkout matrix
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: scylladb/python-driver-matrix
           ref: dcb16da4c0c7f87e64fcc7751e3214343f6fc3b2
@@ -182,7 +182,7 @@ jobs:
           PYTHON
 
       - name: Checkout CCM repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: scylladb/scylla-ccm
           ref: ad068edc3524309b54428c1babb31ab7e7af2c89
