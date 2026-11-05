@@ -5,3 +5,4 @@ include cassandra/*.pyx
 include cassandra/*.pxd
 include cassandra/*.h
 graft build-release
+include scripts/release/release.py scripts/release/signing.py scripts/release/publisher.asc
