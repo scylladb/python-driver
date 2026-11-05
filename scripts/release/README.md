@@ -61,7 +61,13 @@ only missing packages for upload, then checks that PyPI exposes exactly the
 expected filenames and SHA-256 hashes. It pushes the retained signed commit and
 tag atomically using the protected publisher credential, without force.
 
-GitHub publication creates a draft, attaches all packages, signatures, checksums,
+Before dispatch, classify and verify merged PR labels as described in
+[CONTRIBUTING.rst](../../CONTRIBUTING.rst#github-releases-and-release-notes).
+Generated notes exclude `omit-from-release-notes`; publication does not wait for
+classification automatically.
+
+GitHub publication creates a draft with generated notes and asset-verification
+instructions, attaches all packages, signatures, checksums,
 state, signed bundle and public certificate, verifies asset digests, then
 publishes. Docs run explicitly at the signed commit only after the release's
 immutable flag and remote tag identity are verified. Automatic docs deployment
@@ -131,7 +137,8 @@ failed publication job is rerun and preparation still has its original outputs.
 It downloads the same signed state and never re-signs it. An expected checkpoint
 that disappears or cannot be read blocks the run instead of enabling signing.
 Existing PyPI files must match the original hashes; only missing files are
-uploaded. GitHub draft uploads resume at missing assets. Already published
+uploaded. GitHub draft uploads resume at missing assets without regenerating
+notes, including drafts not returned by the tag lookup. Already published
 releases must be immutable and complete. Existing signatures are never replaced,
 and existing tags are never moved.
 

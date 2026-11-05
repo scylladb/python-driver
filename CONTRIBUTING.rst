@@ -168,3 +168,71 @@ To run the benchmarks, pick one of the files under the ``benchmarks/`` dir and r
 There are a few options.  Use ``--help`` to see them all::
 
     uv run benchmarks/future_batches.py --help
+
+GitHub releases and release notes
+=================================
+
+Use the signed manual release workflow in ``.github/workflows/release.yml``.
+See ``scripts/release/README.md`` for validation, approval, publication and
+recovery instructions. This is the release pipeline; release-note filtering
+adds no separate publication path and does not change its test-skip inputs,
+signing, retained-state recovery or PyPI hash checks.
+
+After PyPI verification and signed history publication, the pipeline creates a
+GitHub draft with generated notes and the asset-verification instructions. It
+uploads and verifies the signed assets before publishing the immutable release.
+Reruns resume an existing draft, including one absent from the tag lookup, and
+preserve its notes. Existing published releases and notes are also preserved.
+PyPI publication and GitHub release creation are not atomic.
+
+The ``Classify release notes`` workflow uses ``actions/labeler`` and the
+filename rules in ``.github/labeler.yml`` to manage ``omit-from-release-notes``.
+Documentation (``docs/``, ``CONTRIBUTING.rst``), tests
+(``tests/``), the explicitly listed support files and workflows in ``.github/``,
+``.gitignore``, ``.gitattributes``, and the coverage/import-check scripts qualify
+when all changed files match this support-only union. The labeler configuration
+is the source of the exact allowlist. Documentation-site publication, including
+``.github/workflows/docs-pages.yml`` and ``docs/_utils/deploy.sh``, counts as
+support-only even when invoked after publication by the signed release workflow.
+Workflows that build or publish driver distributions or provide required release
+gates (including ``integration-tests.yml``), production code, runtime
+dependencies, packaging/build manifests, unknown paths, and mixed changes remain
+in the notes. ``README.rst`` supplies package metadata, so README-only
+documentation changes also remain in the notes.
+Titles, authors and broad ``chore``/``dependencies`` labels do not determine
+omission.
+
+Labeling runs when a PR opens, changes, reopens, is edited or closes.
+``sync-labels: true`` removes the omission label when filenames stop matching.
+The action reads the labeler configuration from the trusted workflow revision;
+it does not check out or execute code from the PR.
+
+Before manually dispatching a release, identify the merged PRs included since
+its previous release. Run ``Classify release notes`` manually on ``master`` with
+``pr_number`` for each PR needing classification or backfilling. For example::
+
+    gh workflow run label-release-notes.yml --ref master -f pr_number=123
+
+Wait for the labeling run to succeed, then review the changed files and actual
+labels. The labeler matches changed filenames; check rename origins manually
+when reviewing moves out of production paths::
+
+    gh api --paginate repos/scylladb/python-driver/pulls/123/files --jq '.[] | {filename, status, previous_filename}'
+    gh api --paginate repos/scylladb/python-driver/issues/123/labels --jq '.[].name'
+
+Confirm that production and mixed changes have no omission label. Rerun failed
+classification or correct incorrect labels before releasing. The release
+configuration excludes this label from generated notes, but publication does
+not wait for classification automatically. Existing published notes are
+preserved on reruns.
+
+``omit-from-release-notes`` controls GitHub release-note presentation. The local
+Jira caller skips add/remove events for this exact label and preserves other
+events. Existing Jira copies are not cleaned, and other synchronization paths
+may restore copied metadata.
+
+Run the focused release-helper checks from the repository root::
+
+    uv run pytest tests/unit/test_release_helpers.py
+    python3 -m unittest discover -s scripts/release -p 'test_*.py' -v
+    actionlint .github/workflows/label-release-notes.yml

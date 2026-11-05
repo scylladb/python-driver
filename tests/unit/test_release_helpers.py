@@ -113,6 +113,93 @@ class ReleaseVersionTests(unittest.TestCase):
 
 
 class ReleasePublicationGuardTests(unittest.TestCase):
+    def github_notes(self, hidden_draft=False):
+        state = {
+            "tag": "3.29.14-scylla",
+            "tag_object": "signed-tag",
+            "commit": "signed-commit",
+            "version": "3.29.14",
+        }
+        existing = {
+            "id": 1, "tag_name": state["tag"], "draft": True,
+            "immutable": True, "body": "Previously generated notes",
+        }
+        creations = []
+        listings = []
+
+        def api(endpoint, **kwargs):
+            if endpoint == "releases/tags/" + state["tag"]:
+                return None
+            if endpoint.startswith("releases?per_page=100&page="):
+                listings.append(endpoint)
+                if hidden_draft:
+                    if endpoint.endswith("page=1"):
+                        return [{"tag_name": "other"}] * 100
+                    return [existing.copy()]
+                return []
+            if endpoint == "releases/1/assets?per_page=100&page=1":
+                return []
+            if endpoint == "releases/1":
+                return existing.copy()
+            raise AssertionError(endpoint)
+
+        def gh(*args, payload=None, **kwargs):
+            if args[0] == "repos/scylladb/python-driver/releases":
+                creations.append(payload)
+                return existing.copy()
+            self.assertEqual(
+                args[0], "repos/scylladb/python-driver/releases/1"
+            )
+            self.assertEqual(payload, {"draft": False})
+            existing["draft"] = False
+            return None
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(release, "remote_ref", return_value="signed-tag"),
+            patch.object(release, "api", side_effect=api),
+            patch.object(release, "gh", side_effect=gh),
+        ):
+            release.github_release(Path(directory), state)
+        self.assertFalse(existing["draft"])
+        self.assertEqual(existing["body"], "Previously generated notes")
+        return creations, listings
+
+    def test_new_release_generates_notes_on_the_signed_draft(self):
+        creations, listings = self.github_notes()
+        self.assertEqual(len(creations), 1)
+        payload = creations[0]
+        self.assertTrue(payload["generate_release_notes"])
+        self.assertTrue(payload["draft"])
+        self.assertFalse(payload["prerelease"])
+        self.assertEqual(payload["tag_name"], "3.29.14-scylla")
+        self.assertEqual(payload["target_commitish"], "signed-commit")
+        self.assertIn("SHA256SUMS", payload["body"])
+        self.assertEqual(listings, ["releases?per_page=100&page=1"])
+
+    def test_hidden_draft_preserves_notes_past_first_page(self):
+        creations, listings = self.github_notes(hidden_draft=True)
+        self.assertEqual(creations, [])
+        self.assertEqual(listings, [
+            "releases?per_page=100&page=1", "releases?per_page=100&page=2",
+        ])
+
+    def test_failed_draft_listing_cannot_create_a_release(self):
+        with (
+            patch.object(release, "remote_ref", return_value="signed-tag"),
+            patch.object(release, "api", side_effect=[
+                None, release.Invalid("listing unavailable"),
+            ]),
+            patch.object(release, "gh") as gh,
+        ):
+            with self.assertRaisesRegex(
+                release.Invalid, "listing unavailable"
+            ):
+                release.github_release(Path("/unused"), {
+                    "tag": "3.29.14-scylla", "tag_object": "signed-tag",
+                })
+            gh.assert_not_called()
+
     def test_failed_publication_rerun_selects_existing_signed_checkpoint(self):
         with (
             patch.object(release, "restore", return_value=True) as restore,

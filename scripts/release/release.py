@@ -853,6 +853,16 @@ def github_release(directory, state):
     )
     existing = api("releases/tags/" + state["tag"], missing_ok=True)
     if existing is None:
+        # Tag lookup can omit drafts; retain an existing draft's notes and
+        # resume its asset uploads instead of creating another release.
+        existing = next(
+            (
+                item for item in pages("releases")
+                if item["tag_name"] == state["tag"]
+            ),
+            None,
+        )
+    if existing is None:
         existing = gh(
             "repos/" + REPOSITORY + "/releases",
             "--method",
@@ -869,6 +879,7 @@ def github_release(directory, state):
                 "SHA256SUMS.",
                 "draft": True,
                 "prerelease": False,
+                "generate_release_notes": True,
             },
         )
     require(
