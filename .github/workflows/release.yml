@@ -1,0 +1,220 @@
+name: Release ScyllaDB Python Driver
+
+on:
+  workflow_dispatch:
+    inputs:
+      release-version:
+        description: Stable version to release (X.Y.Z)
+        required: true
+        type: string
+      dry-run:
+        description: Build, test, sign and verify without publication
+        type: boolean
+        default: false
+      skip-tests:
+        description: Skip project tests (release helper tests always run)
+        type: boolean
+        default: false
+      skip-integration-matrix:
+        description: Skip the external driver integration matrix
+        type: boolean
+        default: false
+
+concurrency:
+  group: python-driver-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_VERSION: ${{ inputs.release-version }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      issues: read
+    outputs:
+      version: ${{ steps.prepare.outputs.version }}
+      retained: ${{ steps.prepare.outputs.retained }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Test trusted release helpers
+        run: python3 -m unittest discover -s scripts/release -p 'test_*.py' -v
+      - name: Validate launch, blockers and prepare metadata (or restore this run)
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release/release.py prepare
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.prepare.outputs.restored != 'true'
+        with:
+          name: release-candidate
+          path: ${{ runner.temp }}/candidate/
+          if-no-files-found: error
+          retention-days: 90
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.retained != 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/lib-build.yml
+    with:
+      source-bundle: release-candidate
+      ignore_tests: ${{ inputs.skip-tests }}
+
+  metadata:
+    needs: [prepare, build]
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.build.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: wheels-*
+          path: ${{ runner.temp }}/builds
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: source-dist
+          path: ${{ runner.temp }}/builds/source-dist
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: '3.13'
+          enable-cache: false
+      - name: Validate every platform artifact and package metadata
+        run: |
+          python3 scripts/release/release.py collect
+          uvx --from 'twine==6.2.0' twine check --strict "$RUNNER_TEMP"/pending/*
+
+  integration:
+    needs: prepare
+    if: ${{ !inputs.skip-integration-matrix && needs.prepare.outputs.retained != 'true' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-matrix.yml
+    with:
+      release-version: ${{ needs.prepare.outputs.version }}
+
+  sign:
+    needs: [prepare, build, metadata, integration]
+    if: >-
+      ${{ !cancelled() && needs.prepare.result == 'success' &&
+          (needs.prepare.outputs.retained == 'true' ||
+           (needs.build.result == 'success' && needs.metadata.result == 'success' &&
+            (needs.integration.result == 'success' ||
+             (inputs.skip-integration-matrix && needs.integration.result == 'skipped')))) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # Dry runs use the same signing certificate without a reviewer gate. This
+    # master-only environment contains signing secrets, never the publisher token.
+    environment: ${{ inputs.dry-run && 'release-dry-run' || 'release' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Preserve trusted helpers from launch commit
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-helpers"
+          cp scripts/release/*.py scripts/release/publisher.asc "$RUNNER_TEMP/release-helpers/"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-candidate
+          path: ${{ runner.temp }}/candidate
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: needs.prepare.outputs.retained == 'true'
+        with:
+          name: release-state
+          path: ${{ runner.temp }}/signed-state
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: needs.prepare.outputs.retained != 'true'
+        with:
+          pattern: wheels-*
+          path: ${{ runner.temp }}/builds
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: needs.prepare.outputs.retained != 'true'
+        with:
+          name: source-dist
+          path: ${{ runner.temp }}/builds/source-dist
+      - name: Sign tested tree, tag, packages and checksum manifest
+        if: needs.prepare.outputs.retained != 'true'
+        env:
+          RELEASE_GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          RELEASE_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: python3 "$RUNNER_TEMP/release-helpers/release.py" sign
+      - name: Verify retained state with public certificate only
+        run: python3 "$RUNNER_TEMP/release-helpers/release.py" verify
+      # Publication cannot start unless this immutable recovery checkpoint succeeds.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: needs.prepare.outputs.retained != 'true'
+        with:
+          name: release-state
+          path: ${{ runner.temp }}/signed-state/
+          if-no-files-found: error
+          retention-days: 90
+
+  publish:
+    needs: sign
+    if: ${{ !cancelled() && needs.sign.result == 'success' && !inputs.dry-run }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+      issues: read
+      id-token: write
+    outputs:
+      commit: ${{ steps.preflight.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Preserve trusted helpers from launch commit
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-helpers"
+          cp scripts/release/*.py scripts/release/publisher.asc "$RUNNER_TEMP/release-helpers/"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-state
+          path: ${{ runner.temp }}/signed-state
+      - name: Verify publisher bypass, signed state, blockers, baseline and PyPI hashes
+        id: preflight
+        env:
+          GH_TOKEN: ${{ secrets.PUBLISHER_TOKEN }}
+        run: python3 "$RUNNER_TEMP/release-helpers/release.py" prepublish --pending pending
+      # OIDC belongs to this top-level workflow. Keep attestations enabled and
+      # upload only files whose absence was verified against PyPI JSON metadata.
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        if: steps.preflight.outputs.missing == 'true'
+        with:
+          packages-dir: pending/
+          attestations: true
+      - name: Verify PyPI, push retained history and publish immutable GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.PUBLISHER_TOKEN }}
+        run: python3 "$RUNNER_TEMP/release-helpers/release.py" finish
+
+  docs:
+    needs: publish
+    if: ${{ !cancelled() && needs.publish.result == 'success' && !inputs.dry-run }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/docs-pages.yml
+    with:
+      release-commit: ${{ needs.publish.outputs.commit }}

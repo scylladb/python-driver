@@ -21,6 +21,12 @@ on:
         required: false
         default: ""
 
+      source-bundle:
+        description: "Artifact containing source.bundle and candidate.json from this run"
+        type: string
+        required: false
+        default: ""
+
       ignore_tests:
         description: "Don't run tests"
         type: boolean
@@ -88,6 +94,32 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.target_tag || github.sha }}
+          persist-credentials: false
+
+      - name: Download prepared source
+        if: inputs.source-bundle != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.source-bundle }}
+          path: ${{ runner.temp }}/release-candidate
+
+      - name: Check out prepared candidate
+        if: inputs.source-bundle != ''
+        shell: bash
+        run: |
+          python - <<'PYTHON'
+          import json, os, pathlib, subprocess
+          directory = pathlib.Path(os.environ['RUNNER_TEMP']) / 'release-candidate'
+          info = json.loads((directory / 'candidate.json').read_text())
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+          assert info['baseline'] == os.environ['GITHUB_SHA']
+          git('bundle', 'verify', str(directory / 'source.bundle'))
+          git('fetch', str(directory / 'source.bundle'), 'refs/heads/release-candidate')
+          assert git('rev-parse', 'FETCH_HEAD') == info['candidate']
+          assert git('rev-parse', 'FETCH_HEAD^{tree}') == info['tree']
+          git('checkout', '--detach', info['candidate'])
+          PYTHON
 
       - name: Set build concurrency to the runner's CPU count
         shell: bash
@@ -195,6 +227,8 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wheels-${{ matrix.target }}-${{ matrix.os }}
+          overwrite: true
+          if-no-files-found: error
           path: ./wheelhouse/*.whl
 
   build-sdist:
@@ -205,6 +239,32 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.target_tag || github.sha }}
+          persist-credentials: false
+
+      - name: Download prepared source
+        if: inputs.source-bundle != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.source-bundle }}
+          path: ${{ runner.temp }}/release-candidate
+
+      - name: Check out prepared candidate
+        if: inputs.source-bundle != ''
+        shell: bash
+        run: |
+          python - <<'PYTHON'
+          import json, os, pathlib, subprocess
+          directory = pathlib.Path(os.environ['RUNNER_TEMP']) / 'release-candidate'
+          info = json.loads((directory / 'candidate.json').read_text())
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+          assert info['baseline'] == os.environ['GITHUB_SHA']
+          git('bundle', 'verify', str(directory / 'source.bundle'))
+          git('fetch', str(directory / 'source.bundle'), 'refs/heads/release-candidate')
+          assert git('rev-parse', 'FETCH_HEAD') == info['candidate']
+          assert git('rev-parse', 'FETCH_HEAD^{tree}') == info['tree']
+          git('checkout', '--detach', info['candidate'])
+          PYTHON
 
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
@@ -218,4 +278,6 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: source-dist
+          overwrite: true
+          if-no-files-found: error
           path: dist/*.tar.gz
