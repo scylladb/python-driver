@@ -127,6 +127,18 @@ Performance Improvements
 * Cache parameterized CQL types, avoid temporary format strings when packing
   routing keys, and reduce per-frame memory overhead (#794, #799, #802).
 
+Removed
+-------
+* DataStax Enterprise (DSE)-only schema parsing has been removed:
+  ``SchemaParserDSE60``, ``SchemaParserDSE67``, ``SchemaParserDSE68``,
+  ``TableMetadataDSE68``, ``VertexMetadata``, ``EdgeMetadata``,
+  ``KeyspaceMetadata.graph_engine`` (including the ``graph_engine``
+  constructor argument and ``KeyspaceMetadata.is_graph_enabled``) and
+  ``RLACTableExtension``. ScyllaDB never reports ``dse_version``, so these were
+  never used against it. The ``dse_version`` argument of
+  ``get_schema_parser()`` is now ignored, and the driver no longer queries
+  ``system.local.dse_version`` when ``release_version`` is unknown.
+
 3.29.12
 ========
 Sep 26, 2026
