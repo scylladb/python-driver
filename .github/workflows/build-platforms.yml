@@ -1,0 +1,37 @@
+name: Optional PR platform tests
+
+on:
+  pull_request:
+    branches:
+      - master
+    types: [opened, synchronize, reopened, labeled]
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS wheel builds and tests
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'ci-macos') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'ci-macos')
+    concurrency:
+      group: pr-macos-${{ github.ref }}
+      cancel-in-progress: true
+    uses: ./.github/workflows/lib-build.yml
+    with:
+      target: macos-x86,macos-arm
+      build-sdist: false
+
+  windows:
+    name: Windows wheel builds and tests
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'ci-windows') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'ci-windows')
+    concurrency:
+      group: pr-windows-${{ github.ref }}
+      cancel-in-progress: true
+    uses: ./.github/workflows/lib-build.yml
+    with:
+      target: windows
+      build-sdist: false

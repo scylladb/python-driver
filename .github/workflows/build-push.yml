@@ -1,10 +1,7 @@
-name: Build wheels on push
+name: Build wheels on tag
 
 on:
   push:
-    branches:
-      - master
-      - 'branch-**'
     tags:
       - '*.*.*-scylla'
   workflow_dispatch:
