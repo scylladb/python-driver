@@ -544,6 +544,10 @@ _PREPARED_WITH_KEYSPACE_FLAG = 0x01
 _PAGE_SIZE_BYTES_FLAG = 0x40000000
 _PAGING_OPTIONS_FLAG = 0x80000000
 
+# params at least this big are written directly, not buffered
+# (see _QueryMessage._write_query_params)
+_WRITE_QUERY_PARAMS_DIRECT_THRESHOLD = 256
+
 
 class _QueryMessage(_MessageType):
 
@@ -603,9 +607,27 @@ class _QueryMessage(_MessageType):
             write_byte(f, flags)
 
         if self.query_params is not None:
-            write_short(f, len(self.query_params))
+            # Batch small params into one f.write() instead of 2*N+1 calls via
+            # write_value(). Large values are written directly, so the
+            # transient buffer stays bounded (< 256 bytes per param).
+            _int32_pack = int32_pack
+            parts = [uint16_pack(len(self.query_params))]
             for param in self.query_params:
-                write_value(f, param)
+                if param is None:
+                    parts.append(_int32_pack(-1))
+                elif param is _UNSET_VALUE:
+                    parts.append(_int32_pack(-2))
+                else:
+                    n = len(param)
+                    parts.append(_int32_pack(n))
+                    if n >= _WRITE_QUERY_PARAMS_DIRECT_THRESHOLD:
+                        f.write(b"".join(parts))
+                        f.write(param)
+                        parts = []
+                    else:
+                        parts.append(param)
+            if parts:
+                f.write(b"".join(parts))
         if self.fetch_size:
             write_int(f, self.fetch_size)
         if self.paging_state:
@@ -681,8 +703,8 @@ class ExecuteMessage(_QueryMessage):
                 and protocol_features is not None
                 and protocol_features.use_metadata_id)
 
-    def _write_query_params(self, f, protocol_version, protocol_features=None):
-        super(ExecuteMessage, self)._write_query_params(f, protocol_version, protocol_features)
+    # _write_query_params inherited from _QueryMessage; removed redundant
+    # pass-through override to avoid extra MRO lookup per call.
 
     def send_body(self, f, protocol_version, protocol_features=None):
         write_string(f, self.query_id)
