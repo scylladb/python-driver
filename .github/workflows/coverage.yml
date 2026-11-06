@@ -17,27 +17,29 @@ on:
       - .github/pull_request_template.md
       - .github/workflows/docs-*
   pull_request:
-    paths-ignore:
-      - docs/**
-      - examples/**
-      - .gitignore
-      - '**/*.rst'
-      - '**/*.md'
-      - '*.ini'
-      - LICENSE
-      - .github/dependabot.yml
-      - .github/pull_request_template.md
-      - .github/workflows/docs-*
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      run-on-pr:
+        description: 'Run full coverage when called by opt-in pre-release CI'
+        type: boolean
+        default: false
+    secrets:
+      CODECOV_TOKEN:
+        required: false
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: coverage-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
 
 jobs:
   coverage:
     name: Measure code coverage
-    if: "!contains(github.event.pull_request.labels.*.name, 'disable-coverage-tests')"
+    # Report a skipped success on PRs so this check can be required for queue
+    # entry. Test merge groups and retain branch baselines on protected pushes.
+    if: inputs.run-on-pr || github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -96,10 +98,8 @@ jobs:
 
     # No `if: always()` here: only a run in which every step above passed
     # uploads. scripts/coverage.sh writes its reports even when a test fails,
-    # and on master such a partial report would become the baseline later pull
-    # requests are compared against. Pull requests from forks get no secrets
-    # and upload without a token; neither that nor a Dependabot run, which gets
-    # no CODECOV_TOKEN, fails the job if Codecov refuses the upload.
+    # so only publish complete coverage measurements. Opt-in fork PRs may run
+    # without a Codecov token.
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
       with:

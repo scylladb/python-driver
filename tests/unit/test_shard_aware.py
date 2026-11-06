@@ -95,6 +95,10 @@ def hang_guard(capfd, pytestconfig):
     os.close(stderr)
 
 
+# PyPy on Windows ships a no-op faulthandler stub without dump_traceback.
+# It cannot terminate the deliberately hung subprocesses in these self-tests.
+@pytest.mark.skipif(not hasattr(faulthandler, "dump_traceback"),
+                    reason="Native faulthandler watchdog is unavailable")
 @pytest.mark.parametrize("body", [
     # A worker outlives its future timeout and never finishes.
     """
