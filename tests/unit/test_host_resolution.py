@@ -14,7 +14,7 @@
 
 from collections import deque
 from concurrent.futures import Future
-from threading import RLock
+from threading import Event, RLock
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
@@ -82,6 +82,11 @@ def routed_session(request):
         cluster.connection_class.initialize_reactor()
 
         def bound_result_wait(future):
+            # ResponseFuture creates its completion Event lazily, in result().
+            # Create it here so that the wait can be bounded.
+            with future._callback_lock:
+                if future._event is None:
+                    future._event = Event()
             wait = future._event.wait
 
             def wait_with_deadline(timeout=None):
