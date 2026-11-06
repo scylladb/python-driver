@@ -412,13 +412,27 @@ class BatchStatementTest(unittest.TestCase):
         return b"".join(Statement()._key_parts_packed([Int32Type.serialize(v, 4) for v in values]))
 
     def test_routing_statement_with_composite_partition_key(self):
-        """The routing key of a composite partition key is packed as for routing."""
+        """
+        The routing key of a composite partition key is packed as for routing.
+        It's the routing key of the batch, so the batch doesn't keep a copy.
+        """
         batch = BatchStatement()
         batch.add(self._prepare_composite(), (1, 2, 3))
 
         routing_statement = batch._get_routing_statement()
         assert routing_statement.index == 0
+        assert routing_statement.routing_key is batch.routing_key
         assert routing_statement.routing_key == self._packed_routing_key(1, 3)
+
+    def test_routing_statement_with_composite_partition_key_shared_by_batches(self):
+        """Batches of the same bound statement share its routing key."""
+        bound = self._prepare_composite().bind((1, 2, 3))
+        batches = [BatchStatement() for _ in range(3)]
+        for batch in batches:
+            batch.add(bound)
+
+        for batch in batches:
+            assert batch._get_routing_statement().routing_key is bound.routing_key
 
     def test_routing_statement_with_composite_partition_key_and_explicit_routing_key(self):
         """
@@ -428,6 +442,22 @@ class BatchStatementTest(unittest.TestCase):
         explicit_routing_key = Int32Type.serialize(7, 4)
         batch = BatchStatement()
         batch.add(BoundStatement(self._prepare_composite(), routing_key=explicit_routing_key).bind((1, 2, 3)))
+
+        assert batch.routing_key is explicit_routing_key
+        assert batch._get_routing_statement().routing_key == self._packed_routing_key(1, 3)
+
+    def test_routing_statement_with_composite_partition_key_and_routing_key_set_after_it_was_computed(self):
+        """
+        The routing key the statement computed is replaced with another one,
+        but the server computes the token from pk1 and pk2: the routing hint
+        still describes their partition.
+        """
+        bound = self._prepare_composite().bind((1, 2, 3))
+        assert bound.routing_key == self._packed_routing_key(1, 3)
+        explicit_routing_key = self._packed_routing_key(7, 8)
+        bound._set_routing_key(explicit_routing_key)
+        batch = BatchStatement()
+        batch.add(bound)
 
         assert batch.routing_key is explicit_routing_key
         assert batch._get_routing_statement().routing_key == self._packed_routing_key(1, 3)
@@ -444,6 +474,19 @@ class BatchStatementTest(unittest.TestCase):
         batch.add(bound)
 
         assert batch._get_routing_statement().routing_key == self._packed_routing_key(4, 6)
+
+    def test_routing_statement_with_composite_partition_key_bound_again_before_routing(self):
+        """
+        A statement bound again before its routing key was computed still
+        shares it with the batch.
+        """
+        bound = self._prepare_composite().bind((1, 2, 3))
+        bound.bind((4, 5, 6))
+        batch = BatchStatement()
+        batch.add(bound)
+
+        assert batch._get_routing_statement().routing_key is batch.routing_key
+        assert batch.routing_key == self._packed_routing_key(4, 6)
 
     def test_routing_statement_with_composite_partition_key_bound_again_between_batches(self):
         """
@@ -543,16 +586,18 @@ class BoundStatementServerRoutingKeyTest(unittest.TestCase):
     """
     BoundStatement._server_routing_key() returns the routing key the server
     computes the token from: the values at the partition key bind indices of
-    the PREPARED metadata.
+    the PREPARED metadata. It reuses routing_key when that's the same key.
     """
 
     _prepare_composite = staticmethod(BatchStatementTest._prepare_composite)
     _packed_routing_key = staticmethod(BatchStatementTest._packed_routing_key)
 
-    def test_routing_key_from_the_server_indices(self):
+    def test_reuses_routing_key_computed_from_the_server_indices(self):
         bound = self._prepare_composite().bind((1, 2, 3))
 
-        assert bound._server_routing_key() == self._packed_routing_key(1, 3)
+        server_routing_key = bound._server_routing_key()
+        assert server_routing_key is bound.routing_key
+        assert server_routing_key == self._packed_routing_key(1, 3)
 
     def test_single_component_partition_key_is_the_bound_value(self):
         bound = BatchStatementTest._make_keyed_prepared_statement('tbl').bind((5,))
@@ -574,12 +619,97 @@ class BoundStatementServerRoutingKeyTest(unittest.TestCase):
         assert bound._server_routing_key() == self._packed_routing_key(1, 3)
         assert bound.routing_key is explicit_routing_key
 
+    def test_reuses_routing_key_computed_again_after_it_was_deleted(self):
+        bound = self._prepare_composite().bind((1, 2, 3))
+        computed_routing_key = bound.routing_key
+        bound._del_routing_key()
+
+        server_routing_key = bound._server_routing_key()
+        assert server_routing_key is bound.routing_key
+        assert server_routing_key is not computed_routing_key
+        assert server_routing_key == self._packed_routing_key(1, 3)
+
     def test_bound_again_after_routing_key_was_computed(self):
         bound = self._prepare_composite().bind((1, 2, 3))
         assert bound._server_routing_key() == self._packed_routing_key(1, 3)
         bound.bind((4, 5, 6))
 
         assert bound._server_routing_key() == self._packed_routing_key(4, 6)
+
+    def test_bound_again_before_routing_key_was_computed(self):
+        bound = self._prepare_composite().bind((1, 2, 3))
+        bound.bind((4, 5, 6))
+
+        server_routing_key = bound._server_routing_key()
+        assert server_routing_key is bound.routing_key
+        assert server_routing_key == self._packed_routing_key(4, 6)
+
+    def test_doesnt_reuse_routing_key_of_another_partition(self):
+        """
+        When routing_key isn't the routing key the server computes the token
+        from, the latter is packed from the values instead.
+        """
+        prepared = self._prepare_composite()
+        reordered = self._prepare_composite()
+        reordered.routing_key_indexes = [2, 0]
+        no_indexes = self._prepare_composite()
+        no_indexes.routing_key_indexes = None
+        bound_again = prepared.bind((4, 5, 6))
+        bound_again.routing_key
+        bound_again.bind((1, 2, 3))
+        set_after_computed = prepared.bind((1, 2, 3))
+        set_after_computed.routing_key
+        set_after_computed._set_routing_key(self._packed_routing_key(7, 8))
+        cases = {
+            'other routing key indexes': reordered.bind((1, 2, 3)),
+            'no routing key indexes': no_indexes.bind((1, 2, 3)),
+            'explicit routing key': BoundStatement(prepared, routing_key=Int32Type.serialize(7, 4)).bind((1, 2, 3)),
+            'bound again after routing key was computed': bound_again,
+            'routing key set after it was computed': set_after_computed,
+        }
+        for case, bound in cases.items():
+            with self.subTest(case):
+                server_routing_key = bound._server_routing_key()
+
+                assert server_routing_key == self._packed_routing_key(1, 3)
+                assert server_routing_key != bound.routing_key
+
+    def test_doesnt_reuse_equal_routing_key_computed_elsewhere(self):
+        """
+        Whether routing_key is reused depends on where it comes from, not on
+        its bytes: a routing key that equals the one the server computes the
+        token from, but comes from elsewhere, isn't reused.
+        """
+        prepared = self._prepare_composite()
+        reordered = self._prepare_composite()
+        reordered.routing_key_indexes = [2, 0]
+        bound_again = prepared.bind((1, 2, 3))
+        bound_again.routing_key
+        bound_again.bind((1, 5, 3))
+        bound_again_with_same_values = prepared.bind((1, 2, 3))
+        bound_again_with_same_values.routing_key
+        bound_again_with_same_values.bind((1, 2, 3))
+        set_after_computed = prepared.bind((1, 2, 3))
+        set_after_computed.routing_key
+        set_after_computed._set_routing_key(self._packed_routing_key(1, 3))
+        cases = {
+            # pk1 == pk2, so the reordered routing key has the same bytes.
+            'other routing key indexes': (reordered.bind((1, 2, 1)), self._packed_routing_key(1, 1)),
+            'explicit routing key': (
+                BoundStatement(prepared, routing_key=self._packed_routing_key(1, 3)).bind((1, 2, 3)),
+                self._packed_routing_key(1, 3)),
+            # Only the column outside the partition key changes.
+            'bound again after routing key was computed': (bound_again, self._packed_routing_key(1, 3)),
+            'bound again with the same values': (bound_again_with_same_values, self._packed_routing_key(1, 3)),
+            'routing key set after it was computed': (set_after_computed, self._packed_routing_key(1, 3)),
+        }
+        for case, (bound, expected) in cases.items():
+            with self.subTest(case):
+                server_routing_key = bound._server_routing_key()
+
+                assert server_routing_key == expected
+                assert server_routing_key == bound.routing_key
+                assert server_routing_key is not bound.routing_key
 
     def test_none_without_a_partition_key_value(self):
         bound = self._prepare_composite().bind((None, 2, 3))
