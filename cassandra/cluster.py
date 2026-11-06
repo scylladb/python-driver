@@ -2509,9 +2509,13 @@ class Cluster(object):
 
     def _start_reconnector(self, host, is_host_addition,
                            on_add_reconnection=None, start=True,
-                           down_event_generation=None, restart=False):
+                           down_event_generation=None, restart=False,
+                           addition_token=None):
         with host.lock:
             if not self._lifecycle.down_is_current(host, down_event_generation):
+                return None
+            if (addition_token is not None and
+                    not self._lifecycle.addition_is_current(host, addition_token)):
                 return None
             if restart and (host.is_up is not False or
                             host._currently_handling_node_up or
@@ -2540,6 +2544,9 @@ class Cluster(object):
         # not leave retry work attached to a terminal Host object.
         with host.lock:
             if not self._lifecycle.down_is_current(host, down_event_generation):
+                return None
+            if (addition_token is not None and
+                    not self._lifecycle.addition_is_current(host, addition_token)):
                 return None
             if restart and (host.is_up is not False or
                             host._currently_handling_node_up or
@@ -2887,7 +2894,7 @@ class Cluster(object):
                     pending_reconnector = self._start_reconnector(
                         host, is_host_addition=True,
                         on_add_reconnection=on_add_reconnection,
-                        start=False)
+                        start=False, addition_token=addition_token)
 
                 # Reconcile only after attempting every partial replacement
                 # pool removal and establishing retry ownership. Freeze the
