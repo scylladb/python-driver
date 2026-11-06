@@ -22,7 +22,7 @@ on:
         description: "Target os to build for: linux,macos,windows"
         type: string
         required: false
-        default: "linux,macos-x86,macos-arm,windows,linux-aarch64"
+        default: "linux,macos-arm,windows,linux-aarch64"
 
       target_tag:
         description: "Publish particular tag"
