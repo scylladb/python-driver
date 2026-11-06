@@ -149,11 +149,23 @@ this reason. Modules that are Cython-only with no pure-Python fallback
 (``obj_parser``, ``numpy_parser``, ``row_parser``, and similar) are not built
 at all in that mode, so they are not measured by this script.
 
-CI runs the same script, integration suite included, in
-``.github/workflows/coverage.yml`` and uploads ``coverage.xml`` from every
-passing run to `Codecov <https://codecov.io/gh/scylladb/python-driver>`_,
-which comments the coverage delta on the pull request. Its statuses are
-informational, so a drop never blocks a merge.
+CI runs the same script, integration suite included, for merge-queue entries
+and manual runs through ``.github/workflows/coverage.yml``. Ordinary PR runs
+report a skipped coverage check without running the suite, allowing the same
+check to be required for
+queue entry. The opt-in ``pre-release-ci`` workflow also runs full coverage.
+Merge-queue runs test the combined merge-group commit and are not disabled by
+PR labels. Passing runs upload ``coverage.xml`` to
+`Codecov <https://codecov.io/gh/scylladb/python-driver>`_. Codecov's coverage
+threshold statuses remain informational.
+
+Ordinary code PRs run the full driver integration suites once against
+``release:2026.1.13`` using Python 3.13, libev, and the compiled driver.
+Merge-queue coverage adds the pure-Python driver paths on the combined commit,
+alongside Linux x86_64 and ARM64 wheel/unit tests. The full integration
+interpreter/reactor matrix is reserved for pre-release and manual runs.
+Branch pushes do not automatically repeat these test workflows. See
+``.github/PRE_RELEASE_CI.md`` for the stages and optional platform labels.
 
 Running the Benchmarks
 ======================

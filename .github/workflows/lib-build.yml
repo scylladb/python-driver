@@ -39,6 +39,12 @@ on:
         required: false
         default: false
 
+      build-sdist:
+        description: 'Build and upload the source distribution'
+        type: boolean
+        required: false
+        default: true
+
 jobs:
   prepare-matrix:
     name: "Prepare matrix to run for ${{ inputs.python-version }} on `${{ inputs.target }}`"
@@ -233,6 +239,7 @@ jobs:
 
   build-sdist:
     name: Build source distribution
+    if: inputs.build-sdist
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
