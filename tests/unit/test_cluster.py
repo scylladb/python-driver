@@ -871,7 +871,7 @@ class ClusterTest(unittest.TestCase):
             excluded_host=host, hosts=ANY)
         cluster._start_reconnector.assert_called_once_with(
             host, is_host_addition=True,
-            on_add_reconnection=ANY, start=False)
+            on_add_reconnection=ANY, start=False, addition_token=ANY)
         listener.on_add.assert_not_called()
 
     def _replacement_callback_failure_setup(self):
@@ -922,6 +922,8 @@ class ClusterTest(unittest.TestCase):
 
         def install(*args, **kwargs):
             handler = start_reconnector(*args, **kwargs)
+            if handler is None:
+                return None
             handler.start = Mock(wraps=handler.start)
             handler.cancel = Mock(wraps=handler.cancel)
             events.attach_mock(handler.start, 'start')
@@ -995,7 +997,8 @@ class ClusterTest(unittest.TestCase):
                             .kwargs['hosts'] is snapshot)
                 state.cluster._start_reconnector.assert_called_once_with(
                     state.host, is_host_addition=True,
-                    on_add_reconnection=ANY, start=False)
+                    on_add_reconnection=ANY, start=False,
+                    addition_token=ANY)
                 assert state.host._reconnection_handler is state.reconnector
                 state.reconnector.start.assert_called_once_with()
                 state.reconnector.cancel.assert_not_called()
@@ -1020,6 +1023,50 @@ class ClusterTest(unittest.TestCase):
         state.reconnector.cancel.assert_called_once_with()
         newer_handler.cancel.assert_not_called()
         assert state.host._reconnection_handler is newer_handler
+
+    def test_replacement_recovery_cannot_install_after_supersession(self):
+        for stage, action in (('before_start', 'add'),
+                              ('before_start', 'up'),
+                              ('connection_factory', 'add'),
+                              ('connection_factory', 'up')):
+            with self.subTest(stage=stage, action=action):
+                state = self._replacement_callback_failure_setup()
+                cluster, host = state.cluster, state.host
+                newer_handler = Mock()
+
+                def supersede():
+                    if action == 'add':
+                        cluster._lifecycle.claim_addition(host)
+                    else:
+                        assert cluster._lifecycle.begin_up(host)
+                    host.get_and_set_reconnection_handler(newer_handler)
+
+                if stage == 'before_start':
+                    install = cluster._start_reconnector.side_effect
+
+                    def supersede_then_install(*args, **kwargs):
+                        supersede()
+                        return install(*args, **kwargs)
+
+                    cluster._start_reconnector.side_effect = (
+                        supersede_then_install)
+                else:
+                    def supersede_during_factory(_host):
+                        supersede()
+                        return Mock()
+
+                    cluster._make_connection_factory.side_effect = (
+                        supersede_during_factory)
+
+                state.future.set_result(False)
+
+                cluster._start_reconnector.assert_called_once()
+                assert host._reconnection_handler is newer_handler
+                newer_handler.cancel.assert_not_called()
+                assert state.reconnector is None
+                cluster.scheduler.schedule.assert_not_called()
+                for session in state.sessions:
+                    session.update_created_pools.assert_not_called()
 
     def test_replacement_recovery_stops_when_retired_during_callback(self):
         for action in ('remove', 'shutdown'):
@@ -1491,7 +1538,8 @@ class ClusterTest(unittest.TestCase):
         aggregate_reconnector = Mock()
 
         def install_reconnector(host, is_host_addition,
-                                on_add_reconnection=None, start=True):
+                                on_add_reconnection=None, start=True,
+                                addition_token=None):
             old_reconnector = host.get_and_set_reconnection_handler(
                 aggregate_reconnector)
             if old_reconnector:
@@ -1557,7 +1605,7 @@ class ClusterTest(unittest.TestCase):
             host, True, ANY, on_add_reconnection=ANY)
         cluster._start_reconnector.assert_called_once_with(
             host, is_host_addition=True,
-            on_add_reconnection=ANY, start=False)
+            on_add_reconnection=ANY, start=False, addition_token=ANY)
         existing_reconnector.cancel.assert_called_once_with()
         aggregate_reconnector.start.assert_called_once_with()
         assert host._reconnection_handler is aggregate_reconnector
@@ -1609,7 +1657,7 @@ class ClusterTest(unittest.TestCase):
             excluded_host=host, hosts=ANY)
         cluster._start_reconnector.assert_called_once_with(
             host, is_host_addition=True,
-            on_add_reconnection=ANY, start=False)
+            on_add_reconnection=ANY, start=False, addition_token=ANY)
 
     def test_pool_creation_cannot_publish_after_host_removal(self):
         cluster = Cluster()
