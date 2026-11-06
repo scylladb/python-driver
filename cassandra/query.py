@@ -796,6 +796,12 @@ class BoundStatement(Statement):
             return None
         if len(parts) == 1:
             return parts[0]
+        if self._routing_key is None and self.prepared_statement.routing_key_indexes == indexes:
+            # Without a routing key of the user's, routing_key is packed from
+            # the same indices and values, and cached until the next bind(). A
+            # batch routed by this statement keeps it anyway: reuse it rather
+            # than keep a copy.
+            return self.routing_key
         return b"".join(self._key_parts_packed(parts))
 
     def is_lwt(self):
