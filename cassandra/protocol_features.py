@@ -25,12 +25,13 @@ class ProtocolFeatures(object):
     tablets_routing_v2 = False
     lwt_info = None
     use_metadata_id = False
+    is_scylla = False
 
     # Keyword-only so that independently developed protocol extensions can add
     # new fields without conflicting over positional-argument order.
     def __init__(self, *, rate_limit_error=None, shard_id=0, sharding_info=None,
                  tablets_routing_v1=False, tablets_routing_v2=False, lwt_info=None,
-                 use_metadata_id=False):
+                 use_metadata_id=False, is_scylla=False):
         self.rate_limit_error = rate_limit_error
         self.shard_id = shard_id
         self.sharding_info = sharding_info
@@ -38,6 +39,7 @@ class ProtocolFeatures(object):
         self.tablets_routing_v2 = tablets_routing_v2
         self.lwt_info = lwt_info
         self.use_metadata_id = use_metadata_id
+        self.is_scylla = is_scylla
 
     @staticmethod
     def parse_from_supported(supported):
@@ -47,9 +49,31 @@ class ProtocolFeatures(object):
         tablets_routing_v2 = ProtocolFeatures.parse_tablets_v2_info(supported)
         lwt_info = ProtocolFeatures.parse_lwt_info(supported)
         use_metadata_id = ProtocolFeatures.parse_use_metadata_id(supported)
+        is_scylla = ProtocolFeatures.detect_scylla(supported, sharding_info)
         return ProtocolFeatures(rate_limit_error=rate_limit_error, shard_id=shard_id, sharding_info=sharding_info,
                                 tablets_routing_v1=tablets_routing_v1, tablets_routing_v2=tablets_routing_v2,
-                                lwt_info=lwt_info, use_metadata_id=use_metadata_id)
+                                lwt_info=lwt_info, use_metadata_id=use_metadata_id, is_scylla=is_scylla)
+
+    @staticmethod
+    def detect_scylla(supported, sharding_info):
+        """Detect ScyllaDB from SUPPORTED extensions, independent of shard awareness.
+
+        ScyllaDB is identified by the presence of any known Scylla-specific
+        extension key in the SUPPORTED response.  Checking only shard-related
+        fields (SCYLLA_NR_SHARDS, etc.) is insufficient because those are
+        absent when shard-awareness is disabled on the server side
+        (allow_shard_aware_drivers: false), which would cause the driver to
+        misidentify a ScyllaDB cluster as Cassandra and, for example, try
+        to query the peers_v2 table that ScyllaDB does not support.
+        """
+        return (
+            LWT_ADD_METADATA_MARK in supported
+            or RATE_LIMIT_ERROR_EXTENSION in supported
+            or TABLETS_ROUTING_V1 in supported
+            or TABLETS_ROUTING_V2 in supported
+            or USE_METADATA_ID in supported
+            or sharding_info is not None
+        )
 
     @staticmethod
     def maybe_parse_rate_limit_error(supported):
@@ -95,6 +119,16 @@ class ProtocolFeatures(object):
 
         if not (shard_id or shards_count or partitioner == "org.apache.cassandra.dht.Murmur3Partitioner" or
             sharding_algorithm == "biased-token-round-robin" or sharding_ignore_msb):
+            return 0, None
+
+        if shard_id is None or shards_count is None:
+            # ScyllaDB gates all sharding fields together behind a single
+            # allow_shard_aware_drivers server-side config, so this should
+            # not happen in practice. If it does, don't fabricate a partial
+            # ShardingInfo (that would break the invariant, relied on
+            # elsewhere, that a non-None sharding_info implies a real,
+            # positive shard count) -- just disable shard-aware routing.
+            log.warning("Incomplete Scylla sharding info in SUPPORTED (options=%s); disabling shard-aware routing", options)
             return 0, None
 
         return int(shard_id), _ShardingInfo(shard_id, shards_count, partitioner, sharding_algorithm, sharding_ignore_msb,
