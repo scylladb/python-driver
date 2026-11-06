@@ -614,6 +614,23 @@ class BoundStatement(Statement):
     The sequence of values that were bound to the prepared statement.
     """
 
+    # True if the routing key cached in _routing_key is exactly the one the
+    # server computes the token from, so _server_routing_key() can return it
+    # instead of packing an equal copy.
+    #
+    # The server computes the token from the partition key columns it named
+    # when the statement was prepared (PreparedStatement._pk_indexes). The
+    # cached routing key may differ from that:
+    # - the user may have passed a routing key of their own to __init__;
+    # - routing_key_indexes may point at other columns or list them in
+    #   another order, because the user set them or the driver guessed them;
+    # - bind() replaces the values but keeps the routing key cached from the
+    #   previous ones.
+    #
+    # So the routing_key property sets this flag when it computes the routing
+    # key, to whether it used the server's columns, and bind() clears it.
+    _routing_key_from_server_pk_indexes = False
+
     def __init__(self, prepared_statement, retry_policy=None, consistency_level=None, routing_key=None,
                  serial_consistency_level=None, fetch_size=FETCH_SIZE_UNSET, keyspace=None,
                  custom_payload=None):
@@ -702,6 +719,7 @@ class BoundStatement(Statement):
 
         self.raw_values = values
         self.values = []
+        self._routing_key_from_server_pk_indexes = False
         for value, col_spec in zip(values, col_meta):
             if value is None:
                 self.values.append(None)
@@ -753,6 +771,8 @@ class BoundStatement(Statement):
             self._routing_key = self.values[routing_indexes[0]]
         else:
             self._routing_key = b"".join(self._key_parts_packed(self.values[i] for i in routing_indexes))
+        self._routing_key_from_server_pk_indexes = (
+            routing_indexes == self.prepared_statement._pk_indexes)
 
         return self._routing_key
 
@@ -777,6 +797,12 @@ class BoundStatement(Statement):
             return None
         if len(parts) == 1:
             return parts[0]
+        routing_key = self.routing_key
+        if self._routing_key_from_server_pk_indexes:
+            # routing_key is computed from the same values and indices, so it's
+            # this one, already packed. A batch routed by this statement keeps
+            # it anyway: reuse it rather than keep a copy.
+            return routing_key
         return b"".join(self._key_parts_packed(parts))
 
     def is_lwt(self):
