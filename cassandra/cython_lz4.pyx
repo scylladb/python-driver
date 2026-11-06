@@ -52,11 +52,14 @@ cdef extern from *:
     uint32_t ntohl(uint32_t netlong) nogil
 
 # CQL native protocol v4 frames have a 32-bit body length, so the
-# theoretical maximum is ~2 GiB.  We use 256 MiB as a practical upper
-# bound (matching the server's default frame size limit) to avoid
-# accidentally allocating multi-GiB buffers on corrupt headers.
+# theoretical maximum uncompressed size is INT32_MAX (~2 GiB).  The
+# previous 256 MiB cap was the server's *default* frame-size limit, not
+# the protocol/LZ4 API limit, so it rejected valid frames on clusters
+# configured with larger frames (see issue #1000).  We validate against
+# INT32_MAX so legitimate oversized frames still decompress while
+# negative or >2 GiB values from corrupt headers are still rejected.
 cdef enum:
-    MAX_DECOMPRESSED_LENGTH = 268435456  # 256 MiB
+    MAX_DECOMPRESSED_LENGTH = INT32_MAX  # ~2 GiB
 
 # LZ4_MAX_INPUT_SIZE from lz4.h — the LZ4 C API uses C int (32-bit
 # signed) for sizes, so we must reject Python bytes objects that
