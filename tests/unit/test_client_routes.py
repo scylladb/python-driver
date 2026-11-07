@@ -18,6 +18,8 @@ import unittest
 import uuid
 from unittest.mock import Mock, patch
 
+import pytest
+
 from cassandra.client_routes import (
     ClientRouteProxy,
     ClientRoutesChangeType,
@@ -159,6 +161,47 @@ class TestClientRoutesHandler(unittest.TestCase):
         self.conn_id = uuid.uuid4()
         self.proxy = ClientRouteProxy(str(self.conn_id), "10.0.0.1")
         self.config = ClientRoutesConfig([self.proxy])
+
+    @pytest.mark.xfail(
+        strict=True, raises=AssertionError,
+        reason=('https://github.com/scylladb/python-driver/issues/813; '
+                'remove when #853 lands'))
+    def test_partial_change_preserves_unaffected_selected_route(self):
+        host_id = uuid.uuid4()
+        conn_a, conn_b = 'conn-a', 'conn-b'
+        handler = _ClientRoutesHandler(ClientRoutesConfig([
+            ClientRouteProxy(conn_a, 'a.example.com'),
+            ClientRouteProxy(conn_b, 'b.example.com'),
+        ]))
+        route_a = _Route(conn_a, host_id, 'a.example.com', 9042)
+        route_b = _Route(conn_b, host_id, 'b.example.com', 9042)
+        connection = Mock()
+
+        def query_routes(connection, timeout, query, params):
+            # Honor the query boundary, so either fetching all candidates or
+            # retaining unaffected route state can satisfy the regression.
+            connection_filter, _, host_filter = query.partition(' AND host_id')
+            count = connection_filter.count('?')
+            connection_ids = {
+                value.decode('utf-8') for value in params[:count]}
+            host_ids = {uuid.UUID(bytes=value) for value in params[count:]}
+            return [route for route in (route_a, route_b)
+                    if route.connection_id in connection_ids
+                    and (not host_filter or route.host_id in host_ids)]
+
+        with patch.object(handler, '_execute_routes_query',
+                          side_effect=query_routes):
+            handler.initialize(connection, timeout=5.0)
+            # Defensively ensure setup selects A before applying the event.
+            handler._routes.update([route_a, route_b])
+            if handler._routes.get_by_host_id(host_id).connection_id != conn_a:
+                raise RuntimeError('setup must select route A')
+            route_b = _Route(conn_b, host_id, 'b-new.example.com', 9042)
+            handler.handle_client_routes_change(
+                connection, 5.0, ClientRoutesChangeType.UPDATE_NODES,
+                connection_ids=[conn_b], host_ids=[str(host_id)])
+
+        assert handler._routes.get_by_host_id(host_id).connection_id == conn_a
 
     def test_handler_initialization(self):
         handler = _ClientRoutesHandler(self.config, ssl_enabled=False)
