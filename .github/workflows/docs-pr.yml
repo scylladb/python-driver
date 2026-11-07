@@ -6,16 +6,6 @@ permissions:
   contents: read
 
 on:
-  push:
-    branches:
-      - master
-    paths:
-      - "docs/**"
-      - ".github/workflows/docs-pr.yml"
-      - "cassandra/**"
-      - "pyproject.toml"
-      - "setup.py"
-      - "CHANGELOG.rst"
   pull_request:
     paths:
       - "docs/**"

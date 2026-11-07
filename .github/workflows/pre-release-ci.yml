@@ -1,0 +1,299 @@
+name: Pre-release CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Isolate unrelated label events so they cannot replace a pending run either.
+  group: >-
+    ${{ github.workflow }}-${{ github.ref }}${{
+      github.event_name == 'pull_request' &&
+      (github.event.action == 'labeled' || github.event.action == 'unlabeled') &&
+      github.event.label.name != 'pre-release-ci' &&
+      format('-ignored-{0}', github.run_id) || '' }}
+  # Removing pre-release-ci still cancels its run in the shared group.
+  cancel-in-progress: >-
+    ${{ github.event_name == 'pull_request' &&
+        (github.event.action == 'synchronize' ||
+         github.event.action == 'reopened' ||
+         github.event.label.name == 'pre-release-ci') }}
+
+jobs:
+  wheels:
+    name: Linux wheel builds and tests
+    if: &run-pre-release >-
+      github.event_name == 'workflow_dispatch' ||
+      (contains(github.event.pull_request.labels.*.name, 'pre-release-ci') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'pre-release-ci') &&
+       github.event.action != 'unlabeled')
+    uses: ./.github/workflows/lib-build.yml
+    with:
+      target: linux
+
+  other-wheels:
+    name: Other platform wheel builds and tests
+    if: *run-pre-release
+    uses: ./.github/workflows/lib-build.yml
+    with:
+      target: macos-x86,macos-arm,windows,linux-aarch64
+      build-sdist: false
+
+  coverage:
+    name: Full coverage against stable Scylla
+    if: *run-pre-release
+    uses: ./.github/workflows/coverage.yml
+    with:
+      run-on-pr: true
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  integration:
+    name: Driver integration tests
+    needs: scylla-image
+    if: *run-pre-release
+    uses: ./.github/workflows/integration-tests.yml
+    with:
+      scylla-image-artifact: scylla-test-image
+      scylla-image-reference: ${{ needs.scylla-image.outputs.reference }}
+      ignore-disable-label: true
+      full-matrix: true
+
+  scylla-source:
+    name: Resolve Scylla master and split test.py suites
+    if: *run-pre-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      revision: ${{ steps.source.outputs.revision }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      toolchain: ${{ steps.plan.outputs.toolchain }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve master once
+        id: source
+        run: |
+          mkdir scylla-plan
+          python3 scripts/scylla_source.py resolve --output scylla-plan/source.json
+
+      - name: Check out pinned master tests
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: scylladb/scylladb
+          ref: ${{ steps.source.outputs.revision }}
+          path: scylla-source
+          persist-credentials: false
+
+      - name: Split every Python and CQL suite into jobs
+        id: plan
+        run: |
+          python3 scripts/scylla_source.py plan scylla-source --output scylla-plan/jobs.json
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scylla-test-plan
+          path: scylla-plan
+
+  scylla-image:
+    name: Build or restore Scylla master test image
+    needs: scylla-source
+    runs-on: ${{ vars.SCYLLA_BUILD_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 360
+    outputs:
+      reference: ${{ steps.image.outputs.reference }}
+    env:
+      SCYLLA_REVISION: ${{ needs.scylla-source.outputs.revision }}
+      SCYLLA_BUILD_JOBS: ${{ vars.SCYLLA_BUILD_JOBS || '2' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Pin toolchain digest and image cache identity
+        id: image
+        env:
+          TOOLCHAIN_TAG: ${{ needs.scylla-source.outputs.toolchain }}
+        shell: bash
+        run: |
+          test "$RUNNER_OS" = Linux
+          test "$RUNNER_ARCH" = X64
+          RECIPE_HASH=$(scripts/build_scylla_test_image.sh --recipe-hash)
+          digest=$(docker buildx imagetools inspect "$TOOLCHAIN_TAG" --format '{{.Manifest.Digest}}')
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          toolchain="${TOOLCHAIN_TAG%@*}@${digest}"
+          reference="scylla-driver-tests:${SCYLLA_REVISION}-${RECIPE_HASH:0:16}-${digest:7:16}"
+          {
+            echo "toolchain=$toolchain"
+            echo "recipe=$RECIPE_HASH"
+            echo "reference=$reference"
+            echo "cache-key=scylla-test-image-linux-x64-${SCYLLA_REVISION}-${digest#sha256:}-${RECIPE_HASH}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Make room for the Scylla build and image
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h /
+
+      - name: Restore exact Scylla image archive
+        id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/scylla-test-image.tar.gz
+          key: ${{ steps.image.outputs.cache-key }}
+
+      - name: Load cached Scylla image
+        if: steps.cache.outputs.cache-hit == 'true'
+        run: docker image load --input "$RUNNER_TEMP/scylla-test-image.tar.gz"
+
+      - name: Check out pinned source and all submodules
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: scylladb/scylladb
+          ref: ${{ needs.scylla-source.outputs.revision }}
+          path: scylla-source
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Build reusable source image
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          SCYLLA_TOOLCHAIN: ${{ steps.image.outputs.toolchain }}
+          SCYLLA_IMAGE_REFERENCE: ${{ steps.image.outputs.reference }}
+        run: scripts/build_scylla_test_image.sh "$GITHUB_WORKSPACE/scylla-source" "$SCYLLA_IMAGE_REFERENCE"
+
+      - name: Verify image provenance
+        env:
+          SCYLLA_IMAGE_REFERENCE: ${{ steps.image.outputs.reference }}
+          SCYLLA_TOOLCHAIN: ${{ steps.image.outputs.toolchain }}
+          RECIPE_HASH: ${{ steps.image.outputs.recipe }}
+        shell: bash
+        run: |
+          revision=$(docker image inspect "$SCYLLA_IMAGE_REFERENCE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')
+          toolchain=$(docker image inspect "$SCYLLA_IMAGE_REFERENCE" --format '{{ index .Config.Labels "io.scylladb.driver-tests.toolchain" }}')
+          recipe=$(docker image inspect "$SCYLLA_IMAGE_REFERENCE" --format '{{ index .Config.Labels "io.scylladb.driver-tests.recipe" }}')
+          test "$revision" = "$SCYLLA_REVISION"
+          test "$toolchain" = "$SCYLLA_TOOLCHAIN"
+          test "$recipe" = "$RECIPE_HASH"
+          docker image inspect "$SCYLLA_IMAGE_REFERENCE" --format 'Uncompressed image size: {{.Size}} bytes'
+          df -h /
+
+      - name: Save reusable Scylla image archive
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          SCYLLA_IMAGE_REFERENCE: ${{ steps.image.outputs.reference }}
+        shell: bash
+        run: |
+          docker image save "$SCYLLA_IMAGE_REFERENCE" | gzip -1 > "$RUNNER_TEMP/scylla-test-image.tar.gz"
+          du -h "$RUNNER_TEMP/scylla-test-image.tar.gz"
+
+      - name: Share exact image with every test job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scylla-test-image
+          path: ${{ runner.temp }}/scylla-test-image.tar.gz
+          compression-level: 0
+          retention-days: 7
+
+  scylla-testpy:
+    name: Scylla test.py / ${{ matrix.name }}
+    needs: [wheels, scylla-source, scylla-image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.scylla-source.outputs.matrix) }}
+    env:
+      TESTPY_LOG_DIR: ${{ github.workspace }}/scylla-testpy-logs
+      SCYLLA_IMAGE_REFERENCE: ${{ needs.scylla-image.outputs.reference }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: scylla-test-plan
+          path: scylla-plan
+
+      - name: Download candidate Linux wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: wheels-linux-ubuntu-24.04
+          path: candidate-wheels
+
+      - name: Make room for the Scylla image
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h /
+
+      - name: Download shared Scylla image
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: scylla-test-image
+          path: ${{ runner.temp }}/scylla-image
+
+      - name: Load shared Scylla image
+        run: |
+          docker image load --input "$RUNNER_TEMP/scylla-image/scylla-test-image.tar.gz"
+          rm "$RUNNER_TEMP/scylla-image/scylla-test-image.tar.gz"
+
+      - name: Run test.py shard with the candidate driver
+        env:
+          SCYLLA_TEST_JOB: ${{ matrix.name }}
+        shell: bash
+        run: |
+          mkdir -p "$TESTPY_LOG_DIR"
+          # Nested Podman's default overlay driver rejects Docker's overlay root.
+          docker run --rm --privileged --network host \
+            -v "$GITHUB_WORKSPACE/candidate-wheels:/candidate-wheels:ro" \
+            -v "$GITHUB_WORKSPACE/scylla-plan:/plan:ro" \
+            -v "$GITHUB_WORKSPACE/scripts:/driver-scripts:ro" \
+            -v "$TESTPY_LOG_DIR:/logs" \
+            -e SCYLLA_SOURCE=/opt/scylla \
+            -e DRIVER_WHEEL_DIR=/candidate-wheels \
+            -e SCYLLA_SOURCE_FILE=/plan/source.json \
+            -e SCYLLA_PLAN_FILE=/plan/jobs.json \
+            -e TESTPY_LOG_DIR=/logs -e SCYLLA_TEST_JOB \
+            -e STORAGE_DRIVER=vfs \
+            "$SCYLLA_IMAGE_REFERENCE" bash /driver-scripts/run_scylla_testpy.sh \
+            2>&1 | tee "$TESTPY_LOG_DIR/bootstrap.log"
+
+      - name: Archive Scylla test reports and logs
+        if: always()
+        shell: bash
+        run: |
+          if [[ -d "$TESTPY_LOG_DIR" ]]; then
+            # Docker and pytest leave root-owned diagnostics with private modes.
+            sudo chown -R --no-dereference "$(id -u):$(id -g)" "$TESTPY_LOG_DIR"
+            cd "$TESTPY_LOG_DIR"
+            # Pytest parameter IDs can contain characters rejected by artifact
+            # upload (e.g. vector<float, 3>). Preserve those paths inside a tarball.
+            # Server workdirs contain data as well as diagnostic logs. Prune
+            # their storage directories without excluding report/data.
+            find . -type d \( \
+              -path './tests/*/scylla-*/data' -o \
+              -path './tests/*/scylla-*/commitlog' -o \
+              -path './tests/*/scylla-*/hints' -o \
+              -path './tests/*/scylla-*/view_hints' \) -prune -o \
+              -type f \( -name '*.log' -o -name '*.txt' -o -path './tests/report/*' \) \
+              -print0 | tar --null -T - -czf "$RUNNER_TEMP/scylla-testpy-logs.tar.gz"
+          fi
+
+      - name: Upload Scylla test reports and logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scylla-testpy-${{ matrix.name }}-logs
+          path: ${{ runner.temp }}/scylla-testpy-logs.tar.gz
+          compression-level: 0
+          if-no-files-found: warn
+          retention-days: 7

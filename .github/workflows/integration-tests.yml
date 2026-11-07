@@ -1,22 +1,6 @@
 name: Integration tests
 
 on:
-  push:
-    branches:
-      - master
-      - 'branch-**'
-    paths-ignore:
-      - docs/**
-      - examples/**
-      - scripts/**
-      - .gitignore
-      - '**/*.rst'
-      - '**/*.md'
-      - '*.ini'
-      - LICENSE
-      - .github/dependabot.yml
-      - .github/pull_request_template.md
-      - .github/workflows/docs-*
   pull_request:
     paths-ignore:
       - docs/**
@@ -31,26 +15,56 @@ on:
       - .github/pull_request_template.md
       - .github/workflows/docs-*
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      scylla-version:
+        description: 'CCM Scylla version selector'
+        type: string
+        required: false
+        default: release:2026.1.13
+      scylla-image-artifact:
+        description: 'Optional artifact containing scylla-test-image.tar.gz'
+        type: string
+        required: false
+        default: ''
+      scylla-image-reference:
+        description: 'Docker reference stored in the optional Scylla image artifact'
+        type: string
+        required: false
+        default: ''
+      ignore-disable-label:
+        description: 'Run integration tests even when the PR has disable-integration-tests'
+        type: boolean
+        required: false
+        default: false
+      full-matrix:
+        description: 'Run every integration interpreter/reactor combination'
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: integration-tests-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   tests:
     name: test ${{ matrix.event_loop_manager }} (${{ matrix.python-version }})
-    if: "!contains(github.event.pull_request.labels.*.name, 'disable-integration-tests')"
+    if: "inputs.ignore-disable-label || !contains(github.event.pull_request.labels.*.name, 'disable-integration-tests')"
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
-      SCYLLA_VERSION: release:2026.1.13
+      SCYLLA_VERSION: ${{ inputs.scylla-version || 'release:2026.1.13' }}
+      CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST: 'yes'
     strategy:
       fail-fast: false
       matrix:
         # Re-enable free-threaded Python (3.14t and 3.15t) once the thread-safety
         # issues in https://github.com/scylladb/python-driver/issues/718 are fixed.
-        python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
-        event_loop_manager: ["libev", "asyncio", "asyncore"]
+        # A PR runs the complete suites once. Pre-release and manual runs
+        # expand the interpreter/reactor matrix.
+        python-version: ${{ fromJSON((github.event_name != 'pull_request' || inputs.full-matrix) && '["3.11", "3.12", "3.13", "3.14", "3.15"]' || '["3.13"]') }}
+        event_loop_manager: ${{ fromJSON((github.event_name != 'pull_request' || inputs.full-matrix) && '["libev", "asyncio", "asyncore"]' || '["libev"]') }}
         exclude:
           - python-version: "3.12"
             event_loop_manager: "asyncore"
@@ -65,18 +79,23 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Install libev
+      if: inputs.scylla-image-artifact == ''
       run: sudo apt-get install libev4 libev-dev
 
     - name: Install uv
+      id: setup-uv
       uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
       with:
+        version: ${{ inputs.scylla-image-artifact != '' && '0.13.6' || '' }}
         python-version: ${{ matrix.python-version }}
-        enable-cache: true
+        enable-cache: ${{ inputs.scylla-image-artifact == '' }}
 
     - name: Build driver
+      if: inputs.scylla-image-artifact == ''
       run: uv sync
 
     - name: Cache Scylla download
+      if: inputs.scylla-image-artifact == ''
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.ccm/scylla-repository
@@ -84,11 +103,84 @@ jobs:
         restore-keys: scylla-${{ env.SCYLLA_VERSION }}-
 
     - name: Test with pytest
+      if: inputs.scylla-image-artifact == ''
       env:
         EVENT_LOOP_MANAGER: ${{ matrix.event_loop_manager }}
         INTEGRATION_LOG_ARTIFACT_DIR: integration-test-logs
         PROTOCOL_VERSION: 4
-      run: uv run pytest -v tests/integration/standard/ tests/integration/cqlengine/
+      run: |
+        uv run python -c "import cassandra.cluster; assert not cassandra.cluster.__file__.endswith('.py'), cassandra.cluster.__file__"
+        uv run pytest -v tests/integration/standard/ tests/integration/cqlengine/
+
+    - name: Make room for the Scylla image
+      if: inputs.scylla-image-artifact != ''
+      run: |
+        sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+        df -h /
+
+    - name: Download shared Scylla image
+      if: inputs.scylla-image-artifact != ''
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: ${{ inputs.scylla-image-artifact }}
+        path: ${{ runner.temp }}/scylla-image
+
+    - name: Load shared Scylla image
+      if: inputs.scylla-image-artifact != ''
+      run: |
+        docker image load --input "$RUNNER_TEMP/scylla-image/scylla-test-image.tar.gz"
+        rm "$RUNNER_TEMP/scylla-image/scylla-test-image.tar.gz"
+
+    - name: Build driver and run integration tests against source image
+      if: inputs.scylla-image-artifact != ''
+      env:
+        SCYLLA_IMAGE_REFERENCE: ${{ inputs.scylla-image-reference }}
+        UV_BINARY: ${{ steps.setup-uv.outputs.uv-path }}
+        PYTHON_VERSION: ${{ matrix.python-version }}
+        EVENT_LOOP_MANAGER: ${{ matrix.event_loop_manager }}
+      shell: bash
+      run: |
+        test -n "$SCYLLA_IMAGE_REFERENCE"
+        docker run --rm -i --privileged --network host \
+          -v "$UV_BINARY:/usr/local/bin/uv:ro" \
+          -v "$GITHUB_WORKSPACE:/driver" --workdir /driver \
+          -e SCYLLA_VERSION=/opt/scylla -e CASSANDRA_DIR=/opt/scylla \
+          -e PROTOCOL_VERSION=4 -e EVENT_LOOP_MANAGER -e PYTHON_VERSION \
+          -e CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST \
+          -e UV_PROJECT_ENVIRONMENT=/driver/.venv \
+          "$SCYLLA_IMAGE_REFERENCE" bash -eu -o pipefail <<'CONTAINER'
+        uv --version
+        uv python install "$PYTHON_VERSION"
+        uv sync --python "$PYTHON_VERSION"
+        if [[ "$PYTHON_VERSION" =~ t$ ]]; then
+          export PYTHON_GIL=0
+        fi
+        uv run --python "$PYTHON_VERSION" python -c "import sys, cassandra; print(sys.version); print(cassandra.__file__)"
+        uv run --python "$PYTHON_VERSION" python -c "import cassandra.cluster; assert not cassandra.cluster.__file__.endswith('.py'), cassandra.cluster.__file__"
+        if [[ "$EVENT_LOOP_MANAGER" == libev ]]; then
+          uv run --python "$PYTHON_VERSION" python -c "from cassandra.io import libevwrapper; print(libevwrapper.__file__)"
+        fi
+        uv run --python "$PYTHON_VERSION" python - <<'PYBOOTSTRAP'
+        import os
+        from pathlib import Path
+        import subprocess
+        import tempfile
+
+        from ccmlib.scylla_cluster import ScyllaCluster
+        from tests.integration import CCM_KWARGS
+
+        assert CCM_KWARGS == {"install_dir": "/opt/scylla"}, CCM_KWARGS
+        with tempfile.TemporaryDirectory(prefix="driver-source-check-") as path:
+            cluster = ScyllaCluster(path, "source-image-check", **CCM_KWARGS)
+            assert not cluster.scylla_reloc
+            cluster.populate(1)
+            binary = Path(cluster.nodelist()[0].get_bin_dir()) / "scylla"
+            assert os.access(binary, os.X_OK), binary
+            print("CCM source binary:", binary)
+            print(subprocess.check_output([str(binary), "--version"], text=True))
+        PYBOOTSTRAP
+        uv run --python "$PYTHON_VERSION" pytest -v tests/integration/standard/ tests/integration/cqlengine/
+        CONTAINER
 
     - name: Collect remaining ccm logs on failure
       if: failure()
