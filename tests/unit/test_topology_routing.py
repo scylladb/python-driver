@@ -26,8 +26,8 @@ from cassandra.cluster import (
 from cassandra.connection import DefaultEndPoint
 from cassandra.metadata import KeyspaceMetadata
 from cassandra.policies import (
-    DCAwareRoundRobinPolicy, RackAwareRoundRobinPolicy, RoundRobinPolicy,
-    TokenAwarePolicy,
+    DCAwareRoundRobinPolicy, HostDistance, RackAwareRoundRobinPolicy,
+    RoundRobinPolicy, TokenAwarePolicy,
 )
 from cassandra.query import SimpleStatement
 from cassandra.tablets import Tablet
@@ -36,19 +36,34 @@ from tests.unit.test_control_connection import (
 )
 
 
+@pytest.fixture
+def peer_location(request):
+    """Select the target peer's DC, rack, and remote-host limit."""
+    return getattr(request, 'param', ('dc1', 'rack1', 0))
+
+
 @pytest.fixture(params=[
     RoundRobinPolicy,
     lambda: DCAwareRoundRobinPolicy('dc1'),
     lambda: RackAwareRoundRobinPolicy('dc1', 'rack1'),
 ], ids=['round-robin', 'dc-aware', 'rack-aware'])
-def routing_cluster(request):
-    policy = TokenAwarePolicy(request.param(), shuffle_replicas=False)
+def routing_cluster(request, peer_location):
+    """Build a real topology with a configurable peer and child policy."""
+    datacenter, rack, remote_limit = peer_location
+    child = request.param()
+    if isinstance(child, (DCAwareRoundRobinPolicy, RackAwareRoundRobinPolicy)):
+        child.used_hosts_per_remote_dc = remote_limit
+    policy = TokenAwarePolicy(child, shuffle_replicas=False)
     profile = ExecutionProfile(load_balancing_policy=policy)
     with Cluster(contact_points=[], execution_profiles={
             EXEC_PROFILE_DEFAULT: profile}) as cluster:
         cluster.control_connection.shutdown()
         connection = MockConnection()
         connection.local_results[1][0][7] = [str(-(2 ** 63))]
+        peer_columns = connection.peer_results[0]
+        peer = connection.peer_results[1][0]
+        peer[peer_columns.index('data_center')] = datacenter
+        peer[peer_columns.index('rack')] = rack
         connection.peer_results[1][0][5] = ['0']
         connection.peer_results[1][1][5] = [str(2 ** 62)]
         connection.wait_for_responses.return_value = _node_meta_results(
@@ -59,7 +74,9 @@ def routing_cluster(request):
         for address, host_id in [('192.168.1.0', 1), ('192.168.1.1', 2),
                                  ('192.168.1.2', 3)]:
             host, _ = cluster.add_host(
-                DefaultEndPoint(address), 'dc1', 'rack1', signal=False,
+                DefaultEndPoint(address),
+                datacenter if host_id == 2 else 'dc1',
+                rack if host_id == 2 else 'rack1', signal=False,
                 host_id=UUID(int=host_id))
             host.set_up()
         cluster.metadata.keyspaces['ks'] = KeyspaceMetadata(
@@ -72,18 +89,25 @@ def routing_cluster(request):
         yield cluster, connection, policy
 
 
+def assert_current_host(cluster, host):
+    """Require the current Host object in both metadata indexes."""
+    assert host is cluster.metadata.get_host_by_host_id(host.host_id)
+    assert host is cluster.metadata.get_host(host.endpoint)
+    assert not host._is_removed
+
+
 def assert_current_plan(cluster, plan):
+    """Require all three current hosts exactly once in a query plan."""
     assert len(plan) == len(cluster.metadata.all_hosts()) == 3
     assert len({id(host) for host in plan}) == len(plan)
     for host in plan:
-        assert host is cluster.metadata.get_host_by_host_id(host.host_id)
-        assert host is cluster.metadata.get_host(host.endpoint)
-        assert not host._is_removed
+        assert_current_host(cluster, host)
 
 
 @pytest.mark.parametrize('transition', ['move', 'rebirth'])
 @pytest.mark.parametrize('routing', ['vnode', 'tablet', 'tablet-serial'])
 def test_refresh_routes_to_current_hosts(routing_cluster, transition, routing):
+    """Refresh vnode and tablet routing after peer movement or rebirth."""
     cluster, connection, policy = routing_cluster
     metadata = cluster.metadata
     old = metadata.get_host_by_host_id(UUID(int=2))
@@ -149,3 +173,84 @@ def test_refresh_routes_to_current_hosts(routing_cluster, transition, routing):
         plan = list(policy.make_query_plan('ks', query))
         assert_current_plan(cluster, plan)
         assert plan[0] is current
+
+
+@pytest.mark.parametrize('peer_location', [
+    ('dc1', 'rack2', 0),
+    ('dc2', 'rack2', 1),
+    ('dc2', 'rack2', 0),
+], indirect=True, ids=['other-rack', 'remote-enabled', 'remote-ignored'])
+@pytest.mark.parametrize('transition', ['move', 'rebirth'])
+def test_refresh_preserves_policy_locality(routing_cluster, peer_location,
+                                           transition):
+    """Keep current host membership and locality across peer replacement."""
+    cluster, connection, policy = routing_cluster
+    metadata = cluster.metadata
+    child = policy._child_policy
+    old = metadata.get_host_by_host_id(UUID(int=2))
+    if isinstance(child, RoundRobinPolicy) or peer_location[0] == 'dc1':
+        expected_distance = HostDistance.LOCAL
+    elif peer_location[2]:
+        expected_distance = HostDistance.REMOTE
+    else:
+        expected_distance = HostDistance.IGNORED
+    assert child.distance(old) == expected_distance
+    key = next(str(i).encode() for i in range(1000)
+               if metadata.get_replicas('ks', str(i).encode())[0] is old)
+    query = SimpleStatement('SELECT * FROM ks.tbl', keyspace='ks',
+                            routing_key=key)
+    # Warm replica and policy state before replacing the peer.
+    list(policy.make_query_plan('ks', query))
+
+    def assert_locality(current):
+        """Check child ordering, replica promotion, and policy membership."""
+        assert_current_host(cluster, current)
+        assert child.distance(current) == expected_distance
+        expected_hosts = [host for host in metadata.all_hosts()
+                          if child.distance(host) != HostDistance.IGNORED]
+        plans = [list(child.make_query_plan()),
+                 list(policy.make_query_plan('ks', query))]
+        if expected_distance != HostDistance.IGNORED:
+            assert plans[1][0] is current
+        for plan in plans:
+            assert {id(host) for host in plan} == {
+                id(host) for host in expected_hosts}
+            assert len(plan) == len(expected_hosts)
+            for host in plan:
+                assert_current_host(cluster, host)
+        # Token-aware routing imposes its own distance ordering. Check the
+        # child's ordering directly so that normalization cannot hide a bug.
+        priority = {HostDistance.LOCAL_RACK: 0, HostDistance.LOCAL: 1,
+                    HostDistance.REMOTE: 2}
+        ranks = [priority[child.distance(host)] for host in plans[0]]
+        assert ranks == sorted(ranks)
+        if isinstance(child, (DCAwareRoundRobinPolicy,
+                              RackAwareRoundRobinPolicy)):
+            dc_hosts = child._dc_live_hosts[peer_location[0]]
+            assert any(host is current for host in dc_hosts)
+            if current is not old:
+                assert all(host is not old for host in dc_hosts)
+        if isinstance(child, RackAwareRoundRobinPolicy):
+            rack_hosts = child._live_hosts[peer_location[:2]]
+            assert any(host is current for host in rack_hosts)
+            if current is not old:
+                assert all(host is not old for host in rack_hosts)
+
+    assert_locality(old)
+    peer = connection.peer_results[1][0]
+    if transition == 'move':
+        peer[0] = '192.168.1.9'
+        current_id = old.host_id
+    else:
+        current_id = UUID(int=4)
+        peer[-1] = current_id
+    connection.wait_for_responses.return_value = _node_meta_results(
+        connection.local_results, connection.peer_results)
+    cluster.control_connection.refresh_node_list_and_token_map()
+
+    current = metadata.get_host_by_host_id(current_id)
+    assert current is not None and current is not old
+    assert old._is_removed
+    assert (current.datacenter, current.rack) == peer_location[:2]
+    assert metadata.get_replicas('ks', key)[0] is current
+    assert_locality(current)
