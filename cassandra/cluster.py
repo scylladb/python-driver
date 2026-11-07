@@ -759,6 +759,8 @@ class ProfileManager(object):
         if not self.pools_allowed:
             return
         for p in self.profiles.values():
+            if host._is_removed:
+                return
             p.load_balancing_policy.on_up(host)
 
     def on_down(self, host):
@@ -771,6 +773,8 @@ class ProfileManager(object):
 
     def on_add(self, host):
         for p in self.profiles.values():
+            if host._is_removed:
+                return
             p.load_balancing_policy.on_add(host)
 
     def on_remove(self, host):

@@ -18,12 +18,13 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from cassandra.cluster import Cluster, ControlConnection
+from cassandra.cluster import (
+    Cluster, ControlConnection, ExecutionProfile, ProfileManager)
 from cassandra._lifecycle import (
     ConnectionFailureReservation, LifecycleCoordinator, PoolFailureReservation)
 from cassandra.connection import (
     Connection, ConnectionException, DefaultEndPoint)
-from cassandra.policies import HostDistance
+from cassandra.policies import HostDistance, RoundRobinPolicy
 from cassandra.pool import HostConnection
 from cassandra.protocol_features import ProtocolFeatures
 from tests.unit.test_control_connection import (
@@ -51,6 +52,191 @@ def topology():
     cluster.control_connection = control
     yield cluster, connection
     cluster.shutdown()
+
+
+@pytest.fixture
+def policy_lifecycle(topology):
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    host.set_down()
+    policies = [RoundRobinPolicy() for _ in range(3)]
+    manager = ProfileManager()
+    for index, policy in enumerate(policies):
+        policy.populate(cluster, [])
+        for event in ('up', 'add', 'remove'):
+            method = 'on_' + event
+            setattr(policy, method, Mock(wraps=getattr(policy, method)))
+        manager.profiles[index] = ExecutionProfile(load_balancing_policy=policy)
+    cluster.profile_manager = manager
+    cluster.control_connection.on_up = Mock()
+    cluster.control_connection.on_add = Mock()
+    cluster.control_connection.on_remove = Mock()
+    completed = Future()
+    completed.set_result(True)
+    session = Mock()
+    session.add_or_renew_pool.return_value = completed
+    cluster.sessions = (session,)
+    listener = Mock()
+    cluster.register_listener(listener)
+    return cluster, host, policies, session, listener
+
+
+@pytest.mark.parametrize('event', ['up', 'add'])
+def test_reentrant_policy_removal_stops_positive_callbacks(policy_lifecycle, event):
+    cluster, host, policies, session, listener = policy_lifecycle
+    method = 'on_' + event
+
+    def retire(current):
+        assert current is host
+        cluster.remove_host(current, refresh_nodes=False)
+        assert current._is_removed
+        # An admitted callback may finish after retirement is published.
+        getattr(RoundRobinPolicy, method)(policies[0], current)
+
+    getattr(policies[0], method).side_effect = retire
+    getattr(cluster, method)(host)
+
+    getattr(policies[0], method).assert_called_once_with(host)
+    for policy in policies[1:]:
+        getattr(policy, method).assert_not_called()
+    for policy in policies:
+        policy.on_remove.assert_called_once_with(host)
+        assert list(policy.make_query_plan()) == []
+    getattr(cluster.control_connection, method).assert_not_called()
+    session.add_or_renew_pool.assert_not_called()
+    session.on_remove.assert_called_once_with(host, trigger_reconciliation=True)
+    getattr(listener, method).assert_not_called()
+    listener.on_remove.assert_called_once_with(host)
+
+
+@pytest.mark.parametrize('event', ['up', 'add'])
+def test_concurrent_policy_removal_stops_positive_callbacks(policy_lifecycle, event):
+    cluster, host, policies, session, listener = policy_lifecycle
+    method = 'on_' + event
+    entered, release, published = Event(), Event(), Event()
+    finished = []
+    errors = []
+
+    def callback(current):
+        assert current is host
+        entered.set()
+        assert release.wait(5)
+        getattr(RoundRobinPolicy, method)(policies[0], current)
+        finished.append(current)
+
+    def deliver():
+        try:
+            getattr(cluster, method)(host)
+        except Exception as exc:
+            errors.append(exc)
+
+    def remove():
+        try:
+            cluster.remove_host(host, refresh_nodes=False)
+            cluster.remove_host(host, refresh_nodes=False)
+            published.set()
+        except Exception as exc:
+            errors.append(exc)
+
+    getattr(policies[0], method).side_effect = callback
+    worker = Thread(target=deliver)
+    remover = Thread(target=remove)
+    worker.start()
+    try:
+        assert entered.wait(5)
+        remover.start()
+        assert published.wait(5), 'retirement waited for the policy callback'
+        assert host._is_removed
+        assert cluster.metadata.get_host_by_host_id(host.host_id) is None
+        assert finished == []
+        for policy in policies:
+            policy.on_remove.assert_not_called()
+        session.on_remove.assert_not_called()
+        listener.on_remove.assert_not_called()
+    finally:
+        release.set()
+        worker.join(5)
+        if remover.ident is not None:
+            remover.join(5)
+
+    assert not worker.is_alive()
+    assert not remover.is_alive()
+    assert not errors
+    assert len(finished) == 1 and finished[0] is host
+    getattr(policies[0], method).assert_called_once_with(host)
+    for policy in policies[1:]:
+        getattr(policy, method).assert_not_called()
+    for policy in policies:
+        policy.on_remove.assert_called_once_with(host)
+        assert list(policy.make_query_plan()) == []
+    getattr(cluster.control_connection, method).assert_not_called()
+    cluster.control_connection.on_remove.assert_called_once_with(
+        host, trigger_reconciliation=True, refresh_nodes=False)
+    session.add_or_renew_pool.assert_not_called()
+    session.on_remove.assert_called_once_with(host, trigger_reconciliation=True)
+    getattr(listener, method).assert_not_called()
+    listener.on_remove.assert_called_once_with(host)
+
+
+@pytest.mark.parametrize('event', ['up', 'add'])
+def test_retirement_rejects_queued_positive_events(
+        policy_lifecycle, event):
+    cluster, host, policies, session, listener = policy_lifecycle
+    method = 'on_' + event
+    with cluster._lifecycle.transaction():
+        getattr(cluster, method)(host)
+        cluster.remove_host(host, refresh_nodes=False)
+        assert host._is_removed
+
+    for policy in policies:
+        getattr(policy, method).assert_not_called()
+        policy.on_remove.assert_called_once_with(host)
+        assert list(policy.make_query_plan()) == []
+    getattr(cluster.control_connection, method).assert_not_called()
+    session.add_or_renew_pool.assert_not_called()
+    getattr(listener, method).assert_not_called()
+    listener.on_remove.assert_called_once_with(host)
+
+
+@pytest.mark.parametrize('event', ['up', 'add'])
+def test_policy_replacement_preserves_new_host_membership(policy_lifecycle, event):
+    cluster, host, policies, session, listener = policy_lifecycle
+    method = 'on_' + event
+    replacements = []
+
+    def replace(current):
+        if current is host:
+            replacement = cluster.replace_host_endpoint(
+                current, DefaultEndPoint('192.168.1.9'))
+            assert current._is_removed
+            replacements.append(replacement)
+        getattr(RoundRobinPolicy, method)(policies[0], current)
+
+    getattr(policies[0], method).side_effect = replace
+    getattr(cluster, method)(host)
+
+    replacement, = replacements
+    assert replacement is not host
+    assert replacement.host_id == host.host_id
+    assert cluster.metadata.get_host_by_host_id(host.host_id) is replacement
+    assert replacement.is_up
+    for policy in policies[1:]:
+        assert all(args[0] is not host
+                   for args, _ in getattr(policy, method).call_args_list)
+    for policy in policies:
+        policy.on_remove.assert_called_once_with(host)
+        assert any(args[0] is replacement
+                   for args, _ in policy.on_add.call_args_list)
+        members = list(policy.make_query_plan())
+        assert len(members) == 1 and members[0] is replacement
+    assert all(args[0] is replacement
+               for args, _ in session.add_or_renew_pool.call_args_list)
+    session.add_or_renew_pool.assert_called_once()
+    for target in (cluster.control_connection, listener):
+        target.on_add.assert_called_once()
+        assert target.on_add.call_args.args[0] is replacement
+        target.on_up.assert_not_called()
+    listener.on_remove.assert_called_once_with(host)
 
 
 @pytest.mark.parametrize('event', ['up', 'down', 'add'])

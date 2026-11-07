@@ -33,7 +33,7 @@ import uuid
 from cassandra import ConsistencyLevel, DriverException, Timeout, Unavailable, RequestExecutionException, ReadTimeout, WriteTimeout, CoordinationFailure, ReadFailure, WriteFailure, FunctionFailure, AlreadyExists,\
     InvalidRequest, Unauthorized, AuthenticationFailed, OperationTimedOut, UnsupportedOperation, RequestValidationException, ConfigurationException, ProtocolVersion
 from cassandra.cluster import _Scheduler, Session, Cluster, ResultSet, SchemaAgreementScope, ControlConnectionQueryFallback, default_lbp_factory, \
-    ExecutionProfile, _ConfigMode, EXEC_PROFILE_DEFAULT, _NOT_SET
+    ExecutionProfile, ProfileManager, _ConfigMode, EXEC_PROFILE_DEFAULT, _NOT_SET
 from cassandra.connection import (Connection, ConnectionBusy, ConnectionException,
                                   DefaultEndPoint)
 from cassandra.protocol import OverloadedErrorMessage
@@ -5965,6 +5965,28 @@ class ProtocolVersionTests(unittest.TestCase):
 
         assert not ProtocolVersion.uses_error_code_map(ProtocolVersion.V4)
         assert not ProtocolVersion.uses_int_query_flags(ProtocolVersion.V4)
+
+
+@pytest.mark.parametrize('event', ['up', 'add'])
+@pytest.mark.parametrize('pools_allowed', [False, True])
+@pytest.mark.parametrize('removed', [False, True])
+def test_profile_manager_positive_callbacks(event, pools_allowed, removed):
+    manager = ProfileManager(pools_allowed=pools_allowed)
+    host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
+    host._is_removed = removed
+    observed = Mock()
+    for name in ('first', 'second', 'third'):
+        policy = Mock()
+        observed.attach_mock(policy, name)
+        manager.profiles[name] = ExecutionProfile(load_balancing_policy=policy)
+
+    getattr(manager, 'on_' + event)(host)
+
+    expected = []
+    if not removed and (pools_allowed or event == 'add'):
+        expected = [getattr(getattr(call, name), 'on_' + event)(host)
+                    for name in ('first', 'second', 'third')]
+    assert observed.mock_calls == expected
 
 
 class ExecutionProfileTest(unittest.TestCase):
