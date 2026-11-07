@@ -176,6 +176,21 @@ that byte shows the driver's cached view is stale, instead of attaching it to
 every response. This keeps the cached routing information fresh while avoiding
 the per-response overhead that V1 incurs.
 
+Batches take part as well:
+
+- A :class:`~.BatchStatement` is routed by the first statement added to it that
+  has a keyspace and a routing key. When that statement is a prepared one whose
+  partition key is bound by markers, every ``BATCH`` request over a V2
+  connection names it and carries the ``tablet_version_block`` of the tablet of
+  the partition it writes, even if the batch's routing key was changed. The
+  server answers as for an ``EXECUTE``, and the routing information it returns
+  is cached under that statement's table. A batch routed by any other
+  statement, or one whose keyspace or table was changed after that statement
+  was added, names no statement and never receives routing information.
+- A prepared ``BEGIN BATCH ... APPLY BATCH`` is sent as an ``EXECUTE``, like any
+  other prepared statement. The server only returns routing information for it
+  when the batch targets a strongly-consistent table.
+
 **Leader-aware routing for strongly-consistent tables.** Tables in a
 strongly-consistent keyspace -- one created with a ``consistency`` option and
 backed by Raft -- have a tablet leader that coordinates operations. For those
@@ -235,9 +250,11 @@ consistency is experimental.
 .. note::
 
    ``TABLETS_ROUTING_V2`` is still experimental: a Scylla node advertises it
-   (on the wire as ``TABLETS_ROUTING_V2_EXPERIMENTAL``) only when started with
-   the ``strongly-consistent-tables`` experimental feature enabled. A node
-   without it offers only ``TABLETS_ROUTING_V1``.
+   (on the wire as ``TABLETS_ROUTING_V2_EXPERIMENTAL_V2``) only when started
+   with the ``strongly-consistent-tables`` experimental feature enabled. A node
+   without it offers only ``TABLETS_ROUTING_V1``. Nodes advertising the earlier
+   revision of the extension, ``TABLETS_ROUTING_V2_EXPERIMENTAL``, are treated
+   as offering only ``TABLETS_ROUTING_V1``.
 
 
 Prepared Statement Metadata Caching (``SCYLLA_USE_METADATA_ID``)
