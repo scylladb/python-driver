@@ -361,6 +361,10 @@ class ConcurrencyTest((unittest.TestCase)):
             [("SELECT value FROM test", None)] * 2,
             concurrency=1)
         self.wait_for_response_futures(response_futures, 1)
+        # Callback registration precedes the initial pump's completion.
+        # Wait for it to stop before delivering the first response, so
+        # it cannot dispatch the second statement.
+        self.drain_executor()
 
         completion_thread = []
         callback_done = threading.Event()
@@ -380,6 +384,7 @@ class ConcurrencyTest((unittest.TestCase)):
             result_future.result(timeout=1.0)
         assert callback_done.wait(1.0)
         assert completion_thread != [response_thread]
+        session.execute_async.assert_called_once()
 
     def test_async_done_callback_can_shut_down_cluster(self):
         for success in (True, False):
