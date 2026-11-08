@@ -862,6 +862,7 @@ class TableMetadataExportTest(unittest.TestCase):
                     table_meta.keyspace_name, table_meta.name, ext_blob.decode())
 
         self.addCleanup(_RegisteredExtensionType._extension_registry.pop, 'test_ext', None)
+        return _TestExtension
 
     def test_registered_extension_cql_is_appended(self):
         self._register_extension()
@@ -937,7 +938,7 @@ class TableMetadataExportTest(unittest.TestCase):
         assert TableMetadata._make_option_strings(options) == [
             "caching = '{\"keys\":\"ALL\"}'",
             "compaction = {'sstable_size_in_mb': '160', "
-            "'class': 'org.apache.cassandra.db.compaction.LeveledCompactionStrategy'}",
+            + "'class': 'org.apache.cassandra.db.compaction.LeveledCompactionStrategy'}",
             "compression = {'sstable_compression': 'LZ4Compressor'}",
             "gc_grace_seconds = 10",
         ]
