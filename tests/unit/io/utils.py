@@ -135,6 +135,7 @@ def submit_and_wait_for_completion(unit_test, create_timer, start, end, incremen
                     len(remaining)))
             assert callback in remaining, 'Timer callback invoked more than once'
             remaining.remove(callback)
+            assert callback.invoked_time <= deadline, 'Timer completed after batch deadline'
             # A reactor must not fire timers early. Thread scheduling can delay
             # callbacks, so the overall deadline guards liveness instead of
             # imposing a per-callback host scheduling latency limit (#359).

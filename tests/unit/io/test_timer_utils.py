@@ -51,6 +51,19 @@ def test_timer_validation_rejects_early_callbacks():
         utils.submit_and_wait_for_completion(None, create_timer, 1, 2, 1, 1)
 
 
+def test_timer_validation_rejects_callback_after_batch_deadline(monkeypatch):
+    clock = Clock()
+    monkeypatch.setattr(utils, 'time', clock)
+
+    def create_timer(timeout, callback):
+        clock.now += 10
+        callback()
+        return Mock()
+
+    with pytest.raises(AssertionError, match='after batch deadline'):
+        utils.submit_and_wait_for_completion(None, create_timer, 0, 1, 1, 1)
+
+
 def test_timer_validation_rejects_duplicate_callbacks():
     def create_timer(timeout, callback):
         callback()
