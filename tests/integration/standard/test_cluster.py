@@ -1209,7 +1209,8 @@ class ClusterTests(unittest.TestCase):
             rs = session.execute(query)
             assert rs.response_future.timeout == default_profile.request_timeout
 
-            # Keep the response pending so success cannot race the timeout.
+            # Keep the response pending so success cannot race the
+            # timeout.
             tmp_profile = copy(default_profile)
             tmp_profile.request_timeout = 1.0
             node = get_node(1)
@@ -1218,13 +1219,15 @@ class ClusterTests(unittest.TestCase):
             try:
                 node.pause()
                 with pytest.raises(cassandra.OperationTimedOut) as exc_info:
-                    session.execute(query, execution_profile=tmp_profile, host=host)
+                    session.execute(
+                        query, execution_profile=tmp_profile, host=host)
                 assert exc_info.value.timeout == tmp_profile.request_timeout
                 assert exc_info.value.last_host == host
             finally:
                 node.resume()
 
-            # A client timeout must leave the session usable after recovery.
+            # A client timeout must leave the session usable after
+            # recovery.
             assert session.execute(query, host=host)
 
     def test_replicas_are_queried(self):
