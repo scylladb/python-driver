@@ -1960,9 +1960,6 @@ wheels = [
 [[package]]
 name = "scylla-driver"
 source = { editable = "." }
-dependencies = [
-    { name = "geomet" },
-]
 
 [package.optional-dependencies]
 auth-kerberos = [
@@ -1978,6 +1975,9 @@ compress-lz4 = [
 compress-snappy = [
     { name = "python-snappy" },
 ]
+geo = [
+    { name = "geomet" },
+]
 graph = [
     { name = "gremlinpython" },
 ]
@@ -1988,6 +1988,7 @@ dev = [
     { name = "coverage", extra = ["toml"] },
     { name = "cryptography" },
     { name = "cython" },
+    { name = "geomet" },
     { name = "jsonschema" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
@@ -2002,14 +2003,14 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cryptography", marker = "extra == 'cle'", specifier = ">=42.0" },
-    { name = "geomet", specifier = ">=1.1" },
+    { name = "geomet", marker = "extra == 'geo'", specifier = ">=1.1" },
     { name = "gremlinpython", marker = "extra == 'graph'", specifier = ">=3.7.4,<4" },
     { name = "kerberos", marker = "sys_platform != 'win32' and extra == 'auth-kerberos'" },
     { name = "lz4", marker = "extra == 'compress-lz4'" },
     { name = "python-snappy", marker = "extra == 'compress-snappy'" },
     { name = "winkerberos", marker = "sys_platform == 'win32' and extra == 'auth-kerberos'" },
 ]
-provides-extras = ["graph", "cle", "compress-lz4", "compress-snappy", "auth-kerberos"]
+provides-extras = ["graph", "geo", "cle", "compress-lz4", "compress-snappy", "auth-kerberos"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -2017,6 +2018,7 @@ dev = [
     { name = "coverage", extras = ["toml"], specifier = ">=7.6" },
     { name = "cryptography", specifier = ">=42.0" },
     { name = "cython", specifier = ">=3.2" },
+    { name = "geomet", specifier = ">=1.1" },
     { name = "jsonschema", specifier = ">=4.18" },
     { name = "numpy" },
     { name = "objgraph" },

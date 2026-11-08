@@ -1,6 +1,14 @@
 Unreleased
 ==========
 
+Behavior Changes
+----------------
+* ``geomet`` is no longer a required dependency, so a plain install no longer
+  pulls in ``geomet``, ``click`` and ``colorama``. It is only used by
+  ``Point.from_wkt()``, ``LineString.from_wkt()`` and ``Polygon.from_wkt()``;
+  install it with ``pip install scylla-driver[geo]`` if you use those.
+  Reading and writing geometry values does not need it.
+
 Bug Fixes
 ---------
 * Tablet updates no longer mutate a table's tablet list in place, so a

@@ -47,6 +47,15 @@ For snappy support::
 (If using a Debian Linux derivative such as Ubuntu, it may be easier to
 just run ``apt-get install python-snappy``.)
 
+(*Optional*) Geometry WKT Parsing
+---------------------------------
+``Point.from_wkt()``, ``LineString.from_wkt()`` and ``Polygon.from_wkt()`` in
+``cassandra.util`` parse Well-Known Text with the ``geomet`` package, which is
+not installed by default. Reading and writing geometry values does not need it.
+To install it with the driver::
+
+    pip install scylla-driver[geo]
+
 Speeding Up Installation
 ^^^^^^^^^^^^^^^^^^^^^^^^
 

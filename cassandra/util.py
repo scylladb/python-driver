@@ -1094,7 +1094,8 @@ class Point(object):
         Parse a Point geometry from a wkt string and return a new Point object.
         """
         if not _HAS_GEOMET:
-            raise DriverException("Geomet is required to deserialize a wkt geometry.")
+            raise DriverException("Geomet is required to deserialize a wkt geometry. "
+                                  "Install it with: pip install scylla-driver[geo]")
 
         try:
             geom = wkt.loads(s)
@@ -1152,7 +1153,8 @@ class LineString(object):
         Parse a LineString geometry from a wkt string and return a new LineString object.
         """
         if not _HAS_GEOMET:
-            raise DriverException("Geomet is required to deserialize a wkt geometry.")
+            raise DriverException("Geomet is required to deserialize a wkt geometry. "
+                                  "Install it with: pip install scylla-driver[geo]")
 
         try:
             geom = wkt.loads(s)
@@ -1236,7 +1238,8 @@ class Polygon(object):
         Parse a Polygon geometry from a wkt string and return a new Polygon object.
         """
         if not _HAS_GEOMET:
-            raise DriverException("Geomet is required to deserialize a wkt geometry.")
+            raise DriverException("Geomet is required to deserialize a wkt geometry. "
+                                  "Install it with: pip install scylla-driver[geo]")
 
         try:
             geom = wkt.loads(s)

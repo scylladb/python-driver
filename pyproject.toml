@@ -20,7 +20,7 @@ classifiers = [
     'Programming Language :: Python :: Implementation :: PyPy',
     'Topic :: Software Development :: Libraries :: Python Modules',
 ]
-dependencies = ['geomet>=1.1']
+dependencies = []
 dynamic = ["version", "readme"]
 license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
@@ -40,6 +40,7 @@ auth-kerberos = [
     'kerberos; platform_system != "Windows"',
     'winkerberos; platform_system == "Windows"',
 ]
+geo = ['geomet>=1.1']
 
 [dependency-groups]
 dev = [
@@ -55,6 +56,7 @@ dev = [
     "objgraph",
     "coverage[toml]>=7.6",
     "jsonschema>=4.18",
+    "geomet>=1.1",
     "ccm @ git+https://git@github.com/scylladb/scylla-ccm.git@ad068edc3524309b54428c1babb31ab7e7af2c89",
 ]
 
