@@ -18,7 +18,7 @@ import unittest
 import uuid
 from io import BytesIO
 import time
-from threading import Lock
+from threading import Event, Lock
 from unittest.mock import Mock, ANY, call, patch
 
 from cassandra import AuthenticationFailed, ConsistencyLevel, OperationTimedOut
@@ -905,14 +905,27 @@ class ConnectionHeartbeatTest(unittest.TestCase):
         assert get_holders_fun.call_count
 
     def test_empty_connections(self, *args):
+        """Verify repeated heartbeat visits to an empty holder."""
         count = 3
         get_holders = self.make_get_holders(1)
-
-        self.run_heartbeat(get_holders, count)
-
-        assert get_holders.call_count >= count-1
-        assert get_holders.call_count <= count
         holder = get_holders.return_value[0]
+        visited = Event()
+
+        def get_connections():
+            """Signal after enough visits to the empty holder."""
+            if holder.get_connections.call_count >= count:
+                visited.set()
+            return []
+
+        holder.get_connections.side_effect = get_connections
+        heartbeat = ConnectionHeartbeat(0.01, get_holders, timeout=0.05)
+        try:
+            # Observe holder visits instead of estimating them from a sleep.
+            assert visited.wait(5), 'heartbeat did not visit the empty holder'
+        finally:
+            heartbeat.stop()
+
+        assert get_holders.call_count >= count
         holder.get_connections.assert_has_calls([call()] * get_holders.call_count)
 
     def test_idle_non_idle(self, *args):
