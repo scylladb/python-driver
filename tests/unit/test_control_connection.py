@@ -299,6 +299,77 @@ class ControlConnectionTest(unittest.TestCase):
         self.control_connection._time = self.time
         self.cluster.control_connection = self.control_connection
 
+    def _route_change(self):
+        self.cluster._client_routes_handler = Mock()
+        self.control_connection._signal_error = Mock()
+        self.control_connection._handle_client_routes_change({
+            "change_type": "UPDATE_NODES",
+            "connection_ids": ["proxy"],
+            "host_ids": [HOST_ID_1],
+        })
+
+    def _run_route_refresh(self):
+        args = self.cluster.scheduler.schedule_unique.call_args.args
+        args[1](*args[2:])
+
+    def test_route_change_before_control_connection_is_installed(self):
+        self.control_connection._connection = None
+        self._route_change()
+        self._run_route_refresh()
+        handler = self.cluster._client_routes_handler
+        handler.handle_client_routes_change.assert_not_called()
+        self.control_connection._signal_error.assert_not_called()
+
+        # Retry after setup installs the connection; retain the event.
+        self.control_connection._connection = self.connection
+        self._run_route_refresh()
+        handler.handle_client_routes_change.assert_called_once_with(
+            self.connection, 1, ANY, ("proxy",), (HOST_ID_1,))
+        self.control_connection._signal_error.assert_not_called()
+
+    def test_route_refresh_uses_connection_current_at_dispatch(self):
+        self._route_change()
+        replacement = MockConnection()
+        self.control_connection._connection = replacement
+        self._run_route_refresh()
+        handler = self.cluster._client_routes_handler
+        handler.handle_client_routes_change.assert_called_once_with(
+            replacement, 1, ANY, ("proxy",), (HOST_ID_1,))
+
+    def test_route_refresh_waits_for_healthy_connection(self):
+        for state in ("is_closed", "is_defunct"):
+            with self.subTest(state=state):
+                self.connection.is_closed = False
+                self.connection.is_defunct = False
+                setattr(self.connection, state, True)
+                self._route_change()
+                self._run_route_refresh()
+                handler = self.cluster._client_routes_handler
+                handler.handle_client_routes_change.assert_not_called()
+                self.control_connection._signal_error.assert_not_called()
+                self.control_connection._connection = MockConnection()
+                self._run_route_refresh()
+                handler.handle_client_routes_change.assert_called_once()
+                self.control_connection._connection = self.connection
+
+    def test_route_refresh_stops_after_shutdown(self):
+        self._route_change()
+        args = self.cluster.scheduler.schedule_unique.call_args.args
+        self.control_connection._is_shutdown = True
+        self.cluster.scheduler.schedule_unique.reset_mock()
+        args[1](*args[2:])
+        self.cluster.scheduler.schedule_unique.assert_not_called()
+        handler = self.cluster._client_routes_handler
+        handler.handle_client_routes_change.assert_not_called()
+        self.control_connection._signal_error.assert_not_called()
+
+    def test_route_refresh_signals_query_failure(self):
+        self._route_change()
+        handler = self.cluster._client_routes_handler
+        handler.handle_client_routes_change.side_effect = RuntimeError()
+        self._run_route_refresh()
+        self.control_connection._signal_error.assert_called_once_with()
+
     def _forget_local_host(self):
         endpoint = DefaultEndPoint('192.168.1.0')
         self.cluster.metadata._host_id_by_endpoint.pop(endpoint)
