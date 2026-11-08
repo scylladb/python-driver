@@ -1011,6 +1011,59 @@ class SchemaParserLookupTests(unittest.TestCase):
         assert "system.local" in message.query
 
 
+class SchemaParserPagingTest(unittest.TestCase):
+    """_SchemaParser._handle_results follows paging_state across pages."""
+
+    @staticmethod
+    def _page(names, paging_state=None):
+        return Mock(column_names=['keyspace_name'],
+                    parsed_rows=[(n,) for n in names],
+                    paging_state=paging_state)
+
+    def _parser(self, *responses):
+        connection = Mock()
+        connection.wait_for_response.side_effect = list(responses)
+        # Imported here so the shared import list above stays untouched.
+        from cassandra.metadata import _SchemaParser
+        return _SchemaParser(connection, timeout=1, fetch_size=100,
+                             metadata_request_timeout=None)
+
+    def test_reads_all_pages(self):
+        parser = self._parser((True, self._page(['b'], b'p2')),
+                              (True, self._page(['c'])))
+        rows = parser._handle_results(True, self._page(['a'], b'p1'),
+                                      query_msg=Mock())
+        assert [r['keyspace_name'] for r in rows] == ['a', 'b', 'c']
+
+    def test_expected_failure_on_later_page_stops_paging(self):
+        parser = self._parser((True, self._page(['b'], b'p2')),
+                              (False, cassandra.InvalidRequest('gone')))
+        with self.assertLogs('cassandra.metadata', level='WARNING') as logs:
+            rows = parser._handle_results(True, self._page(['a'], b'p1'),
+                                          expected_failures=(cassandra.InvalidRequest,),
+                                          query_msg=Mock(query='SELECT * FROM system_schema.x'))
+        assert [r['keyspace_name'] for r in rows] == ['a', 'b']
+        assert len(logs.records) == 1
+        assert 'system_schema.x' in logs.output[0]
+        assert 'gone' in logs.output[0]
+        assert parser.connection.wait_for_response.call_count == 2
+
+    def test_expected_failure_on_second_page(self):
+        parser = self._parser((False, cassandra.InvalidRequest('gone')))
+        rows = parser._handle_results(True, self._page(['a'], b'p1'),
+                                      expected_failures=(cassandra.InvalidRequest,),
+                                      query_msg=Mock())
+        assert [r['keyspace_name'] for r in rows] == ['a']
+
+    def test_unexpected_failure_on_later_page_raises(self):
+        parser = self._parser((True, self._page(['b'], b'p2')),
+                              (False, cassandra.OperationTimedOut('slow')))
+        with pytest.raises(cassandra.OperationTimedOut):
+            parser._handle_results(True, self._page(['a'], b'p1'),
+                                   expected_failures=(cassandra.InvalidRequest,),
+                                   query_msg=Mock())
+
+
 class UnicodeIdentifiersTests(unittest.TestCase):
     """
     Exercise cql generation with unicode characters. Keyspace, Table, and Index names

@@ -3,6 +3,10 @@ Unreleased
 
 Bug Fixes
 ---------
+* Schema metadata reads no longer fail with ``AttributeError`` when a later
+  page of a system table query fails with an expected error, such as
+  ``InvalidRequest`` for a missing table. Paging stops and the rows already
+  read are kept, with a warning in the log.
 * Tablet updates no longer mutate a table's tablet list in place, so a
   concurrent lookup cannot fail with ``IndexError``, miss its tablet, or route
   to the wrong one (#1086).

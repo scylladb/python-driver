@@ -2157,7 +2157,8 @@ class _SchemaParser(object):
         :param result: The resultset in question.
         :expected_failures: An Exception class or an iterable thereof. If the
         query failed, but raised an instance of an expected failure class, this
-        will ignore the failure and return an empty list.
+        will ignore the failure and return an empty list. If a later page fails
+        that way, paging stops and the rows read so far are returned.
         """
         timeout = timeout or self.timeout
         if not success and isinstance(result, expected_failures):
@@ -2171,7 +2172,13 @@ class _SchemaParser(object):
                         next_success, next_result = self.connection.wait_for_response(query_msg, timeout=timeout,
                                                                                       fail_on_error=False)
                         if not next_success and isinstance(next_result, expected_failures):
-                            continue
+                            # There is no paging state to continue from, so
+                            # stop here and keep the rows already read. Warn,
+                            # since the schema built from them is incomplete.
+                            log.warning("Schema query %r failed on a later page (%r); "
+                                        "using only the rows read before it",
+                                        getattr(query_msg, 'query', query_msg), next_result)
+                            break
                         elif not next_success:
                             raise next_result
                         if not next_result.paging_state:
