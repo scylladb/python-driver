@@ -212,14 +212,20 @@ class TypeTests(unittest.TestCase):
         assert str(EmptyValue()) == 'EMPTY'
 
     def test_datetype(self):
-        now_time_seconds = time.time()
-        now_datetime = datetime.datetime.fromtimestamp(now_time_seconds, tz=datetime.timezone.utc)
+        # Use explicit values: converting floating-point seconds to a
+        # datetime can round across a millisecond boundary before
+        # serialization.
+        timestamp_datetime = datetime.datetime(
+            2015, 2, 24, 22, 34, 28, 274999, tzinfo=datetime.timezone.utc)
+        timestamp_ms = 1424817268274
+        expected_bytes = int64_pack(timestamp_ms)
 
-        # Cassandra timestamps in millis
-        now_timestamp = now_time_seconds * 1e3
-
-        # same results serialized
-        assert DateType.serialize(now_datetime, 0) == DateType.serialize(now_timestamp, 0)
+        # Datetime fractions below one millisecond are truncated.
+        # Numeric inputs are already expressed in milliseconds.
+        assert DateType.serialize(timestamp_datetime, 0) == expected_bytes
+        assert DateType.serialize(timestamp_ms, 0) == expected_bytes
+        assert DateType.serialize(float(timestamp_ms), 0) == expected_bytes
+        assert DateType.serialize(timestamp_ms + 0.9, 0) == expected_bytes
 
         # deserialize
         # epoc
