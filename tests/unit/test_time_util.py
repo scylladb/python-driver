@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import unittest
+from unittest.mock import call, patch
 
 from cassandra import marshal
 from cassandra import util
@@ -67,30 +68,41 @@ class TimeUtilTest(unittest.TestCase):
         t = time.time()
         seq = 0x2aa5
         node = uuid.getnode()
-        u = util.uuid_from_time(t, node, seq)
+        with patch('cassandra.util.random.getrandbits') as getrandbits:
+            u = util.uuid_from_time(t, node, seq)
+        getrandbits.assert_not_called()
         # using AlmostEqual because time precision is different for
         # some platforms
         assert util.unix_time_from_uuid1(u) == pytest.approx(t, abs=1e-4)
         assert u.node == node
         assert u.clock_seq == seq
 
-        # random node
-        u1 = util.uuid_from_time(t, clock_seq=seq)
-        u2 = util.uuid_from_time(t, clock_seq=seq)
-        assert util.unix_time_from_uuid1(u1) == pytest.approx(t, abs=1e-4)
-        assert util.unix_time_from_uuid1(u2) == pytest.approx(t, abs=1e-4)
-        assert u.clock_seq == seq
-        # not impossible, but we shouldn't get the same value twice
-        assert u1.node != u2.node
+        # Random fields may legitimately repeat. Check their bit widths and
+        # propagation with deterministic values, including both limits.
+        nodes = [0, 0xffffffffffff, 0xffffffffffff]
+        with patch('cassandra.util.random.getrandbits', side_effect=nodes) as getrandbits:
+            uuids = [util.uuid_from_time(t, clock_seq=seq) for _ in nodes]
+        assert getrandbits.call_args_list == [call(48)] * len(nodes)
+        for u, expected_node in zip(uuids, nodes):
+            assert util.unix_time_from_uuid1(u) == pytest.approx(t, abs=1e-4)
+            assert u.node == expected_node
+            assert u.clock_seq == seq
 
-        # random seq
-        u1 = util.uuid_from_time(t, node=node)
-        u2 = util.uuid_from_time(t, node=node)
-        assert util.unix_time_from_uuid1(u1) == pytest.approx(t, abs=1e-4)
-        assert util.unix_time_from_uuid1(u2) == pytest.approx(t, abs=1e-4)
+        sequences = [0, 0x3fff, 0x3fff]
+        with patch('cassandra.util.random.getrandbits', side_effect=sequences) as getrandbits:
+            uuids = [util.uuid_from_time(t, node=node) for _ in sequences]
+        assert getrandbits.call_args_list == [call(14)] * len(sequences)
+        for u, expected_seq in zip(uuids, sequences):
+            assert util.unix_time_from_uuid1(u) == pytest.approx(t, abs=1e-4)
+            assert u.node == node
+            assert u.clock_seq == expected_seq
+
+        with patch('cassandra.util.random.getrandbits', side_effect=[seq, node]) as getrandbits:
+            u = util.uuid_from_time(t)
+        assert getrandbits.call_args_list == [call(14), call(48)]
+        assert util.unix_time_from_uuid1(u) == pytest.approx(t, abs=1e-4)
         assert u.node == node
-        # not impossible, but we shouldn't get the same value twice
-        assert u1.clock_seq != u2.clock_seq
+        assert u.clock_seq == seq
 
         # node too large
         with pytest.raises(ValueError):
