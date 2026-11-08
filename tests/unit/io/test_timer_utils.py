@@ -8,7 +8,8 @@
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+# or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
@@ -34,7 +35,7 @@ def test_timer_validation_accepts_delayed_scheduling(monkeypatch):
     monkeypatch.setattr(utils, 'time', clock)
 
     def create_timer(timeout, callback):
-        # Model a descheduled reactor without sleeping or requiring CPU load.
+        # Model a descheduled reactor without sleeping or CPU load.
         clock.now += timeout + .75
         callback()
         return Mock()
@@ -90,14 +91,15 @@ def test_timer_validation_bounds_missing_callback_wait(monkeypatch):
 
 @pytest.mark.parametrize('timeouts', [(0, 1, 2), (2, 1, 0), (2, 0, 1)])
 def test_timer_manager_expiration_and_order(monkeypatch, timeouts):
-    # Exact deadline behavior is checked with a controlled clock; the reactor
-    # smoke test must not depend on how quickly a runner schedules its threads.
+    # Exact deadline behavior uses a controlled clock. The smoke test
+    # must not depend on how quickly runners schedule their threads.
     clock = Clock()
     monkeypatch.setattr('cassandra.connection.time', clock)
     manager = TimerManager()
     completed = []
     for timeout in timeouts:
-        manager.add_timer(Timer(timeout, lambda t=timeout: completed.append(t)))
+        manager.add_timer(Timer(
+            timeout, lambda t=timeout: completed.append(t)))
 
     assert manager.service_timeouts() == 101
     assert completed == [0]

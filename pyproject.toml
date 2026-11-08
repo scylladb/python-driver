@@ -260,8 +260,8 @@ environment = { CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST = "no" }
 # fail on Windows (the C runtime's gmtime rejects the far-future timestamps they
 # use); the CPython Windows command excludes them for the same reason. The
 # test_empty_connections is timing-sensitive and flaky on macOS, matching
-# the CPython macOS exclusions. The override matches PyPy on all OSes, so these are
-# deselected everywhere here (they are still covered by the CPython runs).
+# the CPython macOS exclusions. The override matches PyPy on all OSes, so this
+# test is deselected everywhere here (it is still covered by the CPython runs).
 [[tool.cibuildwheel.overrides]]
 select = "pp*"
 test-extras = []

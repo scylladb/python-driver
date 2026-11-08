@@ -124,21 +124,27 @@ def submit_and_wait_for_completion(unit_test, create_timer, start, end, incremen
         for timeout in timeouts:
             callback = TimerCallback(timeout)
             callbacks.append(callback)
-            timers.append(create_timer(timeout, lambda cb=callback: on_timeout(cb)))
+            timers.append(create_timer(
+                timeout, lambda cb=callback: on_timeout(cb)))
 
         remaining = set(callbacks)
         while remaining:
             try:
-                callback = completed.get(timeout=max(0, deadline - time.monotonic()))
+                callback = completed.get(
+                    timeout=max(0, deadline - time.monotonic()))
             except Empty:
-                pytest.fail('Timers did not complete: {} callbacks pending'.format(
-                    len(remaining)))
-            assert callback in remaining, 'Timer callback invoked more than once'
+                pytest.fail(
+                    'Timers did not complete: {} callbacks pending'.format(
+                        len(remaining)))
+            assert callback in remaining, (
+                'Timer callback invoked more than once')
             remaining.remove(callback)
-            assert callback.invoked_time <= deadline, 'Timer completed after batch deadline'
-            # A reactor must not fire timers early. Thread scheduling can delay
-            # callbacks, so the overall deadline guards liveness instead of
-            # imposing a per-callback host scheduling latency limit (#359).
+            assert callback.invoked_time <= deadline, (
+                'Timer completed after batch deadline')
+            # A reactor must not fire timers early. Scheduling can delay
+            # callbacks, so the overall deadline guards liveness instead
+            # of imposing a per-callback host scheduling latency limit
+            # (#359).
             assert callback.get_wait_time() >= callback.expected_wait - .01
         assert completed.empty(), 'Timer callback invoked more than once'
     finally:
