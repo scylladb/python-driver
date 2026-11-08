@@ -5719,6 +5719,7 @@ class ControlConnection(object):
         # shutdown) since implementing __del__ disables the cycle detector
         self._cluster = weakref.proxy(cluster)
         self._connection = None
+        self._pending_client_routes_refreshes = {}
         self._timeout = timeout
 
         self._schema_event_refresh_window = schema_event_refresh_window
@@ -5810,6 +5811,7 @@ class ControlConnection(object):
         # another attempt beat it; releasing it first leaves a window where a
         # failing attempt reads the old generation and parks a handler over
         # this healthy connection.
+        pending_routes = ()
         with self._reconnection_lock:
             if self._reconnection_handler:
                 self._reconnection_handler.cancel()
@@ -5830,6 +5832,13 @@ class ControlConnection(object):
                     self._connection = conn
                     self._reconnection_exhausted_connection = None
                     self._connection_generation += 1
+                    pending_routes = tuple(
+                        self._pending_client_routes_refreshes)
+                    self._pending_client_routes_refreshes.clear()
+
+        for args in pending_routes:
+            self._cluster.scheduler.schedule_unique(
+                0, self._handle_client_routes_refresh, *args)
 
         if old:
             log.debug("[control connection] Closing old connection %r, replacing with %r", old, conn)
@@ -6332,6 +6341,7 @@ class ControlConnection(object):
         return None
 
     def shutdown(self):
+        """Stop recovery and discard events awaiting a connection."""
         # stop trying to reconnect (if we are)
         with self._reconnection_lock:
             if self._reconnection_handler:
@@ -6345,6 +6355,7 @@ class ControlConnection(object):
             log.debug("Shutting down control connection")
             connection = self._connection
             self._connection = None
+            self._pending_client_routes_refreshes.clear()
 
         if connection:
             connection.close()
@@ -6851,17 +6862,22 @@ class ControlConnection(object):
 
     def _handle_client_routes_refresh(self, timeout, change_type,
                                       connection_ids, host_ids):
+        """Refresh current routes or retain events for adoption."""
         try:
-            if self._is_shutdown:
-                return
-            connection = self._connection
-            if (connection is None or connection.is_closed or
-                    connection.is_defunct):
-                # Watchers can fire before setup installs a connection.
-                # Retain the event until a connection becomes available.
-                self._cluster.scheduler.schedule_unique(
-                    0.1, self._handle_client_routes_refresh,
-                    timeout, change_type, connection_ids, host_ids)
+            with self._lock:
+                if self._is_shutdown:
+                    return
+                connection = self._connection
+                defer = (connection is None or connection.is_closed or
+                         connection.is_defunct)
+                if defer:
+                    args = (timeout, change_type, connection_ids, host_ids)
+                    # Adoption drains events without polling.
+                    self._pending_client_routes_refreshes[args] = None
+            if defer:
+                if connection is not None:
+                    # Respect exhausted retry policies during recovery.
+                    self.return_connection(connection)
                 return
             self._cluster._client_routes_handler.handle_client_routes_change(
                 connection, timeout, change_type, connection_ids, host_ids)
