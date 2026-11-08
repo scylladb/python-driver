@@ -39,7 +39,7 @@ from cassandra.auth import PlainTextAuthProvider, SaslAuthProvider
 from cassandra import connection
 from cassandra.connection import DefaultEndPoint
 
-from tests import notwindows, notasyncio
+from tests import notwindows
 from tests.integration import use_cluster, get_server_versions, CASSANDRA_VERSION, \
     execute_until_pass, execute_with_long_wait_retry, get_node, MockLoggingHandler, get_unsupported_lower_protocol, \
     get_unsupported_upper_protocol, local, CASSANDRA_IP, greaterthanorequalcass30, \
@@ -1198,7 +1198,7 @@ class ClusterTests(unittest.TestCase):
             assert False, f'Found stale connections: {result.stdout}'
 
     @notwindows
-    @notasyncio  # asyncio can't do timeouts smaller than 1ms, as this test requires
+    @local
     def test_execute_query_timeout(self):
         with TestCluster() as cluster:
             session = cluster.connect(wait_for_all_pools=True)
@@ -1209,24 +1209,23 @@ class ClusterTests(unittest.TestCase):
             rs = session.execute(query)
             assert rs.response_future.timeout == default_profile.request_timeout
 
-            # tiny timeout times out as expected
+            # Keep the response pending so success cannot race the timeout.
             tmp_profile = copy(default_profile)
-            tmp_profile.request_timeout = sys.float_info.min
+            tmp_profile.request_timeout = 1.0
+            node = get_node(1)
+            host = next(h for h in cluster.metadata.all_hosts()
+                        if h.address == node.address())
+            try:
+                node.pause()
+                with pytest.raises(cassandra.OperationTimedOut) as exc_info:
+                    session.execute(query, execution_profile=tmp_profile, host=host)
+                assert exc_info.value.timeout == tmp_profile.request_timeout
+                assert exc_info.value.last_host == host
+            finally:
+                node.resume()
 
-            max_retry_count = 10
-            for _ in range(max_retry_count):
-                start = time.time()
-                try:
-                    with pytest.raises(cassandra.OperationTimedOut):
-                        session.execute(query, execution_profile=tmp_profile)
-                    break
-                except:
-                    import traceback
-                    traceback.print_exc()
-                    end = time.time()
-                    assert start == pytest.approx(end, abs=1e-1)
-            else:
-                raise Exception("session.execute didn't time out in {0} tries".format(max_retry_count))
+            # A client timeout must leave the session usable after recovery.
+            assert session.execute(query, host=host)
 
     def test_replicas_are_queried(self):
         """
