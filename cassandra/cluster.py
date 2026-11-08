@@ -7360,6 +7360,9 @@ class ResponseFuture(object):
     _custom_payload = None
     _warnings = None
     _timer = None
+    # Set when the timeout fired before any request was sent (no connection
+    # yet). From then on _query() must not send: the deadline has passed.
+    _timeout_before_send = False
     _protocol_handler = ProtocolHandler
     _spec_execution_plan = NoSpeculativeExecutionPlan()
     _continuous_paging_session = None
@@ -7392,6 +7395,12 @@ class ResponseFuture(object):
         # between. Defaults to [] for unprepared statements (no cached metadata).
         self._bound_result_metadata = [] if bound_result_metadata is _NOT_SET else bound_result_metadata
         self._callback_lock = Lock()
+        # Makes the timeout's "no connection yet" decision and send admission
+        # (flag check + _connection assignment) atomic. Taken in three places:
+        # _on_timeout() takes it alone, _query() inside connection.lock, and
+        # _send_control_connection_message() inside the control connection's
+        # _application_query_lock. Nothing is acquired while it is held.
+        self._send_admission_lock = Lock()
         self._start_time = start_time or time.time()
         self._host = host
         self._routing_token = routing_token
@@ -7445,7 +7454,20 @@ class ResponseFuture(object):
         set in those cases, where ``_on_timeout`` reschedules itself.
         """
         # PYTHON-853: for short timeouts, we sometimes race with our __init__
-        if self._connection is None and _attempts < 3:
+        # and fire before any send has set _connection. Record that the
+        # timeout fired (_timeout_before_send). Send admission checks the flag
+        # under the same lock, so no send can publish _connection after this:
+        # a send already in progress gives its borrowed stream back, and
+        # send_request() then times the request out itself. The rescheduled
+        # call is only a backstop that times the request out if nothing else
+        # has; it no longer waits for a connection to orphan. If admission
+        # won the lock first, _connection is set and this branch is skipped.
+        with self._send_admission_lock:
+            defer = self._connection is None and _attempts < 3 and \
+                not self._timeout_before_send
+            if defer:
+                self._timeout_before_send = True
+        if defer:
             self._timer = self.session.cluster.connection_class.create_timer(
                 0.01,
                 partial(self._on_timeout, _attempts=_attempts + 1)
@@ -7525,7 +7547,10 @@ class ResponseFuture(object):
                     control_host = self.session.cluster.get_control_connection_host()
                     key = str(control_host.endpoint) if control_host is not None else str(self._connection.endpoint)
                 else:
-                    key = str(self._current_host.endpoint)
+                    # The fallback records the bare endpoint when the control
+                    # host is unknown, and may be refused before it sends.
+                    key = str(getattr(self._current_host, 'endpoint',
+                                      self._current_host))
                 errors = {key: "Client request timeout. See Session.execute[_async](timeout)"}
             else:
                 errors = self._schema_agreement_timeout_errors()
@@ -7613,9 +7638,16 @@ class ResponseFuture(object):
             if req_id is not None:
                 self._req_id = req_id
                 return True
-            if self.timeout is not None and time.time() - self._start_time > self.timeout:
+            if self._timeout_before_send or (
+                    self.timeout is not None and
+                    time.time() - self._start_time > self.timeout):
                 self._on_timeout()
                 return True
+        if self._timeout_before_send:
+            # The timeout fired before anything was sent: report it rather
+            # than NoHostAvailable, and don't fall back after the deadline.
+            self._on_timeout()
+            return True
         if error_no_hosts:
             if self._fallback_to_control_connection():
                 req_id = self._query_control_connection()
@@ -7627,6 +7659,12 @@ class ResponseFuture(object):
                     # would clobber it with the USE id on the keyspace path.
                     return True
 
+            if self._timeout_before_send:
+                # The timeout fired after the check above: before the fallback
+                # was admitted, or while deciding not to fall back. Nothing
+                # was sent, so report the timeout, not NoHostAvailable.
+                self._on_timeout()
+                return True
             self._set_final_exception(NoHostAvailable(
                 "Unable to complete the operation against any hosts", self._errors))
         return False
@@ -7826,8 +7864,9 @@ class ResponseFuture(object):
         if sent is None:
             control_connection._finish_internal_keyspace_change(
                 connection, request_id)
-            if not isinstance(self._errors.get(host),
-                              (ConnectionBusy, NoConnectionsAvailable)):
+            if not self._timeout_before_send and \
+                    not isinstance(self._errors.get(host),
+                                   (ConnectionBusy, NoConnectionsAvailable)):
                 connection.defunct(ConnectionException(
                     "Failed sending control-connection keyspace setup", connection.endpoint))
         return sent
@@ -7867,9 +7906,15 @@ class ResponseFuture(object):
             control_connection = self.session.cluster.control_connection
             with control_connection._application_query_lock:
                 self._control_connection_requests[(connection, request_id)] = cb
-                self._connection = connection
-                self._request_pool = None
-                self._req_id = request_id
+                # Same admission rule as _query(): once the timeout has fired
+                # without a connection, nothing may be sent. The finally block
+                # below finds the registered request and returns its stream.
+                with self._send_admission_lock:
+                    if self._timeout_before_send:
+                        return None
+                    self._connection = connection
+                    self._request_pool = None
+                    self._req_id = request_id
 
             log.debug("No usable node pools; falling back to control connection for host %s", host)
             # Record the stream id before sending, not after. The reply can be
@@ -8043,8 +8088,9 @@ class ResponseFuture(object):
             if sent is None:
                 control_connection._finish_application_keyspace_change(
                     connection, request_id)
-                if not isinstance(self._errors.get(host),
-                                  (ConnectionBusy, NoConnectionsAvailable)):
+                if not self._timeout_before_send and \
+                        not isinstance(self._errors.get(host),
+                                       (ConnectionBusy, NoConnectionsAvailable)):
                     connection.defunct(ConnectionException(
                         "Failed sending control-connection keyspace change", connection.endpoint))
             return sent
@@ -8138,8 +8184,14 @@ class ResponseFuture(object):
                 # cannot observe a partial attempt or an unsent stream.
                 connection.lock.acquire()
                 try:
-                    self._current_host = host
-                    self._connection = connection
+                    with self._send_admission_lock:
+                        if self._timeout_before_send:
+                            # The timeout already fired; the finally below
+                            # gives the stream back and send_request() times
+                            # out.
+                            return None
+                        self._current_host = host
+                        self._connection = connection
                     self._request_pool = pool
                     self._req_id = request_id
                     self.request_encoded_size = connection.send_msg(
@@ -8278,6 +8330,7 @@ class ResponseFuture(object):
             self._final_result = _NOT_SET
             self._final_exception = None
             self._control_connection_query_attempted = False
+            self._timeout_before_send = False
         self._start_timer()
         self.send_request()
 
