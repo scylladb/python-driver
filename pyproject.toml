@@ -231,7 +231,7 @@ test-extras = ["compress-lz4"]
 # on macOS runners. The asyncio reactor test file only contains those
 # timing-sensitive timer tests, so it is not run separately here.
 test-command = [
-    "CASS_DRIVER_NO_SKIP=1 pytest --import-mode=append {project}/tests/unit -v --ignore={project}/tests/unit/column_encryption --ignore={project}/tests/unit/io/test_asyncioreactor.py --ignore={project}/tests/unit/io/test_asyncorereactor.py -k 'not (test_multi_timer_validation or test_empty_connections or test_deserialize_date_range_month)'",
+    "CASS_DRIVER_NO_SKIP=1 pytest --import-mode=append {project}/tests/unit -v --ignore={project}/tests/unit/column_encryption --ignore={project}/tests/unit/io/test_asyncioreactor.py --ignore={project}/tests/unit/io/test_asyncorereactor.py -k 'not (test_empty_connections or test_deserialize_date_range_month)'",
 ]
 
 [tool.cibuildwheel.windows]
@@ -259,13 +259,12 @@ environment = { CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST = "no" }
 # test_deserialize_date_range_year and test_datetype are excluded because they
 # fail on Windows (the C runtime's gmtime rejects the far-future timestamps they
 # use); the CPython Windows command excludes them for the same reason. The
-# timer tests (test_multi_timer_validation, test_empty_connections) are
-# timing-sensitive and flaky on macOS, matching the CPython macOS
-# exclusions. The override matches PyPy on all OSes, so these are
+# test_empty_connections is timing-sensitive and flaky on macOS, matching
+# the CPython macOS exclusions. The override matches PyPy on all OSes, so these are
 # deselected everywhere here (they are still covered by the CPython runs).
 [[tool.cibuildwheel.overrides]]
 select = "pp*"
 test-extras = []
 test-command = [
-    "pytest --import-mode=append {package}/tests/unit -v --ignore={package}/tests/unit/column_encryption -k \"not (test_deserialize_date_range_month or test_deserialize_date_range_year or test_datetype or test_multi_timer_validation or test_empty_connections)\"",
+    "pytest --import-mode=append {package}/tests/unit -v --ignore={package}/tests/unit/column_encryption -k \"not (test_deserialize_date_range_month or test_deserialize_date_range_year or test_datetype or test_empty_connections)\"",
 ]
