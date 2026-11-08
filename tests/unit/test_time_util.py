@@ -77,10 +77,11 @@ class TimeUtilTest(unittest.TestCase):
         assert u.node == node
         assert u.clock_seq == seq
 
-        # Random fields may legitimately repeat. Check their bit widths and
-        # propagation with deterministic values, including both limits.
+        # Random fields may repeat. Check their bit widths and values
+        # with deterministic boundary values and valid collisions.
         nodes = [0, 0xffffffffffff, 0xffffffffffff]
-        with patch('cassandra.util.random.getrandbits', side_effect=nodes) as getrandbits:
+        with patch('cassandra.util.random.getrandbits',
+                   side_effect=nodes) as getrandbits:
             uuids = [util.uuid_from_time(t, clock_seq=seq) for _ in nodes]
         assert getrandbits.call_args_list == [call(48)] * len(nodes)
         for u, expected_node in zip(uuids, nodes):
@@ -89,7 +90,8 @@ class TimeUtilTest(unittest.TestCase):
             assert u.clock_seq == seq
 
         sequences = [0, 0x3fff, 0x3fff]
-        with patch('cassandra.util.random.getrandbits', side_effect=sequences) as getrandbits:
+        with patch('cassandra.util.random.getrandbits',
+                   side_effect=sequences) as getrandbits:
             uuids = [util.uuid_from_time(t, node=node) for _ in sequences]
         assert getrandbits.call_args_list == [call(14)] * len(sequences)
         for u, expected_seq in zip(uuids, sequences):
@@ -97,7 +99,8 @@ class TimeUtilTest(unittest.TestCase):
             assert u.node == node
             assert u.clock_seq == expected_seq
 
-        with patch('cassandra.util.random.getrandbits', side_effect=[seq, node]) as getrandbits:
+        with patch('cassandra.util.random.getrandbits',
+                   side_effect=[seq, node]) as getrandbits:
             u = util.uuid_from_time(t)
         assert getrandbits.call_args_list == [call(14), call(48)]
         assert util.unix_time_from_uuid1(u) == pytest.approx(t, abs=1e-4)
