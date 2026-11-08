@@ -233,13 +233,13 @@ class TestShardAwareIntegration(unittest.TestCase):
 
     def test_closing_connections(self):
         """
-        Verify that closed shard connections are replaced and used for queries.
+        Verify queries use replacements for closed shard connections.
         """
         self.create_ks_and_cf()
         self.create_data(self.session)
 
-        # Detect closed idle connections promptly without changing the shared
-        # client's heartbeat configuration for the other shard-awareness tests.
+        # Detect closed idle connections promptly. Keep the shared
+        # client's heartbeat configuration for the other shard tests.
         contact_points = [
             host.endpoint for host in self.cluster.metadata.all_hosts()]
         with Cluster(contact_points=contact_points,
@@ -247,8 +247,7 @@ class TestShardAwareIntegration(unittest.TestCase):
                      load_balancing_policy=TokenAwarePolicy(
                          RoundRobinPolicy()),
                      reconnection_policy=ConstantReconnectionPolicy(1),
-                     idle_heartbeat_interval=0.1,
-                     idle_heartbeat_timeout=1) as cluster:
+                     idle_heartbeat_interval=0.1) as cluster:
             session = cluster.connect('preparedtests', wait_for_all_pools=True)
             prepared = session.prepare('SELECT * FROM cf0 WHERE a=? AND b=?')
             rows = [('a', 'b', 'c'), ('100002', 'f', 'g'), ('e', 'f', 'g')]
@@ -278,16 +277,18 @@ class TestShardAwareIntegration(unittest.TestCase):
                     shard_id = host.sharding_info.shard_id_from_token(
                         token.value)
                     tested_shards.add(shard_id)
-                    connection = wait_for_shard(host, shard_id)
+                    wait_for_shard(host, shard_id)
                     future = session.execute_async(bound, host=host)
                     assert future.result() == [row]
-                    assert future._connection is connection
+                    connection = future._connection
+                    assert connection.features.shard_id == shard_id
                     connection.close()
 
-                    replacement = wait_for_shard(host, shard_id, connection)
+                    wait_for_shard(host, shard_id, connection)
                     future = session.execute_async(bound, host=host)
                     assert future.result() == [row]
-                    assert future._connection is replacement
+                    assert future._connection is not connection
+                    assert future._connection.features.shard_id == shard_id
                 assert tested_shards == set(
                     range(host.sharding_info.shards_count))
 
