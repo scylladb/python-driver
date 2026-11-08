@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
-import random
 from subprocess import run
 import logging
 
@@ -202,29 +201,65 @@ class TestShardAwareIntegration(unittest.TestCase):
             for result in as_completed(futures):
                 print(result)
 
-    @pytest.mark.skip(reason='https://github.com/scylladb/python-driver/issues/221')
     def test_closing_connections(self):
         """
-        Verify that reconnection is working as expected, when connection are being closed.
+        Verify that closed shard connections are replaced and used for queries.
         """
         self.create_ks_and_cf()
         self.create_data(self.session)
-        self.query_data(self.session)
 
-        for i in range(6):
-            assert self.session._pools
-            pool = list(self.session._pools.values())[0]
-            if not pool._connections:
-                continue
-            shard_id = random.choice(list(pool._connections.keys()))
-            pool._connections.get(shard_id).close()
-            wait_until_not_raised(
-                lambda: self.query_data(self.session, verify_in_tracing=False),
-                delay=0.5, max_attempts=30)
+        # Detect closed idle connections promptly without changing the shared
+        # client's heartbeat configuration for the other shard-awareness tests.
+        contact_points = [
+            host.endpoint for host in self.cluster.metadata.all_hosts()]
+        with Cluster(contact_points=contact_points,
+                     protocol_version=PROTOCOL_VERSION,
+                     load_balancing_policy=TokenAwarePolicy(
+                         RoundRobinPolicy()),
+                     reconnection_policy=ConstantReconnectionPolicy(1),
+                     idle_heartbeat_interval=0.1,
+                     idle_heartbeat_timeout=1) as cluster:
+            session = cluster.connect('preparedtests', wait_for_all_pools=True)
+            prepared = session.prepare('SELECT * FROM cf0 WHERE a=? AND b=?')
+            rows = [('a', 'b', 'c'), ('100002', 'f', 'g'), ('e', 'f', 'g')]
 
-        wait_until_not_raised(
-            lambda: self.query_data(self.session),
-            delay=0.5, max_attempts=60)
+            def wait_for_shard(host, shard_id, closed_connection=None):
+                def check():
+                    pool = session._pools.get(host)
+                    assert pool is not None
+                    connection = pool._connections.get(shard_id)
+                    assert connection is not None
+                    assert connection is not closed_connection
+                    assert not connection.is_closed
+                    assert not connection.is_defunct
+                    assert connection.features.shard_id == shard_id
+                    return connection
+
+                return wait_until_not_raised(
+                    check, delay=0.1, max_attempts=300)
+
+            for host in cluster.metadata.all_hosts():
+                assert host.sharding_info is not None
+                tested_shards = set()
+                for row in rows:
+                    bound = prepared.bind(row[:2])
+                    token = cluster.metadata.token_map.token_class.from_key(
+                        bound.routing_key)
+                    shard_id = host.sharding_info.shard_id_from_token(
+                        token.value)
+                    tested_shards.add(shard_id)
+                    connection = wait_for_shard(host, shard_id)
+                    future = session.execute_async(bound, host=host)
+                    assert future.result() == [row]
+                    assert future._connection is connection
+                    connection.close()
+
+                    replacement = wait_for_shard(host, shard_id, connection)
+                    future = session.execute_async(bound, host=host)
+                    assert future.result() == [row]
+                    assert future._connection is replacement
+                assert tested_shards == set(
+                    range(host.sharding_info.shards_count))
 
     @pytest.mark.skip
     def test_blocking_connections(self):
