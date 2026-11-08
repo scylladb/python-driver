@@ -668,8 +668,8 @@ class ConcurrencyTest((unittest.TestCase)):
     def test_async_replenishes_after_successes_from_other_thread(self):
         concurrency = 2
         count = 5
-        # A future is visible before execute_async returns and the pump attaches
-        # its callbacks. The response thread must wait for that attachment.
+        # The future is visible before the pump attaches callbacks. Wait
+        # for attachment before responding from another thread.
         session, response_futures = self.deferred_session(
             response_future_class=ReadyDeferredResponseFuture)
         in_flight_violations = []
