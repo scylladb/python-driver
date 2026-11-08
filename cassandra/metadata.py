@@ -2200,6 +2200,10 @@ class _SchemaParser(object):
         return [build_func(row) for row in results]
 
 
+# Methods marked 'no cover' below read the Cassandra 2.x schema tables and are
+# overridden by SchemaParserV3. On ScyllaDB and Cassandra 3.0+ they run only
+# when get_schema_parser() cannot determine the server version and falls back
+# to this parser; their queries then fail on the missing legacy tables.
 class SchemaParserV22(_SchemaParser):
     """
     For C* 2.2+
@@ -2286,7 +2290,7 @@ class SchemaParserV22(_SchemaParser):
 
             yield keyspace_meta
 
-    def get_table(self, keyspaces, keyspace, table):
+    def get_table(self, keyspaces, keyspace, table):  # pragma: no cover - Cassandra 2.x only
         cl = ConsistencyLevel.ONE
         where_clause = bind_params(" WHERE keyspace_name = %%s AND %s = %%s" % (self._table_name_col,), (keyspace, table), _encoder)
         cf_query = QueryMessage(
@@ -2349,7 +2353,7 @@ class SchemaParserV22(_SchemaParser):
         return ksm
 
     @staticmethod
-    def _build_keyspace_metadata_internal(row):
+    def _build_keyspace_metadata_internal(row):  # pragma: no cover - Cassandra 2.x only
         name = row["keyspace_name"]
         durable_writes = row["durable_writes"]
         strategy_class = row["strategy_class"]
@@ -2375,7 +2379,7 @@ class SchemaParserV22(_SchemaParser):
                         deterministic, monotonic, monotonic_on)
 
     @classmethod
-    def _build_aggregate(cls, aggregate_row):
+    def _build_aggregate(cls, aggregate_row):  # pragma: no cover - Cassandra 2.x only
         cass_state_type = types.lookup_casstype(aggregate_row['state_type'])
         initial_condition = aggregate_row['initcond']
         if initial_condition is not None:
@@ -2387,7 +2391,7 @@ class SchemaParserV22(_SchemaParser):
                          aggregate_row['final_func'], initial_condition, return_type,
                          aggregate_row.get('deterministic', False))
 
-    def _build_table_metadata(self, row, col_rows=None, trigger_rows=None):
+    def _build_table_metadata(self, row, col_rows=None, trigger_rows=None):  # pragma: no cover - Cassandra 2.x only
         keyspace_name = row["keyspace_name"]
         cfname = row[self._table_name_col]
 
@@ -2547,7 +2551,7 @@ class SchemaParserV22(_SchemaParser):
 
         return table_meta
 
-    def _build_table_options(self, row):
+    def _build_table_options(self, row):  # pragma: no cover - Cassandra 2.x only
         """ Setup the mostly-non-schema table options, like caching settings """
         options = dict((o, row.get(o)) for o in self.recognized_table_options if o in row)
 
@@ -2563,7 +2567,7 @@ class SchemaParserV22(_SchemaParser):
         return options
 
     @classmethod
-    def _build_column_metadata(cls, table_metadata, row):
+    def _build_column_metadata(cls, table_metadata, row):  # pragma: no cover - Cassandra 2.x only
         name = row["column_name"]
         type_string = row["validator"]
         data_type = types.lookup_casstype(type_string)
@@ -2575,7 +2579,7 @@ class SchemaParserV22(_SchemaParser):
         return column_meta
 
     @staticmethod
-    def _build_index_metadata(column_metadata, row):
+    def _build_index_metadata(column_metadata, row):  # pragma: no cover - Cassandra 2.x only
         index_name = row.get("index_name")
         kind = row.get("index_type")
         if index_name or kind:
@@ -2605,13 +2609,13 @@ class SchemaParserV22(_SchemaParser):
             return IndexMetadata(column_metadata.table.keyspace_name, column_metadata.table.name, index_name, kind, options)
 
     @staticmethod
-    def _build_trigger_metadata(table_metadata, row):
+    def _build_trigger_metadata(table_metadata, row):  # pragma: no cover - Cassandra 2.x only
         name = row["trigger_name"]
         options = row["trigger_options"]
         trigger_meta = TriggerMetadata(table_metadata, name, options)
         return trigger_meta
 
-    def _query_all(self):
+    def _query_all(self):  # pragma: no cover - Cassandra 2.x only
         cl = ConsistencyLevel.ONE
         queries = [
             QueryMessage(
@@ -2732,7 +2736,7 @@ class SchemaParserV22(_SchemaParser):
             m[ksname][cfname].append(row)
 
     @staticmethod
-    def _schema_type_to_cql(type_string):
+    def _schema_type_to_cql(type_string):  # pragma: no cover - Cassandra 2.x only
         cass_type = types.lookup_casstype(type_string)
         return _cql_from_cass_type(cass_type)
 
