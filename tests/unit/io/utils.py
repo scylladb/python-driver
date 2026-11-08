@@ -26,6 +26,7 @@ import random
 from functools import wraps
 from itertools import cycle
 from io import BytesIO
+from queue import Empty, Queue
 from threading import Event
 from unittest.mock import Mock, MagicMock
 
@@ -51,11 +52,11 @@ class TimerCallback(object):
 
     def __init__(self, expected_wait):
         self.invoked = False
-        self.created_time = time.time()
+        self.created_time = time.monotonic()
         self.expected_wait = expected_wait
 
     def invoke(self):
-        self.invoked_time = time.time()
+        self.invoked_time = time.monotonic()
         self.invoked = True
 
     def was_invoked(self):
@@ -108,30 +109,40 @@ def submit_and_wait_for_completion(unit_test, create_timer, start, end, incremen
    :param split_range: True to split the range between incrementing and decrementing.
    """
 
-    # Various lists for tracking callback as completed or pending
-    pending_callbacks = []
-    completed_callbacks = []
+    completed = Queue()
+    callbacks = []
+    timers = []
+    timeouts = [get_timeout(t, start, end, precision, split_range)
+                for t in range(start, end, increment)]
+    deadline = time.monotonic() + max(timeouts, default=0) + 5
 
-    # submit timers with various timeouts
-    for gross_time in range(start, end, increment):
-        timeout = get_timeout(gross_time, start, end, precision, split_range)
-        callback = TimerCallback(timeout)
-        create_timer(timeout, callback.invoke)
-        pending_callbacks.append(callback)
+    def on_timeout(callback):
+        callback.invoke()
+        completed.put(callback)
 
-    # wait for all the callbacks associated with the timers to be invoked
-    while len(pending_callbacks) != 0:
-        for callback in pending_callbacks:
-            if callback.was_invoked():
-                pending_callbacks.remove(callback)
-                completed_callbacks.append(callback)
-        time.sleep(.1)
+    try:
+        for timeout in timeouts:
+            callback = TimerCallback(timeout)
+            callbacks.append(callback)
+            timers.append(create_timer(timeout, lambda cb=callback: on_timeout(cb)))
 
-    # ensure they are all called back in a timely fashion
-    # Use a generous tolerance (500ms) to account for CI environments under heavy load,
-    # especially Windows during wheel building where timing can be significantly less precise
-    for callback in completed_callbacks:
-        assert callback.expected_wait == pytest.approx(callback.get_wait_time(), abs=.5)
+        remaining = set(callbacks)
+        while remaining:
+            try:
+                callback = completed.get(timeout=max(0, deadline - time.monotonic()))
+            except Empty:
+                pytest.fail('Timers did not complete: {} callbacks pending'.format(
+                    len(remaining)))
+            assert callback in remaining, 'Timer callback invoked more than once'
+            remaining.remove(callback)
+            # A reactor must not fire timers early. Thread scheduling can delay
+            # callbacks, so the overall deadline guards liveness instead of
+            # imposing a per-callback host scheduling latency limit (#359).
+            assert callback.get_wait_time() >= callback.expected_wait - .01
+        assert completed.empty(), 'Timer callback invoked more than once'
+    finally:
+        for timer in timers:
+            timer.cancel()
 
 class TimerTestMixin(object):
 
