@@ -6827,12 +6827,23 @@ class ControlConnection(object):
         self._cluster.scheduler.schedule_unique(
             0,
             self._handle_client_routes_refresh,
-            self._connection, self._timeout, change_type, connection_ids, host_ids
+            self._timeout, change_type, connection_ids, host_ids
         )
 
-    def _handle_client_routes_refresh(self, connection, timeout,
-                                      change_type, connection_ids, host_ids):
+    def _handle_client_routes_refresh(self, timeout, change_type,
+                                      connection_ids, host_ids):
         try:
+            if self._is_shutdown:
+                return
+            connection = self._connection
+            if (connection is None or connection.is_closed or
+                    connection.is_defunct):
+                # Watchers can fire before setup installs a connection.
+                # Retain the event until a connection becomes available.
+                self._cluster.scheduler.schedule_unique(
+                    0.1, self._handle_client_routes_refresh,
+                    timeout, change_type, connection_ids, host_ids)
+                return
             self._cluster._client_routes_handler.handle_client_routes_change(
                 connection, timeout, change_type, connection_ids, host_ids)
         except ReferenceError:
