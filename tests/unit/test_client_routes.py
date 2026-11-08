@@ -542,6 +542,50 @@ class TestClientRoutesEndPoint(unittest.TestCase):
         )
         self.assertEqual(ep.resolve(), ("10.0.0.1", 9042))
 
+    def test_original_port_is_part_of_identity(self):
+        """Different original ports distinguish endpoints."""
+        host_id = uuid.uuid4()
+        ep_without_port = ClientRoutesEndPoint(
+            host_id=host_id,
+            handler=self.handler,
+            original_address="10.0.0.1",
+        )
+        ep_with_port = ClientRoutesEndPoint(
+            host_id=host_id,
+            handler=self.handler,
+            original_address="10.0.0.1",
+            original_port=9042,
+        )
+
+        self.assertNotEqual(ep_without_port, ep_with_port)
+        self.assertEqual(len({ep_without_port, ep_with_port}), 2)
+        same = ClientRoutesEndPoint(host_id, self.handler, '10.0.0.1', 9042)
+        other_port = ClientRoutesEndPoint(
+            host_id, self.handler, '10.0.0.1', 9142)
+        self.assertEqual(ep_with_port, same)
+        self.assertEqual(hash(ep_with_port), hash(same))
+        self.assertEqual(len({ep_with_port, same, other_port}), 2)
+
+    def test_sorting_handles_missing_original_port(self):
+        """Ordering should remain deterministic when original_port is None."""
+        host_id = uuid.uuid4()
+        ep_without_port = ClientRoutesEndPoint(
+            host_id=host_id,
+            handler=self.handler,
+            original_address="10.0.0.1",
+        )
+        ep_with_port = ClientRoutesEndPoint(
+            host_id=host_id,
+            handler=self.handler,
+            original_address="10.0.0.1",
+            original_port=9042,
+        )
+
+        self.assertEqual(
+            sorted([ep_without_port, ep_with_port]),
+            [ep_with_port, ep_without_port],
+        )
+
     @patch('cassandra.client_routes.socket.getaddrinfo',
            return_value=[(socket.AF_INET, socket.SOCK_STREAM, 0, '', ("192.168.1.100", 9042))])
     def test_resolve_returns_address_when_route_exists(self, _mock_getaddrinfo):
