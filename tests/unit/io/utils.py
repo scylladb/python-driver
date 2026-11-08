@@ -26,6 +26,7 @@ import random
 from functools import wraps
 from itertools import cycle
 from io import BytesIO
+from threading import Event
 from unittest.mock import Mock, MagicMock
 
 import errno
@@ -168,12 +169,20 @@ class TimerTestMixin(object):
         callback = TimerCallback(timeout)
         timer = self.create_timer(timeout, callback.invoke)
         timer.cancel()
-        # Release context allow for timer thread to run.
-        time.sleep(timeout * 2)
+        # A later timer proves the reactor serviced the cancelled timer,
+        # even when a busy runner delays it beyond the requested
+        # timeout.
+        serviced = Event()
+        sentinel = self.create_timer(timeout * 2, serviced.set)
+        try:
+            assert serviced.wait(10), 'reactor did not service the timer queue'
+        finally:
+            sentinel.cancel()
         timer_manager = self._timers
-        # Assert that the cancellation was honored
-        assert not timer_manager._queue
-        assert not timer_manager._new_timers
+        # The sentinel may still be queued until its callback returns.
+        assert all(entry[1] is not timer for entry in timer_manager._queue)
+        assert all(
+            entry[1] is not timer for entry in timer_manager._new_timers)
         assert not callback.was_invoked()
 
 
