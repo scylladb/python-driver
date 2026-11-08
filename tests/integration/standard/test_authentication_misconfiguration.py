@@ -13,13 +13,10 @@
 # limitations under the License.
 
 import unittest
-import pytest
 
 from tests.integration import use_cluster, TestCluster
 
 
-@pytest.mark.skip(reason="Flaky test - needs investigation whether its Scylla's or driver's fault."
-                         "Issue: https://github.com/scylladb/python-driver/issues/236")
 class MisconfiguredAuthenticationTests(unittest.TestCase):
     """ One node (not the contact point) has password auth. The rest of the nodes have no auth """
     @classmethod
@@ -35,12 +32,21 @@ class MisconfiguredAuthenticationTests(unittest.TestCase):
         cls.ccm_cluster = ccm_cluster
 
     def test_connect_no_auth_provider(self):
-        cluster = TestCluster()
-        cluster.connect()
-        cluster.refresh_nodes()
-        down_hosts = [host for host in cluster.metadata.all_hosts() if not host.is_up]
-        assert len(down_hosts) == 1
-        cluster.shutdown()
+        with TestCluster() as cluster:
+            # connect() returns once the first pool succeeds. Wait for
+            # the authentication attempt on node3 before checking its
+            # state.
+            cluster.connect(wait_for_all_pools=True)
+            hosts = cluster.metadata.all_hosts()
+            expected_addresses = {
+                node.network_interfaces['binary'][0]
+                for node in self.ccm_cluster.nodes.values()
+            }
+            assert {host.address for host in hosts} == expected_addresses
+            down_addresses = {host.address for host in hosts if not host.is_up}
+            assert down_addresses == {
+                self.ccm_cluster.nodes['node3'].network_interfaces['binary'][0]
+            }
 
     @classmethod
     def tearDownClass(cls):
