@@ -171,13 +171,15 @@ class TestShardAwareIntegration(unittest.TestCase):
 
     def test_prepared_queries_use_correct_shards(self):
         """
-        Verify prepared queries use the token's shard with tablets disabled.
+        Verify prepared queries use the token's shard.
+
+        Requires tablets to be disabled.
         """
         self.create_ks_and_cf()
         self.create_data(self.session)
         prepared = self.session.prepare('SELECT * FROM cf0 WHERE a=? AND b=?')
-        # These keys cover both shards of the two-shard test cluster. Keep
-        # independent expectations so a wrong token-to-shard formula fails too.
+        # These keys cover both shards of the two-shard test cluster.
+        # Independent expectations catch incorrect shard formulas.
         cases = [(('a', 'b', 'c'), 0), (('100002', 'f', 'g'), 1),
                  (('e', 'f', 'g'), 0)]
         hosts = self.cluster.metadata.all_hosts()
