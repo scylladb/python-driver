@@ -18,8 +18,6 @@ import unittest
 import uuid
 from unittest.mock import Mock, patch
 
-import pytest
-
 from cassandra.client_routes import (
     ClientRouteProxy,
     ClientRoutesChangeType,
@@ -30,6 +28,25 @@ from cassandra.client_routes import (
 )
 from cassandra.connection import ClientRoutesEndPoint, ClientRoutesEndPointFactory
 from cassandra.cluster import Cluster
+
+
+def _routes_for_query(query, params, routes):
+    connection_filter, _, host_filter = query.partition(' AND host_id')
+    count = connection_filter.count('?')
+    connection_ids = {p.decode('utf-8') for p in params[:count]}
+    host_ids = {uuid.UUID(bytes=p) for p in params[count:]}
+    return [route for route in routes
+            if route.connection_id in connection_ids
+            and (not host_filter or route.host_id in host_ids)]
+
+
+def _routes_query_response(message, routes):
+    selected = _routes_for_query(message.query, message.query_params, routes)
+    return Mock(
+        column_names=[
+            'connection_id', 'host_id', 'address', 'port', 'tls_port'],
+        parsed_rows=[(r.connection_id, r.host_id, r.address, r.port, r.port)
+                     for r in selected])
 
 
 class TestClientRouteProxy(unittest.TestCase):
@@ -155,6 +172,75 @@ class TestRouteStore(unittest.TestCase):
         self.assertEqual(result.connection_id, "new-a")
 
 
+class TestPartialRouteChanges(unittest.TestCase):
+
+    def setUp(self):
+        self.host_id = uuid.uuid4()
+        self.other_host_id = uuid.uuid4()
+        self.handler = _ClientRoutesHandler(ClientRoutesConfig([
+            ClientRouteProxy('conn-a'), ClientRouteProxy('conn-b'),
+        ]))
+        self.route_a = _Route('conn-a', self.host_id, 'a.example.com', 9042)
+        self.route_b = _Route('conn-b', self.host_id, 'b.example.com', 9142)
+        self.other_route = _Route(
+            'conn-a', self.other_host_id, 'other.example.com', 9042)
+        self.handler._routes.update([self.route_a, self.other_route])
+        self.table_routes = [self.route_a, self.route_b, self.other_route]
+        self.connection = Mock()
+        self.connection.wait_for_response.side_effect = self.query_routes
+
+    def query_routes(self, message, timeout):
+        return _routes_query_response(message, self.table_routes)
+
+    def change(self, connection_ids, host_ids):
+        self.handler.handle_client_routes_change(
+            self.connection, 5.0, ClientRoutesChangeType.UPDATE_NODES,
+            connection_ids, [str(h) for h in host_ids])
+
+    def test_selected_route_deletion_uses_remaining_configured_route(self):
+        self.table_routes.remove(self.route_a)
+        self.change(['conn-a'], [self.host_id])
+        self.assertEqual(
+            self.handler._routes.get_by_host_id(self.host_id), self.route_b)
+        self.assertEqual(
+            self.handler._routes.get_by_host_id(self.other_host_id),
+            self.other_route)
+
+    def test_selected_route_address_and_port_are_refreshed(self):
+        updated = _Route('conn-a', self.host_id, 'a-new.example.com', 9242)
+        self.table_routes = [self.route_b, updated, self.other_route]
+        self.change(['conn-b'], [self.host_id])
+        self.assertEqual(
+            self.handler._routes.get_by_host_id(self.host_id), updated)
+
+    def test_removing_all_configured_routes_deletes_only_affected_host(self):
+        self.table_routes = [
+            _Route('unconfigured', self.host_id, 'ignored.example.com', 9042),
+            self.other_route,
+        ]
+        self.change(['conn-a'], [self.host_id])
+        self.assertIsNone(self.handler._routes.get_by_host_id(self.host_id))
+        self.assertEqual(
+            self.handler._routes.get_by_host_id(self.other_host_id),
+            self.other_route)
+
+    def test_duplicate_pairs_do_not_duplicate_query_hosts(self):
+        self.change(['conn-b', 'conn-b'], [self.host_id, self.host_id])
+        self.connection.wait_for_response.assert_called_once()
+        message = self.connection.wait_for_response.call_args.args[0]
+        self.assertEqual(message.query_params.count(self.host_id.bytes), 1)
+        self.assertEqual(
+            self.handler._routes.get_by_host_id(self.host_id), self.route_a)
+
+    def test_full_refresh_preserves_selection_and_removes_absent_hosts(self):
+        self.table_routes = [self.route_b, self.route_a]
+        self.change([], [])
+        self.assertEqual(
+            self.handler._routes.get_by_host_id(self.host_id), self.route_a)
+        self.assertIsNone(
+            self.handler._routes.get_by_host_id(self.other_host_id))
+
+
 class TestClientRoutesHandler(unittest.TestCase):
 
     def setUp(self):
@@ -162,10 +248,6 @@ class TestClientRoutesHandler(unittest.TestCase):
         self.proxy = ClientRouteProxy(str(self.conn_id), "10.0.0.1")
         self.config = ClientRoutesConfig([self.proxy])
 
-    @pytest.mark.xfail(
-        strict=True, raises=AssertionError,
-        reason=('https://github.com/scylladb/python-driver/issues/813; '
-                'remove when #853 lands'))
     def test_partial_change_preserves_unaffected_selected_route(self):
         host_id = uuid.uuid4()
         conn_a, conn_b = 'conn-a', 'conn-b'
@@ -180,14 +262,7 @@ class TestClientRoutesHandler(unittest.TestCase):
         def query_routes(connection, timeout, query, params):
             # Honor the query boundary, so either fetching all candidates or
             # retaining unaffected route state can satisfy the regression.
-            connection_filter, _, host_filter = query.partition(' AND host_id')
-            count = connection_filter.count('?')
-            connection_ids = {
-                value.decode('utf-8') for value in params[:count]}
-            host_ids = {uuid.UUID(bytes=value) for value in params[count:]}
-            return [route for route in (route_a, route_b)
-                    if route.connection_id in connection_ids
-                    and (not host_filter or route.host_id in host_ids)]
+            return _routes_for_query(query, params, (route_a, route_b))
 
         with patch.object(handler, '_execute_routes_query',
                           side_effect=query_routes):
@@ -276,6 +351,80 @@ class TestClientRoutesHandler(unittest.TestCase):
         self.assertIsNotNone(handler._routes.get_by_host_id(existing_host))
         self.assertIsNotNone(handler._routes.get_by_host_id(new_host))
 
+    @patch.object(_ClientRoutesHandler, '_query_routes_for_change_event')
+    def test_handle_change_preserves_routes_for_unrelated_connection_ids(
+            self, mock_query):
+        """Mixed events preserve routes for unrelated connections."""
+        handler = _ClientRoutesHandler(self.config)
+        mock_conn = Mock()
+
+        conn_id = str(self.conn_id)
+        changed_host = uuid.uuid4()
+        unrelated_host = uuid.uuid4()
+
+        handler._routes.update([
+            _Route(connection_id=conn_id, host_id=changed_host,
+                   address="old.com", port=9042),
+            _Route(connection_id=conn_id, host_id=unrelated_host,
+                   address="keep.com", port=9042),
+        ])
+
+        mock_query.return_value = [
+            _Route(connection_id=conn_id, host_id=changed_host,
+                   address="new.com", port=9042),
+        ]
+
+        handler.handle_client_routes_change(
+            mock_conn, 5.0,
+            ClientRoutesChangeType.UPDATE_NODES,
+            connection_ids=[conn_id, "unrelated-conn-id"],
+            host_ids=[str(changed_host), str(unrelated_host)],
+        )
+
+        self.assertEqual(
+            handler._routes.get_by_host_id(changed_host).address, "new.com")
+        self.assertEqual(
+            handler._routes.get_by_host_id(unrelated_host).address, "keep.com")
+
+    def test_handle_change_preserves_preferred_route_for_same_host(self):
+        """Retain the chosen route when another connection changes."""
+        conn_a = str(uuid.uuid4())
+        conn_b = str(uuid.uuid4())
+        host_id = uuid.uuid4()
+        config = ClientRoutesConfig([
+            ClientRouteProxy(conn_a),
+            ClientRouteProxy(conn_b),
+        ])
+        handler = _ClientRoutesHandler(config)
+        handler._routes.update([
+            _Route(connection_id=conn_b, host_id=host_id,
+                   address="current.example.com", port=9042),
+        ])
+
+        table_routes = [
+            _Route(connection_id=conn_a, host_id=host_id,
+                   address="changed.example.com", port=9042),
+            _Route(connection_id=conn_b, host_id=host_id,
+                   address="current.example.com", port=9042),
+        ]
+
+        def wait_for_response(query_msg, timeout):
+            return _routes_query_response(query_msg, table_routes)
+
+        mock_conn = Mock()
+        mock_conn.wait_for_response.side_effect = wait_for_response
+
+        handler.handle_client_routes_change(
+            mock_conn, 5.0,
+            ClientRoutesChangeType.UPDATE_NODES,
+            connection_ids=[conn_a],
+            host_ids=[str(host_id)],
+        )
+
+        route = handler._routes.get_by_host_id(host_id)
+        self.assertEqual(route.connection_id, conn_b)
+        self.assertEqual(route.address, "current.example.com")
+
     @patch.object(_ClientRoutesHandler, '_query_all_routes_for_connections')
     def test_handle_change_updates_when_no_host_ids(self, mock_query):
         """When no host_ids are provided, routes should be fully replaced."""
@@ -313,6 +462,8 @@ class TestClientRoutesHandler(unittest.TestCase):
 
         conn_id = self.proxy.connection_id
         host_id = str(uuid.uuid4())
+        route = _Route(conn_id, uuid.UUID(host_id), 'keep.example.com', 9042)
+        handler._routes.update([route])
         with self.assertRaises(Exception) as cm:
             handler.handle_client_routes_change(
                 mock_conn, 5.0,
@@ -321,6 +472,7 @@ class TestClientRoutesHandler(unittest.TestCase):
                 host_ids=[host_id],
             )
         self.assertIn("network error", str(cm.exception))
+        self.assertEqual(handler._routes.get_all(), [route])
 
     @patch.object(_ClientRoutesHandler, '_query_all_routes_for_connections')
     def test_initialize_propagates_exception_on_failure(self, mock_query):
