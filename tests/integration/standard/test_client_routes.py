@@ -22,6 +22,7 @@ Includes:
 - Tests for query_routes filtering
 """
 
+import json
 import logging
 import os
 import shutil
@@ -32,6 +33,8 @@ import threading
 import time
 import unittest
 import uuid
+import urllib.request
+from unittest.mock import patch
 
 from cassandra import ConsistencyLevel
 from cassandra.cluster import Cluster
@@ -388,12 +391,15 @@ class TestGetHostPortMapping(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.cluster = TestCluster(client_routes_config=ClientRoutesConfig(
-            proxies=[ClientRouteProxy("conn_id", "127.0.0.1")]))
-        cls.session = cls.cluster.connect()
-
+        """Verify query filtering across connections and hosts."""
         cls.host_ids = [uuid.uuid4() for _ in range(3)]
         cls.connection_ids = [str(uuid.uuid4()) for _ in range(3)]
+
+        cls.cluster = TestCluster(client_routes_config=ClientRoutesConfig(
+            proxies=[ClientRouteProxy(connection_id)
+                     for connection_id in cls.connection_ids]))
+        cls.session = cls.cluster.connect()
+
         cls.expected = []
 
         for idx, host_id in enumerate(cls.host_ids):
@@ -482,8 +488,8 @@ class TestGetHostPortMapping(unittest.TestCase):
         self._sort_routes(expected)
         self.assertEqual(got, expected)
 
-    def test_get_routes_for_change_event_single_pair(self):
-        """Querying a single (connection_id, host_id) pair returns one route."""
+    def test_get_routes_for_change_event_single_host(self):
+        """A changed host query returns all its configured routes."""
         cc = self.cluster.control_connection
         target_conn_id = self.connection_ids[0]
         target_host_id = self.host_ids[0]
@@ -493,8 +499,7 @@ class TestGetHostPortMapping(unittest.TestCase):
         got = self._routes_to_dicts(routes)
         self._sort_routes(got)
         filtered = [r for r in self.expected
-                    if r['connection_id'] == target_conn_id
-                    and r['host_id'] == target_host_id]
+                    if r['host_id'] == target_host_id]
         expected = self._expected_dicts(filtered)
         self._sort_routes(expected)
         self.assertEqual(got, expected)
@@ -668,6 +673,98 @@ class TestDynamicRouteUpdates(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.direct_cluster.shutdown()
+
+    def test_partial_update_preserves_route_until_selected_route_is_deleted(
+            self):
+        conn_a, conn_b = str(uuid.uuid4()), str(uuid.uuid4())
+        with NLBEmulator(node_addresses=self.node_addrs) as nlb_a, \
+                NLBEmulator(node_addresses=self.node_addrs) as nlb_b:
+            routes_a = post_routes_for_nlb(
+                self.direct_cluster.contact_points[0], conn_a,
+                self.host_id_map, nlb_a)
+            wait_for_routes_visible(self.direct_session, conn_a, len(routes_a))
+            with Cluster(
+                contact_points=[NLBEmulator.LISTEN_HOST],
+                port=nlb_a.discovery_port,
+                client_routes_config=ClientRoutesConfig([
+                    ClientRouteProxy(conn_a), ClientRouteProxy(conn_b),
+                ]),
+                load_balancing_policy=RoundRobinPolicy(),
+            ) as cluster:
+                session = cluster.connect(wait_for_all_pools=True)
+                handler = cluster._client_routes_handler
+                completed_events = []
+                original = handler.handle_client_routes_change
+
+                def apply_change(connection, timeout, change_type,
+                                 connection_ids, host_ids):
+                    original(connection, timeout, change_type,
+                             connection_ids, host_ids)
+                    completed_events.extend(zip(connection_ids, host_ids))
+
+                def assert_event_applied(connection_id):
+                    hosts = {str(host_id) for cid, host_id in completed_events
+                             if cid == connection_id}
+                    expected = {str(h) for h in self.host_id_map.values()}
+                    self.assertLessEqual(expected, hosts)
+
+                assert_routes_via_nlb(self, cluster, nlb_a, self.node_addrs)
+                with patch.object(handler, 'handle_client_routes_change',
+                                  side_effect=apply_change):
+                    # Adding B must leave the already-selected A route in use.
+                    routes_b = post_routes_for_nlb(
+                        self.direct_cluster.contact_points[0], conn_b,
+                        self.host_id_map, nlb_b)
+                    wait_for_routes_visible(
+                        self.direct_session, conn_b, len(routes_b))
+                    wait_until_not_raised(
+                        lambda: assert_event_applied(conn_b), 0.1, 100)
+                    assert_routes_via_nlb(
+                        self, cluster, nlb_a, self.node_addrs)
+                    # Replacement sockets must still use A.
+                    connections_a = nlb_a.total_proxy_connections()
+                    nlb_a.drop_all_connections()
+                    # Pool recovery may connect before the query; use the
+                    # monotonically increasing proxy counts across the drop.
+                    wait_until_not_raised(
+                        lambda: session.execute(
+                            'SELECT key FROM system.local'), 0.1, 100)
+                    assert_routes_via_nlb(
+                        self, cluster, nlb_a, self.node_addrs)
+                    self.assertGreater(
+                        nlb_a.total_proxy_connections(), connections_a)
+                    self.assertEqual(nlb_b.total_proxy_connections(), 0)
+
+                    completed_events.clear()
+                    keys = [
+                        {'connection_id': conn_a, 'host_id': str(r['host_id'])}
+                        for r in routes_a]
+                    contact_point = self.direct_cluster.contact_points[0]
+                    request = urllib.request.Request(
+                        'http://%s:10000/v2/client-routes' % contact_point,
+                        data=json.dumps(keys).encode('utf-8'),
+                        headers={'Content-Type': 'application/json'},
+                        method='DELETE')
+                    with urllib.request.urlopen(
+                            request, timeout=30) as response:
+                        self.assertEqual(response.status, 200)
+                    wait_until_not_raised(
+                        lambda: assert_event_applied(conn_a), 0.1, 100)
+                    assert_routes_via_nlb(
+                        self, cluster, nlb_b, self.node_addrs)
+                    nlb_a.drop_all_connections()
+
+                    def assert_queries_succeed_through_b():
+                        for host in cluster.metadata.all_hosts():
+                            session.execute(
+                                'SELECT key FROM system.local', host=host)
+                        for node_id in self.node_addrs:
+                            self.assertGreater(
+                                nlb_b.get_node_proxy(
+                                    node_id).total_connections, 0)
+
+                    wait_until_not_raised(
+                        assert_queries_succeed_through_b, 0.1, 100)
 
     def test_route_update_causes_reconnect_to_new_port(self):
         """
