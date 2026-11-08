@@ -176,7 +176,10 @@ class TestShardAwareIntegration(unittest.TestCase):
         self.create_ks_and_cf()
         self.create_data(self.session)
         prepared = self.session.prepare('SELECT * FROM cf0 WHERE a=? AND b=?')
-        rows = [('a', 'b', 'c'), ('100002', 'f', 'g'), ('e', 'f', 'g')]
+        # These keys cover both shards of the two-shard test cluster. Keep
+        # independent expectations so a wrong token-to-shard formula fails too.
+        cases = [(('a', 'b', 'c'), 0), (('100002', 'f', 'g'), 1),
+                 (('e', 'f', 'g'), 0)]
         hosts = self.cluster.metadata.all_hosts()
         assert len(hosts) == 3
 
@@ -193,18 +196,19 @@ class TestShardAwareIntegration(unittest.TestCase):
 
             wait_until_not_raised(check_pool, delay=0.1, max_attempts=300)
             tested_shards = set()
-            for row in rows:
+            for row, expected_shard in cases:
                 bound = prepared.bind(row[:2])
                 token = self.cluster.metadata.token_map.token_class.from_key(
                     bound.routing_key)
                 shard_id = host.sharding_info.shard_id_from_token(token.value)
-                tested_shards.add(shard_id)
+                assert shard_id == expected_shard
+                tested_shards.add(expected_shard)
                 future = self.session.execute_async(bound, host=host)
                 assert future.result() == [row]
                 assert future._current_host is host
                 assert (future._connection.endpoint.address ==
                         host.endpoint.address)
-                assert future._connection.features.shard_id == shard_id
+                assert future._connection.features.shard_id == expected_shard
             assert tested_shards == set(range(host.sharding_info.shards_count))
 
     def test_connect_from_multiple_clients(self):
