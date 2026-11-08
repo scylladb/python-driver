@@ -169,19 +169,43 @@ class TestShardAwareIntegration(unittest.TestCase):
             ]
             assert not pending_connections
 
-    def test_all_tracing_coming_one_shard(self):
+    def test_prepared_queries_use_correct_shards(self):
         """
-        Testing that shard aware driver is sending the requests to the correct shards
-
-        using the traces to validate that all the action been executed on the the same shard.
-        this test is using prepared SELECT statements for this validation
-
-        Requires tablets to be disabled to ensure shard consistency.
+        Verify prepared queries use the token's shard with tablets disabled.
         """
-
         self.create_ks_and_cf()
         self.create_data(self.session)
-        self.query_data(self.session)
+        prepared = self.session.prepare('SELECT * FROM cf0 WHERE a=? AND b=?')
+        rows = [('a', 'b', 'c'), ('100002', 'f', 'g'), ('e', 'f', 'g')]
+        hosts = self.cluster.metadata.all_hosts()
+        assert len(hosts) == 3
+
+        for host in hosts:
+            def check_pool():
+                pool = self.session._pools.get(host)
+                assert pool is not None
+                assert host.sharding_info is not None
+                for shard_id in range(host.sharding_info.shards_count):
+                    connection = pool._connections.get(shard_id)
+                    assert connection is not None
+                    assert not connection.is_closed
+                    assert not connection.is_defunct
+
+            wait_until_not_raised(check_pool, delay=0.1, max_attempts=300)
+            tested_shards = set()
+            for row in rows:
+                bound = prepared.bind(row[:2])
+                token = self.cluster.metadata.token_map.token_class.from_key(
+                    bound.routing_key)
+                shard_id = host.sharding_info.shard_id_from_token(token.value)
+                tested_shards.add(shard_id)
+                future = self.session.execute_async(bound, host=host)
+                assert future.result() == [row]
+                assert future._current_host is host
+                assert (future._connection.endpoint.address ==
+                        host.endpoint.address)
+                assert future._connection.features.shard_id == shard_id
+            assert tested_shards == set(range(host.sharding_info.shards_count))
 
     def test_connect_from_multiple_clients(self):
         """
