@@ -213,11 +213,12 @@ class ConcurrencyTest((unittest.TestCase)):
             time.sleep(0.001)
         assert all(getattr(f, 'attached', True) for f in list(response_futures))
 
-    def deferred_session(self, max_workers=2):
+    def deferred_session(self, max_workers=2,
+                         response_future_class=DeferredResponseFuture):
         response_futures = []
 
         def execute_async(*args, **kwargs):
-            response_future = DeferredResponseFuture()
+            response_future = response_future_class()
             response_futures.append(response_future)
             return response_future
 
@@ -667,7 +668,10 @@ class ConcurrencyTest((unittest.TestCase)):
     def test_async_replenishes_after_successes_from_other_thread(self):
         concurrency = 2
         count = 5
-        session, response_futures = self.deferred_session()
+        # A future is visible before execute_async returns and the pump attaches
+        # its callbacks. The response thread must wait for that attachment.
+        session, response_futures = self.deferred_session(
+            response_future_class=ReadyDeferredResponseFuture)
         in_flight_violations = []
 
         def respond():
