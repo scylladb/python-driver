@@ -1498,7 +1498,10 @@ class IndexMapTests(unittest.TestCase):
         self.create_basic_table()
 
         idx = self.table_name + '_idx'
-        self.session.execute("CREATE INDEX %s ON %s (a)" % (idx, self.table_name))
+        # Index creation and schema agreement can exceed the default request
+        # timeout under coverage.
+        self.session.execute(
+            "CREATE INDEX %s ON %s (a)" % (idx, self.table_name), timeout=30)
         ks_meta = self.cluster.metadata.keyspaces[self.keyspace_name]
         table_meta = ks_meta.tables[self.table_name]
         assert isinstance(ks_meta.indexes[idx], IndexMetadata)
