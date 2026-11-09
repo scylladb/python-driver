@@ -598,10 +598,6 @@ class PreparedStatement(object):
         makes a restored statement request fresh metadata before skipping it.
         """
         state = self.__dict__.copy()
-        # This also lets an object reconstructed with a legacy instance layout
-        # retain that layout until __setstate__ migrates it.
-        if '_result_metadata_state' not in state:
-            return state
         result_metadata, result_metadata_id, _ = \
             self._result_metadata_state
         state['_result_metadata_state'] = (
@@ -612,9 +608,9 @@ class PreparedStatement(object):
         """
         Restore pickles created before ``_result_metadata_state`` was added.
 
-        Pair-based pickles predate decoder-context provenance, while still
-        older pickles stored the metadata and id as independent attributes.
-        Both therefore migrate with unknown provenance.
+        The metadata pair shipped in 3.29.13. Older pickles stored the metadata
+        and id as independent attributes. Both predate decoder-context
+        provenance and therefore migrate with unknown provenance.
         """
         state = state.copy()
         result_metadata_state = state.get('_result_metadata_state')

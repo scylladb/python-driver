@@ -265,11 +265,13 @@ class PreparedStatementMetadataPairTest(unittest.TestCase):
 
     def test_migrates_pickle_with_metadata_pair(self):
         ps = self._make_statement([], None)
-        ps.__dict__.pop('_result_metadata_state')
-        ps.__dict__['_result_metadata_and_id'] = (
+        state = ps.__dict__.copy()
+        state.pop('_result_metadata_state')
+        state['_result_metadata_and_id'] = (
             [('ks', 'tb', 'col', None)], b'hash')
 
-        restored = pickle.loads(pickle.dumps(ps))
+        restored = object.__new__(PreparedStatement)
+        restored.__setstate__(state)
 
         assert restored._result_metadata_snapshot == (
             (('ks', 'tb', 'col', None),), b'hash', None)
