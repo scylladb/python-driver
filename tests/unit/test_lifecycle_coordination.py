@@ -19,7 +19,8 @@ from unittest.mock import Mock, patch
 import pytest
 
 from cassandra.cluster import (
-    Cluster, ControlConnection, ExecutionProfile, ProfileManager)
+    Cluster, ControlConnection, ExecutionProfile, ProfileManager,
+    _PoolCreationAttempt)
 from cassandra._lifecycle import (
     ConnectionFailureReservation, LifecycleCoordinator, PoolFailureReservation)
 from cassandra.connection import (
@@ -2236,10 +2237,11 @@ def test_pool_failure_policy_refresh_runs_without_session_or_host_lock(topology)
     session.get_pool_state = Mock(return_value={})
     cluster.sessions.add(session)
     cluster.on_down_potentially_blocking = Mock(return_value=Future())
-    with session._lock:
+    with session._lock, host.lock:
         intent = session._claim_pool_intent_locked(host)
         generation = object()
         session._pool_generations[host] = generation
+        attempt = _PoolCreationAttempt(host, generation, None, intent, 0)
     observations = []
 
     def distance(_host):
@@ -2262,8 +2264,7 @@ def test_pool_failure_policy_refresh_runs_without_session_or_host_lock(topology)
 
     cluster.profile_manager.distance.side_effect = distance
     session._handle_pool_creation_failure(
-        host, generation, None, intent, 0,
-        lambda reservation: cluster.on_down(
+        attempt, lambda reservation: cluster.on_down(
             host, False, _pool_failure=reservation), False)
     assert observations == [True, True, True]
     cluster.on_down_potentially_blocking.assert_called_once()
@@ -2280,10 +2281,11 @@ def test_pool_failure_rechecks_ownership_after_policy_callback(topology):
     session.get_pool_state = Mock(return_value={})
     cluster.sessions.add(session)
     cluster.on_down_potentially_blocking = Mock(return_value=Future())
-    with session._lock:
+    with session._lock, host.lock:
         intent = session._claim_pool_intent_locked(host)
         generation = object()
         session._pool_generations[host] = generation
+        attempt = _PoolCreationAttempt(host, generation, None, intent, 0)
     winner = Mock(host=host, is_shutdown=False)
 
     def publish_new_pool(_host):
@@ -2295,8 +2297,7 @@ def test_pool_failure_rechecks_ownership_after_policy_callback(topology):
 
     cluster.profile_manager.distance.side_effect = publish_new_pool
     session._handle_pool_creation_failure(
-        host, generation, None, intent, 0,
-        lambda reservation: cluster.on_down(
+        attempt, lambda reservation: cluster.on_down(
             host, False, _pool_failure=reservation), False)
     assert host.is_up
     assert session._pools[host] is winner

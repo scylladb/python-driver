@@ -335,6 +335,31 @@ class _PoolIntent(object):
             self._completion_owner, exception)
 
 
+class _PoolCreationAttempt(object):
+    """Accepted pool-creation state, captured under Session and Host locks.
+
+    Keep this snapshot separate from reconciliation's earlier expected state
+    and from the mutable reservation used by background connection work.
+    Callers of the ownership and stale-result helpers hold Session._lock and
+    Host.lock, in that order, just as they do during admission.
+    """
+
+    __slots__ = ('host', 'endpoint', 'generation', 'expected_pool', 'intent',
+                 'distance')
+
+    def __init__(self, host, generation, expected_pool, intent, distance):
+        self.host = host
+        self.endpoint = host.endpoint
+        self.generation = generation
+        self.expected_pool = expected_pool
+        self.intent = intent
+        self.distance = distance
+
+    def owns_locked(self, session):
+        return session._owns_pool_generation_locked(
+            self.host, self.generation, self.expected_pool, self.endpoint)
+
+
 class NoHostAvailable(Exception):
     """
     Raised when an operation is attempted but all connections are
@@ -4623,9 +4648,9 @@ class Session(object):
                 self._pool_generations.get(host) is generation and
                 self._pools.get(host) is expected_pool)
 
-    def _stale_pool_creation_result_locked(self, host, expected_pool,
-                                           intent, distance,
+    def _stale_pool_creation_result_locked(self, attempt,
                                            ignored_intent_is_success=False):
+        host = attempt.host
         with self.cluster.metadata._host_ownership_guard(host) as owns_host:
             if not owns_host:
                 return False
@@ -4635,40 +4660,37 @@ class Session(object):
                 not self.is_shutdown and
                 not host._is_removed and
                 current_pool is not None and
-                current_pool is not expected_pool and
+                current_pool is not attempt.expected_pool and
                 not current_pool.is_shutdown and
                 self._pool_matches_host(host, current_pool))
             if (retained_pool_is_live and
-                    current_intent is intent):
-                current_pool.host_distance = distance
+                    current_intent is attempt.intent):
+                current_pool.host_distance = attempt.distance
             ignored_intent_owns_cleanup = (
                 ignored_intent_is_success and
                 not self.is_shutdown and
                 not host._is_removed and
                 current_intent is not None and
-                current_intent is not intent and
+                current_intent is not attempt.intent and
                 current_intent.distance == HostDistance.IGNORED)
             return ((self.is_shutdown and not host._is_removed) or
                     retained_pool_is_live or
                     ignored_intent_owns_cleanup)
 
-    def _handle_pool_creation_failure(self, host, generation,
-                                      expected_pool, intent, distance,
-                                      dispatch_failure, owning_result,
-                                      endpoint=_NOT_SET):
+    def _handle_pool_creation_failure(self, attempt, dispatch_failure,
+                                      owning_result):
+        host = attempt.host
         with self._lock:
             with host.lock, self.cluster.metadata._host_ownership_guard(host):
                 owns_intent = (
-                    self._pool_intents_locked().get(host) is intent)
-                if (not owns_intent or
-                        not self._owns_pool_generation_locked(
-                            host, generation, expected_pool, endpoint)):
-                    return self._stale_pool_creation_result_locked(
-                        host, expected_pool, intent, distance)
+                    self._pool_intents_locked().get(host) is attempt.intent)
+                if not owns_intent or not attempt.owns_locked(self):
+                    return self._stale_pool_creation_result_locked(attempt)
                 failure_generation = object()
                 self._pool_generations[host] = failure_generation
                 reservation = _lifecycle.PoolFailureReservation(
-                    self, host, failure_generation, expected_pool, intent, endpoint)
+                    self, host, failure_generation, attempt.expected_pool,
+                    attempt.intent, attempt.endpoint)
         # Conviction/distance callbacks can refresh topology. Retain ownership
         # in a token and recheck it atomically with DOWN admission instead of
         # holding session/host locks through arbitrary policy code.
@@ -4805,6 +4827,9 @@ class Session(object):
                                     self._pool_generations[host] = generation
                                 intent._creation_generation = generation
                                 intent._creation_pool = expected_pool
+                                attempt = _PoolCreationAttempt(
+                                    host, generation, expected_pool, intent,
+                                    distance)
 
             if pool_to_shutdown is not None:
                 try:
@@ -4831,16 +4856,12 @@ class Session(object):
                 return removed_future
             break
 
-        endpoint = host.endpoint
-
         def run_add_or_renew_pool():
             with self._lock:
                 with host.lock, self.cluster.metadata._host_ownership_guard(host):
-                    if not self._owns_pool_generation_locked(
-                            host, generation, expected_pool, endpoint):
+                    if not attempt.owns_locked(self):
                         return self._stale_pool_creation_result_locked(
-                            host, expected_pool, intent, distance,
-                            ignored_intent_is_success=True)
+                            attempt, ignored_intent_is_success=True)
 
             connection_errors = []
 
@@ -4865,9 +4886,10 @@ class Session(object):
             # Share the creation generation with background socket work;
             # publication below switches it to exact installed pool identity.
             ownership = _lifecycle.PoolOwnershipReservation(
-                self, host, endpoint, generation, expected_pool)
+                self, attempt.host, attempt.endpoint, attempt.generation,
+                attempt.expected_pool)
             try:
-                new_pool = HostConnection(host, distance, self,
+                new_pool = HostConnection(attempt.host, attempt.distance, self,
                                           _ownership=ownership)
             except AuthenticationFailed as auth_exc:
                 authentication_exc = ConnectionException(
@@ -4890,13 +4912,11 @@ class Session(object):
                 owning_result = (
                     None if on_add_reconnection is not None else False)
                 return self._handle_pool_creation_failure(
-                    host, generation, expected_pool, intent, distance,
-                    dispatch_authentication_failure, owning_result, endpoint)
+                    attempt, dispatch_authentication_failure, owning_result)
             except Exception as conn_exc:
                 connection_errors.append(conn_exc)
                 return self._handle_pool_creation_failure(
-                    host, generation, expected_pool, intent, distance,
-                    dispatch_connection_failure, False, endpoint)
+                    attempt, dispatch_connection_failure, False)
 
             while True:
                 publish_pool = False
@@ -4911,23 +4931,23 @@ class Session(object):
                             with new_pool._lock_usable_connection() as connected:
                                 with self.cluster.metadata._host_ownership_guard(host):
                                     if (not ownership.owns_locked(new_pool) or
-                                            not self._owns_pool_generation_locked(
-                                                host, generation, expected_pool, endpoint)):
+                                            not attempt.owns_locked(self)):
                                         stale_candidate = True
                                         stale_result = \
                                             self._stale_pool_creation_result_locked(
-                                                host, expected_pool, intent, distance,
+                                                attempt,
                                                 ignored_intent_is_success=True)
                                     else:
                                         keyspace = self.keyspace
                                         if new_pool._keyspace == keyspace:
                                             current_intent = \
                                                 self._pool_intents_locked().get(host)
-                                            if (current_intent is not intent and
-                                                    expected_pool is not None and
-                                                    not expected_pool.is_shutdown):
+                                            previous = attempt.expected_pool
+                                            if (current_intent is not attempt.intent and
+                                                    previous is not None and
+                                                    not previous.is_shutdown):
                                                 new_pool.host_distance = \
-                                                    expected_pool.host_distance
+                                                    previous.host_distance
                                             self._pools[host] = new_pool
                                             self._pool_generations[host] = object()
                                             ownership.published = True
@@ -4945,8 +4965,8 @@ class Session(object):
 
                 if publish_pool:
                     log.debug("Added pool for host %s to session", host)
-                    if expected_pool:
-                        expected_pool.shutdown()
+                    if attempt.expected_pool:
+                        attempt.expected_pool.shutdown()
                     return True
 
                 set_keyspace_event = Event()
@@ -4976,27 +4996,26 @@ class Session(object):
 
                     try:
                         return self._handle_pool_creation_failure(
-                            host, generation, expected_pool, intent, distance,
-                            dispatch_keyspace_failure, False, endpoint)
+                            attempt, dispatch_keyspace_failure, False)
                     finally:
                         new_pool.shutdown()
 
         try:
             work_future = self._submit_pool_creation_work(
-                intent.completion, run_add_or_renew_pool)
+                attempt.intent.completion, run_add_or_renew_pool)
         except Exception as exc:
-            intent.complete_exception(exc)
+            attempt.intent.complete_exception(exc)
             raise
         if work_future is None:
-            intent.complete_result(None)
+            attempt.intent.complete_result(None)
             return None
         add_done_callback = getattr(
             work_future, 'add_done_callback', None)
         if not callable(add_done_callback):
-            intent.complete_result(work_future)
+            attempt.intent.complete_result(work_future)
             return work_future
-        add_done_callback(intent.complete_from_work)
-        return intent.completion
+        add_done_callback(attempt.intent.complete_from_work)
+        return attempt.intent.completion
 
     def remove_pool(self, host):
         intent_to_fail = None
