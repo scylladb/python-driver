@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import TYPE_CHECKING, TypeVar
+from typing import TypeVar
 from warnings import warn
 
 from cassandra.cqlengine import CQLEngineException, ValidationError

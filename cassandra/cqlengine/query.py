@@ -18,7 +18,7 @@ import copy
 from datetime import datetime, timedelta
 from functools import partial
 import time
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING
 from warnings import warn
 
 from cassandra.query import SimpleStatement, BatchType as CBatchType, BatchStatement
