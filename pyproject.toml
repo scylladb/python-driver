@@ -149,6 +149,9 @@ omit = [
 [tool.coverage.report]
 show_missing = true
 exclude_lines = [
+    # Also marks the SchemaParserV22 methods in metadata.py that only read the
+    # Cassandra 2.x schema tables; a regex below can't single them out because
+    # SchemaParserV3 defines methods with identical def lines.
     "pragma: no cover",
     "raise NotImplementedError",
     "if TYPE_CHECKING:",
