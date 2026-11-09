@@ -213,8 +213,11 @@ built-in configuration cannot create a new eligible snapshot.
   full metadata, and the driver caches both. Subsequent executions get the
   ``skip_meta`` optimization — no re-prepare or client restart is needed.
 
-**Current scope:** the optimization applies to any prepared statement that has
-non-empty cached result columns. This includes SELECT queries and conditional
+**Current scope:** statement type is unrestricted when the eligibility conditions
+above are met and the statement has non-empty cached result columns. Custom
+handlers, modified built-in configurations, and other ineligible execution
+contexts continue to receive full result metadata. Eligible statements include
+SELECT queries and conditional
 INSERT, UPDATE, and DELETE statements (lightweight transactions), whose results
 include an ``[applied]`` column and may include values from the existing row.
 Ordinary DML statements that produce no result columns remain ineligible. There is
