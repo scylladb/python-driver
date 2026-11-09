@@ -2,18 +2,6 @@ name: Integration tests
 
 on:
   pull_request:
-    paths-ignore:
-      - docs/**
-      - examples/**
-      - scripts/**
-      - .gitignore
-      - '**/*.rst'
-      - '**/*.md'
-      - '*.ini'
-      - LICENSE
-      - .github/dependabot.yml
-      - .github/pull_request_template.md
-      - .github/workflows/docs-*
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -48,9 +36,17 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    if: github.event_name == 'pull_request' && !inputs.full-matrix && !inputs.ignore-disable-label
+    uses: ./.github/workflows/select-tests.yml
+
   tests:
     name: test ${{ matrix.event_loop_manager }} (${{ matrix.python-version }})
-    if: "inputs.ignore-disable-label || !contains(github.event.pull_request.labels.*.name, 'disable-integration-tests')"
+    needs: changes
+    if: >-
+      !cancelled() &&
+      (needs.changes.result != 'success' || needs.changes.outputs.integration != '[]') &&
+      (inputs.ignore-disable-label || !contains(github.event.pull_request.labels.*.name, 'disable-integration-tests'))
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -108,9 +104,14 @@ jobs:
         EVENT_LOOP_MANAGER: ${{ matrix.event_loop_manager }}
         INTEGRATION_LOG_ARTIFACT_DIR: integration-test-logs
         PROTOCOL_VERSION: 4
+        TEST_PLAN: ${{ needs.changes.outputs.plan }}
       run: |
         uv run python -c "import cassandra.cluster; assert not cassandra.cluster.__file__.endswith('.py'), cassandra.cluster.__file__"
-        uv run pytest -v tests/integration/standard/ tests/integration/cqlengine/
+        if [[ -n "$TEST_PLAN" ]]; then
+          python3 scripts/ci/select_tests.py --plan-json "$TEST_PLAN" --run --suite integration
+        else
+          uv run pytest -v tests/integration/standard/ tests/integration/cqlengine/
+        fi
 
     - name: Make room for the Scylla image
       if: inputs.scylla-image-artifact != ''
