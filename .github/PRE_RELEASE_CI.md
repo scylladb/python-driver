@@ -128,10 +128,27 @@ privileges, network mode, and mounts, setting:
 
 | Stage | Wheel builds and tests | Coverage and integration |
 | --- | --- | --- |
-| Ordinary PR | Linux x86_64 wheel smoke tests and source distribution | Full driver integration suites once on Python 3.13/libev against Scylla 2026.1.13 using the compiled driver; NumPy import checks and applicable docs builds |
+| Ordinary PR, full plan | Linux x86_64 wheel smoke tests and source distribution | Full driver integration suites once on Python 3.13/libev against Scylla 2026.1.13 using the compiled driver; NumPy import checks and applicable docs builds |
+| Ordinary PR, narrow plan | Wheel builds skipped | Selected unit/helper and integration modules, plus selected NumPy checks; documentation/support-only changes run no driver tests |
 | Merge queue | Linux x86_64 and ARM64 wheels with configured unit tests, plus source distribution | Full unit, reactor, and driver integration coverage against Scylla 2026.1.13 using the pure-Python driver paths on the combined commit |
 | Pre-release | All five platforms with configured unit tests, plus source distribution | Full coverage against stable Scylla, driver integration matrix against pinned Scylla master, and upstream Python/CQL suites |
 | Release/tag build | All five platforms | Existing release validation and publication behavior |
+
+Only ordinary PR jobs use the test plan from `scripts/ci/select_tests.py`.
+Documentation/support changes select no driver tests. Standalone
+unit/integration test changes select their modules, and known helper changes
+select their mapped tests. Shared test infrastructure, driver source,
+packaging/dependencies, deleted tests and unmapped paths keep existing full PR
+validation. Mixed changes containing driver source also keep full PR validation.
+Narrow PR plans skip wheel builds and unrelated integration/NumPy jobs.
+
+The `Measure code coverage` job runs selected unit/helper tests directly on PRs,
+without uploading partial coverage to Codecov. All merge-queue entries retain
+full wheel/unit testing and full coverage, including documentation-only entries.
+Pre-release runs (including calls from labeled PRs), protected pushes, manual
+runs and release builds retain their existing suites. These runs bypass the
+selection jobs entirely. See `CONTRIBUTING.rst` for local plan/run commands,
+worktree selection, mappings and conservative fallbacks.
 
 Add `ci-macos` to run both Intel and Apple Silicon wheel builds/tests on a PR,
 or `ci-windows` to run Windows x86_64 wheel builds/tests. These jobs use the full
@@ -143,11 +160,13 @@ in Actions. Platform labels explicitly opt in even with `disable-test-build`.
 They also work for PRs that only change documentation or scripts.
 
 Full coverage tests the combined merge-group commit in the merge queue. The
-coverage workflow reports a skipped check on ordinary PRs so the same check can
-be required for queue entry. Pre-release calls it explicitly to run full coverage
-on a labeled PR. Manual coverage runs remain available. Ordinary PR integration
-runs both `tests/integration/standard/` and `tests/integration/cqlengine/` in full;
-it does not select a smoke subset. Pre-release explicitly enables the full
+coverage workflow reports a skipped check on ordinary full-plan PRs so the same
+check can be required for queue entry; narrow plans run their selected tests.
+Pre-release calls it explicitly to run full coverage
+on a labeled PR. Manual coverage runs remain available. Full-plan PR integration
+runs both `tests/integration/standard/` and `tests/integration/cqlengine/` in full.
+Narrow plans run only the selected integration modules. Pre-release explicitly
+enables the full
 integration matrix: Python 3.11 through 3.15 with libev and asyncio, plus Python
 3.11 with asyncore. Manual integration runs also use that full matrix.
 

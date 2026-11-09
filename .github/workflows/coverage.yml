@@ -35,11 +35,20 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
 
 jobs:
+  changes:
+    if: github.event_name == 'pull_request' && !inputs.run-on-pr
+    uses: ./.github/workflows/select-tests.yml
+
   coverage:
     name: Measure code coverage
-    # Report a skipped success on PRs so this check can be required for queue
-    # entry. Test merge groups and retain branch baselines on protected pushes.
-    if: inputs.run-on-pr || github.event_name != 'pull_request'
+    # Only ordinary PRs use selected tests. Merge queues, protected pushes,
+    # manual runs and pre-release calls retain full coverage.
+    needs: changes
+    if: >-
+      !cancelled() &&
+      (inputs.run-on-pr || github.event_name != 'pull_request' ||
+       (needs.changes.result == 'success' &&
+        needs.changes.outputs.mode == 'selected' && needs.changes.outputs.unit != '[]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -50,7 +59,8 @@ jobs:
       # uv's cache-keys include this var, so a value that flips between steps
       # makes each `uv run` re-detect a "changed" build config and rebuild the
       # Cython extensions from scratch -- about two minutes wasted per flip.
-      CASS_DRIVER_NO_CYTHON: "1"
+      CASS_DRIVER_NO_CYTHON: ${{ needs.changes.outputs.mode != 'selected' && '1' || '' }}
+      TEST_PLAN: ${{ needs.changes.outputs.plan }}
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -65,20 +75,35 @@ jobs:
         enable-cache: true
 
     - name: Build driver
+      if: needs.changes.outputs.mode != 'selected'
+      run: uv sync
+
+    - name: Build driver for selected PR tests
+      if: needs.changes.outputs.mode == 'selected'
+      env:
+        CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST: 'yes'
       run: uv sync
 
     - name: Cache Scylla download
+      if: needs.changes.outputs.mode != 'selected'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.ccm/scylla-repository
         key: scylla-${{ env.SCYLLA_VERSION }}-${{ runner.os }}
         restore-keys: scylla-${{ env.SCYLLA_VERSION }}-
 
+    - name: Run impacted PR unit and helper tests
+      if: needs.changes.outputs.mode == 'selected'
+      env:
+        CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST: 'yes'
+      run: python3 scripts/ci/select_tests.py --plan-json "$TEST_PLAN" --run --suite unit
+
     - name: Run tests with coverage
+      if: needs.changes.outputs.mode != 'selected'
       run: bash scripts/coverage.sh
 
     - name: Publish coverage summary
-      if: always()
+      if: always() && needs.changes.outputs.mode != 'selected'
       run: |
         {
           echo '## Coverage report'
@@ -88,7 +113,7 @@ jobs:
         } >> "$GITHUB_STEP_SUMMARY"
 
     - name: Upload coverage report
-      if: always()
+      if: always() && needs.changes.outputs.mode != 'selected'
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: coverage-report
@@ -101,6 +126,7 @@ jobs:
     # so only publish complete coverage measurements. Opt-in fork PRs may run
     # without a Codecov token.
     - name: Upload coverage to Codecov
+      if: needs.changes.outputs.mode != 'selected'
       uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
       with:
         token: ${{ secrets.CODECOV_TOKEN }}

@@ -149,11 +149,12 @@ this reason. Modules that are Cython-only with no pure-Python fallback
 (``obj_parser``, ``numpy_parser``, ``row_parser``, and similar) are not built
 at all in that mode, so they are not measured by this script.
 
-CI runs the same script, integration suite included, for merge-queue entries
-and manual runs through ``.github/workflows/coverage.yml``. Ordinary PR runs
-report a skipped coverage check without running the suite, allowing the same
-check to be required for
-queue entry. The opt-in ``pre-release-ci`` workflow also runs full coverage.
+CI runs the same script, integration suite included, for all merge-queue
+entries and manual runs through ``.github/workflows/coverage.yml``. Ordinary
+full-plan PR runs report a skipped coverage check without running the suite,
+allowing the same check to be required for queue entry. Narrow plans run the
+selected tests described below. The opt-in ``pre-release-ci`` workflow also
+runs full coverage.
 Merge-queue runs test the combined merge-group commit and are not disabled by
 PR labels. Passing runs upload ``coverage.xml`` to
 `Codecov <https://codecov.io/gh/scylladb/python-driver>`_. Codecov's coverage
@@ -166,6 +167,70 @@ alongside Linux x86_64 and ARM64 wheel/unit tests. The full integration
 interpreter/reactor matrix is reserved for pre-release and manual runs.
 Branch pushes do not automatically repeat these test workflows. See
 ``.github/PRE_RELEASE_CI.md`` for the stages and optional platform labels.
+
+Running tests impacted by a change
+----------------------------------
+The same test plan is available locally and in ordinary pull-request CI.
+Automatic selection applies only to ordinary PR runs. Every merge-queue entry,
+including docs-only changes, retains full wheel/unit tests and full coverage.
+Pre-release, release, protected-push and manual CI retain their existing suites.
+Print the plan, preview its commands, or run it::
+
+    python3 scripts/ci/select_tests.py --base origin/master
+    python3 scripts/ci/select_tests.py --base origin/master --dry-run
+    python3 scripts/ci/select_tests.py --base origin/master --run
+
+By default the comparison uses committed ``HEAD``. Add ``--worktree`` to include
+staged, unstaged and untracked files. Use ``--suite unit``,
+``--suite integration`` or ``--suite numpy`` to run one part of the plan.
+When integration tests are
+selected, set ``SCYLLA_VERSION`` or ``CASSANDRA_VERSION`` as described above.
+``--full`` bypasses selection.
+
+The comparison starts at the merge base with the requested branch. Because
+dependency inspection reads local files, committed mode keeps full validation
+when the working tree has changes; use ``--worktree`` to plan those changes.
+
+Selection follows these rules:
+
+* Documentation/support-only changes select no driver tests. This includes
+  ``docs/``, Markdown files, ``CONTRIBUTING.rst``, ``CHANGELOG.rst``, ``LICENSE``,
+  ``.gitignore``, ``.gitattributes``, ``.github/dependabot.yml``, and the two
+  documentation workflows. Applicable docs builds and release-note
+  classification continue.
+* A changed standalone Python test under ``tests/unit/`` or the standard and
+  cqlengine integration suites selects that file. Modules imported by other
+  tests, shared fixtures, deleted tests, and Cython test modules keep full
+  validation. Asyncio and asyncore unit modules run with their own reactor.
+* Known helper changes select their mapped tests: the selector, Scylla source
+  planner, release/signing helpers, and NumPy import checker. Release helper
+  changes run ``tests/unit/test_release_helpers.py`` and ``scripts/release/``.
+  A NumPy checker or contract-test change runs the NumPy check and contract tests.
+* Source, packaging/build files (including ``README.rst``), dependencies,
+  unmapped scripts/workflows, and unknown paths keep full driver validation.
+  Mixed changes combine selected tests or expand to full validation.
+
+``scripts/ci/select_tests.py`` owns the mappings and reports the reason for its
+plan. It compares the complete Git diff, including deletions and rename sources;
+missing history, missing mapped tests, and import-inspection errors select full
+validation. Python imports identify shared test modules. Driver-source
+dependency uncertainty falls back to full validation.
+
+Ordinary PR CI runs only the selected unit/helper modules, integration
+modules, and NumPy job. It skips wheel builds for narrow changes. The existing
+``Measure code coverage`` check runs selected PR unit/helper tests directly
+without uploading partial coverage to Codecov. Driver-source changes under
+``cassandra/`` and mixed changes containing driver source retain the existing
+full PR wheel/integration and NumPy checks. A full-plan PR keeps the existing
+skipped coverage check; full coverage runs when it enters the merge queue.
+
+Manual runs, explicit pre-release CI, release builds, and protected-branch
+coverage retain their existing full suites. Optional ``ci-macos`` and
+``ci-windows`` labels run the requested platform's wheel/unit jobs; they do not
+expand a narrow plan's integration or coverage checks. To test the selector
+without building or importing the driver::
+
+    python3 tests/unit/test_ci_selection.py
 
 Running the Benchmarks
 ======================

@@ -1,0 +1,60 @@
+name: Select impacted tests
+
+on:
+  workflow_call:
+    inputs:
+      force-full:
+        description: Run driver tests regardless of changed paths
+        type: boolean
+        default: false
+    outputs:
+      plan:
+        description: Selected plan
+        value: ${{ jobs.select.outputs.plan }}
+      mode:
+        description: Selected mode
+        value: ${{ jobs.select.outputs.mode }}
+      wheels:
+        description: Selected wheels
+        value: ${{ jobs.select.outputs.wheels }}
+      numpy:
+        description: Selected numpy
+        value: ${{ jobs.select.outputs.numpy }}
+      unit:
+        description: Selected unit
+        value: ${{ jobs.select.outputs.unit }}
+      integration:
+        description: Selected integration
+        value: ${{ jobs.select.outputs.integration }}
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      plan: ${{ steps.select.outputs.plan }}
+      mode: ${{ steps.select.outputs.mode }}
+      wheels: ${{ steps.select.outputs.wheels }}
+      numpy: ${{ steps.select.outputs.numpy }}
+      unit: ${{ steps.select.outputs.unit }}
+      integration: ${{ steps.select.outputs.integration }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select tests from the complete change
+        id: select
+        env:
+          FORCE_FULL: ${{ inputs.force-full }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          python3 tests/unit/test_ci_selection.py
+          if [[ "$FORCE_FULL" == true ]]; then
+            python3 scripts/ci/select_tests.py --full --github-output >> "$GITHUB_OUTPUT"
+          else
+            python3 scripts/ci/select_tests.py --base "$BASE_SHA" --github-output >> "$GITHUB_OUTPUT"
+          fi

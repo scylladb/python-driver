@@ -9,8 +9,16 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/select-tests.yml
+
   numpy-import-contract:
     name: NumPy import contract
+    needs: changes
+    if: >-
+      !cancelled() &&
+      (needs.changes.result != 'success' || needs.changes.outputs.numpy != 'false')
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
