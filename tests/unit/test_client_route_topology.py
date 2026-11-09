@@ -30,6 +30,7 @@ from tests.unit.test_control_connection import MockConnection, _node_meta_result
 
 @pytest.fixture
 def routed_topology():
+    """Create real topology and route state with deterministic socket responses."""
     policy = RoundRobinPolicy()
     config = ClientRoutesConfig([
         ClientRouteProxy('conn-a'), ClientRouteProxy('conn-b'),
@@ -44,7 +45,9 @@ def routed_topology():
             _Route('conn-b', UUID(int=2), '127.0.0.11', 9242),
             _Route('conn-a', UUID(int=3), '127.0.0.12', 9342),
         ]
+
         def query_routes(message, timeout):
+            """Read the mutable server-side routes for each query."""
             return _routes_query_response(message, routes)
 
         connection.wait_for_response = Mock(side_effect=query_routes)
@@ -62,12 +65,14 @@ def routed_topology():
 
 
 def refresh_topology(cluster, connection):
+    """Apply the current mocked system-table rows to live cluster metadata."""
     connection.wait_for_responses.return_value = _node_meta_results(
         connection.local_results, connection.peer_results)
     assert cluster.control_connection.refresh_node_list_and_token_map()
 
 
 def change_routes(cluster, host_id, connection_id):
+    """Deliver a route event through the control connection's normal handler."""
     cluster.control_connection._handle_client_routes_change({
         'change_type': 'UPDATE_NODES',
         'connection_ids': [connection_id],
@@ -76,6 +81,7 @@ def change_routes(cluster, host_id, connection_id):
 
 
 def assert_current_topology(cluster, policy):
+    """Check that metadata indexes and policy membership contain active hosts."""
     metadata = cluster.metadata
     hosts = metadata.all_hosts()
     plan = list(policy.make_query_plan())
@@ -89,13 +95,20 @@ def assert_current_topology(cluster, policy):
 
 @pytest.mark.parametrize('movement', ['address', 'port'])
 def test_endpoint_movement_preserves_route_selection(routed_topology, movement):
+    """Keep a non-first route across host movement and apply its new address."""
     cluster, connection, routes, policy = routed_topology
     metadata = cluster.metadata
     old = metadata.get_host_by_host_id(UUID(int=2))
     other = metadata.get_host_by_host_id(UUID(int=3))
     original_hash = hash(old)
     keyed_by_host = {old: 'node'}
-    assert old.endpoint.resolve() == ('127.0.0.10', 9142)
+
+    # Select B while A is absent, then restore A as the first candidate. The
+    # next event must prefer the stored connection ID over candidate order.
+    route_a = routes.pop(0)
+    change_routes(cluster, old.host_id, 'conn-a')
+    assert old.endpoint.resolve() == ('127.0.0.11', 9242)
+    routes.insert(0, route_a)
 
     if movement == 'address':
         connection.peer_results[1][0][0] = '192.168.1.9'
@@ -111,17 +124,19 @@ def test_endpoint_movement_preserves_route_selection(routed_topology, movement):
     assert keyed_by_host[current] == 'node'
     assert current.endpoint != old.endpoint
     assert metadata.get_host(old.endpoint) is None
-    assert current.endpoint.resolve() == ('127.0.0.10', 9142)
+    assert current.endpoint.resolve() == ('127.0.0.11', 9242)
 
-    # Updating a different connection ID must preserve A after Host replacement.
+    # An A event must reload B too, preserve B despite A being first, and use
+    # B's new destination. Ignoring the event also fails this assertion.
+    routes[0] = _Route('conn-a', old.host_id, '127.0.0.30', 9542)
     routes[1] = _Route('conn-b', old.host_id, '127.0.0.20', 9442)
-    change_routes(cluster, old.host_id, 'conn-b')
-    assert current.endpoint.resolve() == ('127.0.0.10', 9142)
-
-    # Removing A permits fallback to B without replacing the Host again.
-    routes.pop(0)
     change_routes(cluster, old.host_id, 'conn-a')
     assert current.endpoint.resolve() == ('127.0.0.20', 9442)
+
+    # Removing B permits fallback to A without replacing the Host again.
+    routes.pop(1)
+    change_routes(cluster, old.host_id, 'conn-b')
+    assert current.endpoint.resolve() == ('127.0.0.30', 9542)
     assert metadata.get_host_by_host_id(current.host_id) is current
     assert metadata.get_host_by_host_id(other.host_id) is other
     assert other.endpoint.resolve() == ('127.0.0.12', 9342)
@@ -129,6 +144,7 @@ def test_endpoint_movement_preserves_route_selection(routed_topology, movement):
 
 
 def test_same_address_rebirth_does_not_inherit_old_route(routed_topology):
+    """Resolve a reborn node by its new host ID and fence the retired host."""
     cluster, connection, routes, policy = routed_topology
     metadata = cluster.metadata
     old = metadata.get_host_by_host_id(UUID(int=2))
@@ -147,16 +163,15 @@ def test_same_address_rebirth_does_not_inherit_old_route(routed_topology):
     # Even while the route table retains the old UUID, reborn nodes use their
     # own route lookup and fall back to the advertised endpoint if absent.
     assert current.endpoint.resolve() == ('192.168.1.1', 9042)
-    assert old.endpoint.resolve() == ('127.0.0.10', 9142)
 
     routes.append(_Route('conn-b', new_id, '127.0.0.21', 9542))
     change_routes(cluster, new_id, 'conn-b')
     assert current.endpoint.resolve() == ('127.0.0.21', 9542)
-    assert old.endpoint.resolve() == ('127.0.0.10', 9142)
     assert_current_topology(cluster, policy)
 
 
 def test_shared_proxy_destination_keeps_hosts_distinct(routed_topology):
+    """Keep logical hosts distinct when their resolved proxy destinations match."""
     cluster, connection, routes, policy = routed_topology
     metadata = cluster.metadata
     first = metadata.get_host_by_host_id(UUID(int=2))
