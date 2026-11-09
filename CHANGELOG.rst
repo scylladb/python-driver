@@ -3,6 +3,12 @@ Unreleased
 
 Bug Fixes
 ---------
+* A user-defined type's mapping to a registered Python class is now kept
+  per-cluster.  The UDT class cache is process-wide, so the last cluster to
+  read a UDT's metadata used to decide the mapping for every cluster in the
+  process: a second cluster that did not register the UDT silently cleared
+  the first cluster's registration, and its values were then returned as
+  plain tuples instead of the registered class.
 * Tablet updates no longer mutate a table's tablet list in place, so a
   concurrent lookup cannot fail with ``IndexError``, miss its tablet, or route
   to the wrong one (#1086).

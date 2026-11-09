@@ -203,7 +203,7 @@ def lookup_casstype_simple(casstype):
     return typeclass
 
 
-def parse_casstype_args(typestring):
+def parse_casstype_args(typestring, user_type_map=None):
     tokens, remainder = casstype_scanner.scan(typestring)
     if remainder:
         raise ValueError("weird characters %r at end" % remainder)
@@ -216,7 +216,12 @@ def parse_casstype_args(typestring):
         elif tok == ')':
             types, names = args.pop()
             prev_types, prev_names = args[-1]
-            prev_types[-1] = prev_types[-1].apply_parameters(types, names)
+            base_type = prev_types[-1]
+            if user_type_map is not None and isinstance(base_type, type) and issubclass(base_type, UserType):
+                # The UDT->class mapping is per-cluster; resolve it here.
+                prev_types[-1] = base_type.apply_parameters(types, names, user_type_map)
+            else:
+                prev_types[-1] = base_type.apply_parameters(types, names)
         else:
             types, names = args[-1]
             parts = re.split(':|=>', tok)
@@ -235,11 +240,16 @@ def parse_casstype_args(typestring):
     # return the first (outer) type, which will have all parameters applied
     return args[0][0][0]
 
-def lookup_casstype(casstype):
+def lookup_casstype(casstype, user_type_map=None):
     """
     Given a Cassandra type as a string (possibly including parameters), hand
     back the CassandraType class responsible for it. If a name is not
     recognized, a custom _UnrecognizedType subclass will be created for it.
+
+    :param user_type_map: optional map of {keyspace: {type_name: class}} used
+        to resolve the mapping of a user-defined type.  It is only needed
+        when parsing a type string that names a UDT; see
+        :meth:`UserType.apply_parameters`.
 
     Example:
 
@@ -252,7 +262,7 @@ def lookup_casstype(casstype):
     if '(' not in casstype:
         return lookup_casstype_simple(casstype)
     try:
-        return parse_casstype_args(casstype)
+        return parse_casstype_args(casstype, user_type_map)
     except (ValueError, AssertionError, IndexError) as e:
         raise ValueError("Don't know how to parse type string %r: %s" % (casstype, e))
 
@@ -1025,38 +1035,49 @@ class TupleType(_ParameterizedType):
 class UserType(TupleType):
     typename = "org.apache.cassandra.db.marshal.UserType"
 
+    # Keyed by (keyspace, udt_name, mapped_class): the cache is process-wide but
+    # the mapping is per-cluster, so one cluster must not overwrite another's.
     _cache = {}
+    _cache_lock = threading.Lock()  # guards _cache; evict iterates it
     _module = sys.modules[__name__]
 
     @classmethod
-    def make_udt_class(cls, keyspace, udt_name, field_names, field_types):
+    def make_udt_class(cls, keyspace, udt_name, field_names, field_types, mapped_class=None):
+        """Return the UDT class; *mapped_class* is part of its identity, never mutated."""
         assert len(field_names) == len(field_types)
 
-        instance = cls._cache.get((keyspace, udt_name))
-        if not instance or instance.fieldnames != field_names or instance.subtypes != field_types:
-            instance = type(udt_name, (cls,), {'subtypes': field_types,
-                                               'cassname': cls.cassname,
-                                               'typename': udt_name,
-                                               'fieldnames': field_names,
-                                               'keyspace': keyspace,
-                                               'mapped_class': None,
-                                               'tuple_type': cls._make_registered_udt_namedtuple(keyspace, udt_name, field_names)})
-            cls._cache[(keyspace, udt_name)] = instance
-        return instance
+        cache_key = (keyspace, udt_name, mapped_class)
+        # Lock-free hit path: this runs for every result with UDT metadata.
+        instance = cls._cache.get(cache_key)
+        if instance and instance.fieldnames == field_names and instance.subtypes == field_types:
+            return instance
+        with cls._cache_lock:
+            instance = cls._cache.get(cache_key)
+            if not instance or instance.fieldnames != field_names or instance.subtypes != field_types:
+                instance = type(udt_name, (cls,), {'subtypes': field_types,
+                                                   'cassname': cls.cassname,
+                                                   'typename': udt_name,
+                                                   'fieldnames': field_names,
+                                                   'keyspace': keyspace,
+                                                   'mapped_class': mapped_class,
+                                                   'tuple_type': cls._make_registered_udt_namedtuple(keyspace, udt_name, field_names)})
+                cls._cache[cache_key] = instance
+            return instance
 
     @classmethod
     def evict_udt_class(cls, keyspace, udt_name):
-        try:
-            del cls._cache[(keyspace, udt_name)]
-        except KeyError:
-            pass
+        # Evict every mapping of this UDT, not just one of them.
+        with cls._cache_lock:
+            for cache_key in [k for k in cls._cache if k[0] == keyspace and k[1] == udt_name]:
+                del cls._cache[cache_key]
 
     @classmethod
-    def apply_parameters(cls, subtypes, names):
+    def apply_parameters(cls, subtypes, names, user_type_map=None):
         keyspace = subtypes[0].cass_parameterized_type()  # when parsed from cassandra type, the keyspace is created as an unrecognized cass type; This gets the name back
         udt_name = _name_from_hex_string(subtypes[1].cassname)
         field_names = tuple(_name_from_hex_string(encoded_name) for encoded_name in names[2:])  # using tuple here to match what comes into make_udt_class from other sources (for caching equality test)
-        return cls.make_udt_class(keyspace, udt_name, field_names, tuple(subtypes[2:]))
+        mapped_class = user_type_map.get(keyspace, {}).get(udt_name) if user_type_map else None
+        return cls.make_udt_class(keyspace, udt_name, field_names, tuple(subtypes[2:]), mapped_class)
 
     @classmethod
     def cql_parameterized_type(cls):
