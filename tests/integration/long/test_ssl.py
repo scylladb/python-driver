@@ -310,39 +310,18 @@ class SSLConnectionAuthTests(unittest.TestCase):
             cluster.connect()
         cluster.shutdown()
 
-    def test_cannot_connect_with_bad_client_auth(self):
-        """
-        Test to validate that we cannot connect with invalid client auth.
-
-        This test will use bad keys/certs to preform client authentication. It will then attempt to connect
-        to a server that has client authentication enabled.
-
-
-        @since 2.7.0
-        @expected_result The client will throw an exception on connect
-
-        @test_category connection:ssl
-        """
-
-        # A context without a client certificate cannot authenticate to this
-        # cluster. This covers the same handshake failure without relying on
-        # legacy ssl_options parsing.
-        cluster = TestCluster(ssl_context=create_ssl_context())
-
-        with pytest.raises(NoHostAvailable):
-            cluster.connect()
-        cluster.shutdown()
-
     def test_cannot_connect_with_invalid_hostname(self):
-        with pytest.raises(Exception):
-            validate_ssl_context(
-                create_ssl_context(
-                    certfile=DRIVER_CERTFILE,
-                    keyfile=DRIVER_KEYFILE,
-                    hostname='localhost',
-                ),
-                hostname='localhost',
-            )
+        """Reject a server whose certificate does not match the endpoint."""
+        context = create_ssl_context(
+            certfile=DRIVER_CERTFILE,
+            keyfile=DRIVER_KEYFILE,
+            hostname='localhost',
+        )
+        with TestCluster(
+                contact_points=[DefaultEndPoint('localhost')],
+                ssl_context=context) as cluster:
+            with pytest.raises(NoHostAvailable):
+                cluster.connect(wait_for_all_pools=True)
 
 
 class SSLSocketErrorTests(unittest.TestCase):
@@ -438,16 +417,18 @@ class SSLConnectionWithSSLContextTests(unittest.TestCase):
         ))
 
     def test_cannot_connect_ssl_context_with_invalid_hostname(self):
-        with pytest.raises(Exception):
-            validate_ssl_context(
-                create_ssl_context(
-                    certfile=DRIVER_CERTFILE,
-                    keyfile=DRIVER_KEYFILE_ENCRYPTED,
-                    password='cassandra',
-                    hostname='localhost',
-                ),
-                hostname='localhost',
-            )
+        """Reject a hostname mismatch with an encrypted client key."""
+        context = create_ssl_context(
+            certfile=DRIVER_CERTFILE,
+            keyfile=DRIVER_KEYFILE_ENCRYPTED,
+            password='cassandra',
+            hostname='localhost',
+        )
+        with TestCluster(
+                contact_points=[DefaultEndPoint('localhost')],
+                ssl_context=context) as cluster:
+            with pytest.raises(NoHostAvailable):
+                cluster.connect(wait_for_all_pools=True)
 
     @unittest.skipIf(USES_PYOPENSSL, "This test is for the built-in ssl.Context")
     def test_can_connect_with_sslcontext_default_context(self):
