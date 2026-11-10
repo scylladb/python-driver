@@ -5965,7 +5965,8 @@ class ControlConnection(object):
             if self._reconnect_pending_seq != pending_seq:
                 return
 
-            if (self._reconnection_handler is not None or
+            if (self._is_shutdown or
+                    self._reconnection_handler is not None or
                     not self._reconnect_requested):
                 self._reconnect_pending = False
                 self._reconnect_requested = False
@@ -5999,12 +6000,14 @@ class ControlConnection(object):
 
         log.debug("[control connection] Attempting to reconnect")
         try:
+            if self._is_shutdown:
+                return
             self._set_new_connection(self._reconnect_internal())
         except (NoHostAvailable, UnresolvableContactPoints):
-            # make a retry schedule (which includes backoff)
-            schedule = self._cluster.reconnection_policy.new_schedule()
-
             with self._reconnection_lock:
+                if self._is_shutdown:
+                    return
+
                 with self._lock:
                     if self._connection_generation != generation:
                         # An attempt that overlapped this one installed a
@@ -6015,6 +6018,9 @@ class ControlConnection(object):
                                   "another attempt succeeded, not scheduling "
                                   "retries")
                         return
+
+                # make a retry schedule (which includes backoff)
+                schedule = self._cluster.reconnection_policy.new_schedule()
 
                 # cancel existing reconnection attempts
                 if self._reconnection_handler:
@@ -6061,20 +6067,20 @@ class ControlConnection(object):
 
     def shutdown(self):
         """Stop recovery and discard events awaiting a connection."""
-        # stop trying to reconnect (if we are)
+        # Publish shutdown while holding the same lock used to install retry
+        # handlers, so a failing attempt cannot add one after cancellation.
         with self._reconnection_lock:
+            with self._lock:
+                if self._is_shutdown:
+                    return
+                self._is_shutdown = True
+                log.debug("Shutting down control connection")
+                connection = self._connection
+                self._connection = None
+                self._pending_client_routes_refreshes.clear()
+
             if self._reconnection_handler:
                 self._reconnection_handler.cancel()
-
-        with self._lock:
-            if self._is_shutdown:
-                return
-            else:
-                self._is_shutdown = True
-            log.debug("Shutting down control connection")
-            connection = self._connection
-            self._connection = None
-            self._pending_client_routes_refreshes.clear()
 
         if connection:
             connection.close()

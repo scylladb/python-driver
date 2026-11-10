@@ -1077,6 +1077,51 @@ class ControlConnectionTest(unittest.TestCase):
         self.cluster.executor.submit.assert_called_once_with(
             self.control_connection._reconnect)
 
+    def test_queued_reconnect_stops_after_shutdown(self):
+        self.control_connection.reconnect()
+        self.control_connection.shutdown()
+
+        with patch.object(self.control_connection,
+                          '_reconnect_internal') as reconnect:
+            self.control_connection._reconnect()
+
+        reconnect.assert_not_called()
+        assert not self.control_connection._reconnect_pending
+        assert self.control_connection._reconnection_handler is None
+
+    def test_reconnect_failure_does_not_start_retries_after_shutdown(self):
+        def fail_during_shutdown():
+            self.control_connection.shutdown()
+            raise NoHostAvailable('no host', {})
+
+        with patch.object(self.control_connection, '_reconnect_internal',
+                          side_effect=fail_during_shutdown), \
+                patch.object(self.cluster.reconnection_policy,
+                             'new_schedule') as new_schedule:
+            self.control_connection._reconnect()
+
+        new_schedule.assert_not_called()
+        self.cluster.scheduler.schedule.assert_not_called()
+        assert self.control_connection._reconnection_handler is None
+        assert not self.control_connection._reconnect_pending
+
+    def test_shutdown_discards_a_retained_reconnect_trigger(self):
+        self.cluster.executor.reset_mock()
+
+        def fail_during_shutdown():
+            self.control_connection.reconnect()
+            self.control_connection.shutdown()
+            raise RuntimeError('connection attempt failed')
+
+        with patch.object(self.control_connection, '_reconnect_internal',
+                          side_effect=fail_during_shutdown):
+            with self.assertRaises(RuntimeError):
+                self.control_connection._reconnect()
+
+        self.cluster.executor.submit.assert_not_called()
+        assert not self.control_connection._reconnect_pending
+        assert not self.control_connection._reconnect_requested
+
     def test_reconnect_is_queued_again_once_the_attempt_starts(self):
         self.cluster.executor.reset_mock()
         self.control_connection.reconnect()
