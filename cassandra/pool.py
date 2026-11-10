@@ -672,6 +672,7 @@ class HostConnection(object):
 
     def return_connection(self, connection, stream_was_orphaned=False,
                           replace_only=False, heartbeat_failed=False):
+        """Release request accounting and handle this pool's failures."""
         if not stream_was_orphaned:
             with connection.lock:
                 connection.in_flight -= 1
@@ -714,9 +715,11 @@ class HostConnection(object):
                 # must not discount each other's doomed sibling connections.
                 self.shutdown(_failure=reservation)
                 if reservation.is_current():
-                    self._session.cluster.on_down(
+                    dispatched = self._session.cluster.on_down(
                         self.host, is_host_addition=False,
                         _pool_failure=reservation)
+                    if not dispatched:
+                        self._session._recover_pool(self)
                 elif not reservation.retired:
                     with self._lock:
                         self._trash.discard(connection)

@@ -4576,6 +4576,7 @@ class Session(object):
             break
 
         def run_add_or_renew_pool():
+            """Build and publish a pool while its attempt retains ownership."""
             with self._lock:
                 with host.lock, self.cluster.metadata._host_ownership_guard(host):
                     if not attempt.owns_locked(self):
@@ -4641,6 +4642,10 @@ class Session(object):
                 publish_pool = False
                 stale_candidate = False
                 stale_result = False
+                unusable_candidate = False
+                connection_required = (
+                    attempt.distance != HostDistance.REMOTE or
+                    self.cluster.connect_to_remote_hosts)
                 # This short guard excludes membership changes, not
                 # background connection creation or keyspace waits under
                 # the pool work lock.
@@ -4658,7 +4663,15 @@ class Session(object):
                                                 ignored_intent_is_success=True)
                                     else:
                                         keyspace = self.keyspace
-                                        if new_pool._keyspace == keyspace:
+                                        expected_pool = attempt.expected_pool
+                                        renewing_retired_pool = (
+                                            expected_pool is not None and
+                                            expected_pool.is_shutdown)
+                                        if (renewing_retired_pool and
+                                                connection_required and
+                                                not connected):
+                                            unusable_candidate = True
+                                        elif new_pool._keyspace == keyspace:
                                             current_intent = \
                                                 self._pool_intents_locked().get(host)
                                             previous = attempt.expected_pool
@@ -4681,6 +4694,16 @@ class Session(object):
                         "for host %s", host)
                     new_pool.shutdown()
                     return stale_result
+
+                if unusable_candidate:
+                    connection_errors.append(ConnectionShutdown(
+                        "Pool lost its connections before publication",
+                        attempt.endpoint))
+                    try:
+                        return self._handle_pool_creation_failure(
+                            attempt, dispatch_connection_failure, False)
+                    finally:
+                        new_pool.shutdown()
 
                 if publish_pool:
                     log.debug("Added pool for host %s to session", host)
@@ -4735,6 +4758,74 @@ class Session(object):
             return work_future
         add_done_callback(attempt.intent.complete_from_work)
         return attempt.intent.completion
+
+    def _recover_pool(self, failed_pool):
+        """Retry a retired session pool when cluster DOWN was discounted.
+
+        Keep the failed pool as the recovery token. Normal reconciliation
+        fences pool creation; replacing or removing this exact pool ends
+        these retries without disturbing another session's healthy pool.
+        Failed creation, including authentication failure, remains retryable
+        here while this session still owns the retired pool.
+        """
+        session_ref = weakref.ref(self)
+        host = failed_pool.host
+        schedule = iter(self.cluster.reconnection_policy.new_schedule())
+
+        def current_session():
+            """Find the session while this failed pool still owns recovery."""
+            session = session_ref()
+            if session is None:
+                return None
+            with session._lock, host.lock:
+                if (session.is_shutdown or session.cluster.is_shutdown or
+                        host.is_up not in (True, None) or host._is_removed or
+                        session._pools.get(host) is not failed_pool or
+                        not failed_pool.is_shutdown or
+                        session.cluster.metadata.get_host_by_host_id(
+                            host.host_id) is not host):
+                    return None
+            return session
+
+        def retry(completed=None):
+            """Observe completion and schedule the next configured attempt."""
+            if completed is not None:
+                try:
+                    completed.result()
+                except Exception:
+                    log.debug("Session pool recovery failed for %s", host,
+                              exc_info=True)
+            session = current_session()
+            if session is None:
+                return
+            try:
+                delay = next(schedule)
+            except StopIteration:
+                log.warning(
+                    "Session pool recovery schedule exhausted for %s", host)
+                return
+            session.cluster.scheduler.schedule(delay, recover)
+
+        def recover():
+            """Reconcile this host without adopting a newer pool lifecycle."""
+            session = current_session()
+            if session is None:
+                return
+            try:
+                futures = session.update_created_pools(
+                    hosts=(host,), _expected_pool=failed_pool)
+            except Exception:
+                log.exception("Error recovering session pool for %s", host)
+                retry()
+                return
+            if futures:
+                # Reconciliation of this single host has one completion.
+                for future in futures:
+                    future.add_done_callback(retry)
+            else:
+                retry()
+
+        retry()
 
     def remove_pool(self, host):
         intent_to_fail = None
@@ -4791,7 +4882,8 @@ class Session(object):
         else:
             return None
 
-    def update_created_pools(self, excluded_host=None, hosts=None):
+    def update_created_pools(self, excluded_host=None, hosts=None,
+                             _expected_pool=None):
         """
         When the set of live nodes change, the loadbalancer will change its
         mind on host distances. It might change it on the node that came/left
@@ -4804,6 +4896,8 @@ class Session(object):
         ``excluded_host`` suppresses a new attempt for a host whose pool
         creation has just failed while still reconciling all other hosts.
         ``hosts`` may freeze the metadata snapshot used for reconciliation.
+        ``_expected_pool`` confines recovery to the exact failed pool, even
+        when removal or replacement occurs during distance calculation.
 
         For internal use only.
         """
@@ -4829,6 +4923,9 @@ class Session(object):
                 with (host.lock,
                       self.cluster.metadata._host_ownership_guard(host) as owns_host):
                     if not owns_host or host._is_removed or host._lifecycle_pending:
+                        continue
+                    if (_expected_pool is not None and
+                            self._pools.get(host) is not _expected_pool):
                         continue
                     # In-flight on_add/on_up owns pool creation for a down host;
                     # superseding it would settle its result False with no retry.
@@ -4857,7 +4954,9 @@ class Session(object):
                           self.cluster.metadata._host_ownership_guard(host) as owns_host):
                         current_intent = \
                             self._pool_intents_locked().get(host)
-                        if not owns_host or host._is_removed:
+                        if (not owns_host or host._is_removed or
+                                (_expected_pool is not None and
+                                 self._pools.get(host) is not _expected_pool)):
                             if current_intent is intent:
                                 self._pool_intents_locked().pop(host, None)
                             terminal_result = False
