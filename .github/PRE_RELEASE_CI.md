@@ -145,6 +145,11 @@ Narrow PR plans skip wheel builds and unrelated integration/NumPy jobs.
 The `Measure code coverage` job runs selected unit/helper tests directly on PRs,
 without uploading partial coverage to Codecov. All merge-queue entries retain
 full wheel/unit testing and full coverage, including documentation-only entries.
+Selected PR unit runs set `CASS_DRIVER_NO_SKIP=1`. The hook in `tests/conftest.py`
+makes unexpected skips fail for targets under `tests/`; release-helper tests
+under `scripts/release/` retain normal pytest skip handling. These PR runs retain
+the explicit column-encryption/date-range exclusions and run reactor modules
+separately.
 Pre-release runs (including calls from labeled PRs), protected pushes, manual
 runs and release builds retain their existing suites. These runs bypass the
 selection jobs entirely. See `CONTRIBUTING.rst` for local plan/run commands,

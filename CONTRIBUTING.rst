@@ -200,8 +200,9 @@ Selection follows these rules:
   classification continue.
 * A changed standalone Python test under ``tests/unit/`` or the standard and
   cqlengine integration suites selects that file. Modules imported by other
-  tests, shared fixtures, deleted tests, and Cython test modules keep full
-  validation. Asyncio and asyncore unit modules run with their own reactor.
+  tests, shared fixtures, deleted tests, Cython test modules, and the excluded
+  column-encryption suite keep full validation. Asyncio and asyncore unit modules
+  run with their own reactor.
 * Known helper changes select their mapped tests: the selector, Scylla source
   planner, release/signing helpers, and NumPy import checker. Release helper
   changes run ``tests/unit/test_release_helpers.py`` and ``scripts/release/``.
@@ -219,9 +220,18 @@ dependency uncertainty falls back to full validation.
 Ordinary PR CI runs only the selected unit/helper modules, integration
 modules, and NumPy job. It skips wheel builds for narrow changes. The existing
 ``Measure code coverage`` check runs selected PR unit/helper tests directly
-without uploading partial coverage to Codecov. Driver-source changes under
-``cassandra/`` and mixed changes containing driver source retain the existing
-full PR wheel/integration and NumPy checks. A full-plan PR keeps the existing
+without uploading partial coverage to Codecov.
+
+Selected PR unit runs set ``CASS_DRIVER_NO_SKIP=1``. The hook in
+``tests/conftest.py`` makes unexpected skips fail for targets under ``tests/``;
+release-helper tests under ``scripts/release/`` retain normal pytest skip
+handling. These PR runs retain the full unit command's column-encryption and
+date-range exclusions and run reactor modules separately. Local runs allow
+skips unless this environment variable is set.
+
+Driver-source changes under ``cassandra/`` and mixed changes containing driver
+source retain the existing full PR wheel/integration and NumPy checks. A full-plan
+PR keeps the existing
 skipped coverage check; full coverage runs when it enters the merge queue.
 
 Manual runs, explicit pre-release CI, release builds, and protected-branch
