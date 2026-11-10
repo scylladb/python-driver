@@ -22,10 +22,12 @@ import unittest
 from threading import Barrier, Thread, Event, Lock, RLock
 from unittest.mock import Mock, NonCallableMagicMock, MagicMock, patch
 
+from cassandra import AuthenticationFailed
 from cassandra.cluster import Cluster, Session, ShardAwareOptions
 from cassandra._lifecycle import ConnectionFailureReservation, PoolOwnershipReservation
 from cassandra.connection import (ClientRoutesEndPoint, Connection, ConnectionBusy,
                                   ConnectionException, ConnectionSendError,
+                                  ConnectionShutdown,
                                   DefaultEndPoint, SniEndPoint, UnixSocketEndPoint)
 from cassandra.pool import HostConnection
 from cassandra.pool import Host, NoConnectionsAvailable
@@ -389,6 +391,320 @@ def test_failed_pool_cannot_discount_its_own_down(independent_pool):
         pool.shutdown()
         other_pool.shutdown()
         cluster.shutdown()
+
+
+@pytest.fixture
+def discounted_pool_recovery(request):
+    """Retire one pool while a second session keeps the host available."""
+    session = new_session_with_pool_state()
+    session.cluster = Mock()
+    session.keyspace = None
+    session.is_shutdown = False
+    host, session, pool, original, replacement = _make_socket_pool(session)
+    other_session = new_session_with_pool_state()
+    other_session.cluster = session.cluster
+    other_session.keyspace = None
+    other_session.is_shutdown = False
+    healthy = HashableMock(
+        spec=Connection, in_flight=0, is_closed=False, is_defunct=False,
+        orphaned_request_ids=set(), features=ProtocolFeatures(shard_id=0))
+    session.cluster.connection_factory.side_effect = [healthy]
+    other_pool = HostConnection(host, HostDistance.LOCAL, other_session)
+    other_session._pools[host] = other_pool
+
+    cluster = Cluster(contact_points=[])
+    try:
+        session.cluster = other_session.cluster = cluster
+        cluster.sessions = (session, other_session)
+        cluster.metadata.add_or_return_host(host)
+        cluster.shard_aware_options.disable = True
+        cluster.profile_manager.distance = Mock(
+            return_value=HostDistance.LOCAL)
+        session._profile_manager = cluster.profile_manager
+        cluster.on_down_potentially_blocking = Mock(return_value=Future())
+        cluster.connection_factory = Mock(return_value=replacement)
+        cluster.reconnection_policy = Mock()
+        # Reconnection policies may return an iterable rather than an iterator.
+        cluster.reconnection_policy.new_schedule.return_value = [1, 2, 4]
+        scheduled = []
+        cluster.scheduler.schedule = Mock(
+            side_effect=lambda delay, fn: scheduled.append((delay, fn)))
+        work = []
+
+        def submit(fn, *args, **kwargs):
+            """Queue work so tests can control creation and completion."""
+            future = Future()
+            work.append((fn, args, kwargs, future))
+            return future
+
+        session.submit = Mock(side_effect=submit)
+        initial_state = getattr(request, 'param', True)
+        if initial_state is True:
+            host.set_up()
+        host.signal_connection_failure.return_value = True
+        original.in_flight = 1
+        original.is_defunct = True
+        original.last_error = ConnectionException(
+            'failed socket', host.endpoint)
+        pool.return_connection(original)
+        assert pool.is_shutdown
+        assert host.is_up is initial_state
+        assert len(scheduled) == 1
+        cluster.on_down_potentially_blocking.assert_not_called()
+        yield host, session, pool, other_pool, scheduled, work
+    finally:
+        cluster.shutdown()
+
+
+def _finish_pool_recovery_work(work):
+    """Run one queued task and notify its completion callbacks."""
+    fn, args, kwargs, future = work.pop(0)
+    future.set_result(fn(*args, **kwargs))
+
+
+def test_discounted_down_recovers_only_failed_session(
+        discounted_pool_recovery):
+    """Restore the retired pool without closing the healthy peer pool."""
+    host, session, failed, healthy, scheduled, work = discounted_pool_recovery
+    delay, recover = scheduled.pop(0)
+    assert delay == 1
+    recover()
+    assert len(work) == 1
+    _finish_pool_recovery_work(work)
+    assert session._pools[host] is not failed
+    assert not session._pools[host].is_shutdown
+    assert not healthy.is_shutdown
+    assert host.is_up
+    assert not scheduled
+
+
+@pytest.mark.parametrize('creation_error', [
+    ConnectionException, AuthenticationFailed,
+])
+def test_discounted_down_retries_failed_pool_creation(
+        discounted_pool_recovery, creation_error):
+    """Keep retrying a transient creation failure with the next delay."""
+    host, session, failed, healthy, scheduled, work = discounted_pool_recovery
+    session.cluster.connection_factory.side_effect = [
+        creation_error('still unavailable'),
+        session.cluster.connection_factory.return_value]
+    scheduled.pop(0)[1]()
+    _finish_pool_recovery_work(work)
+    assert session._pools[host] is failed
+    assert host.is_up
+    assert len(scheduled) == 1
+    delay, recover = scheduled.pop(0)
+    assert delay == 2
+    recover()
+    _finish_pool_recovery_work(work)
+    assert session._pools[host] is not failed
+    assert not session._pools[host].is_shutdown
+    assert not healthy.is_shutdown
+    assert not scheduled
+
+
+@pytest.mark.parametrize('discounted_pool_recovery', [None], indirect=True)
+def test_discounted_down_recovers_unknown_host(discounted_pool_recovery):
+    """Recover a usable host whose health has not been marked up yet."""
+    host, session, failed, healthy, scheduled, work = discounted_pool_recovery
+    assert host.is_up is None
+    scheduled.pop(0)[1]()
+    _finish_pool_recovery_work(work)
+    assert session._pools[host] is not failed
+    assert not session._pools[host].is_shutdown
+    assert not healthy.is_shutdown
+    assert not scheduled
+
+
+@pytest.mark.parametrize('failure', ['is_closed', 'is_defunct'])
+def test_discounted_pool_recovery_retries_unusable_candidate(
+        discounted_pool_recovery, failure):
+    """Retain the failed-pool token when its candidate has no usable socket."""
+    host, session, failed, healthy, scheduled, work = discounted_pool_recovery
+    candidate = session.cluster.connection_factory.return_value
+    setattr(candidate, failure, True)
+    scheduled.pop(0)[1]()
+    _finish_pool_recovery_work(work)
+    assert session._pools[host] is failed
+    assert not healthy.is_shutdown
+    assert host.is_up
+    candidate.close.assert_called()
+    assert len(scheduled) == 1
+    assert scheduled[0][0] == 2
+
+
+@pytest.mark.parametrize('caller', ['reconcile', 'direct_up', 'direct_add'])
+@pytest.mark.parametrize('failure', ['is_closed', 'is_defunct'])
+def test_retired_pool_renewal_rejects_unusable_candidate(
+        discounted_pool_recovery, caller, failure):
+    """Reject unusable renewals outside the session recovery callback."""
+    host, session, failed, healthy, scheduled, work = discounted_pool_recovery
+    cluster = session.cluster
+    # Leave the delayed recovery untouched; use ordinary creation entry points.
+    candidate = cluster.connection_factory.return_value
+    setattr(candidate, failure, True)
+    cluster.signal_connection_failure = Mock(
+        wraps=cluster.signal_connection_failure)
+
+    def renew():
+        """Use reconciliation or the direct creation used by UP and ADD."""
+        if caller == 'reconcile':
+            futures = session.update_created_pools()
+            assert len(futures) == 1
+            return futures.pop()
+        return session.add_or_renew_pool(
+            host, is_host_addition=caller == 'direct_add')
+
+    completion = renew()
+    assert len(work) == 1
+    _finish_pool_recovery_work(work)
+    assert completion.result(timeout=0) is False
+    assert session._pools[host] is failed
+    assert not healthy.is_shutdown
+    candidate.close.assert_called_once()
+    cluster.signal_connection_failure.assert_called_once()
+    args, kwargs = cluster.signal_connection_failure.call_args
+    assert args[0] is host
+    assert isinstance(args[1], ConnectionShutdown)
+    assert args[2] is (caller == 'direct_add')
+    assert kwargs['expect_host_to_be_down'] is True
+    cluster.on_down_potentially_blocking.assert_not_called()
+    assert host.is_up
+    # A normal caller still succeeds when its next candidate is usable.
+    setattr(candidate, failure, False)
+    completion = renew()
+    _finish_pool_recovery_work(work)
+    assert completion.result(timeout=0) is True
+    assert session._pools[host] is not failed
+    assert not session._pools[host].is_shutdown
+    assert not healthy.is_shutdown
+    cluster.signal_connection_failure.assert_called_once()
+    assert len(scheduled) == 1
+
+
+@pytest.mark.parametrize('removal_point', ['before_reconcile', 'distance'])
+def test_discounted_recovery_cannot_reopen_removed_pool(
+        discounted_pool_recovery, removal_point):
+    """Stop when removal races recovery admission or distance inspection."""
+    host, session, failed, healthy, scheduled, work = discounted_pool_recovery
+
+    def remove_failed_pool(*args):
+        """Remove the pool at the selected reconciliation boundary."""
+        session.remove_pool(host)
+        return HostDistance.LOCAL
+
+    if removal_point == 'before_reconcile':
+        reconcile = session.update_created_pools
+
+        def remove_then_reconcile(*args, **kwargs):
+            """Remove the token between retry admission and reconciliation."""
+            remove_failed_pool()
+            return reconcile(*args, **kwargs)
+
+        session.update_created_pools = remove_then_reconcile
+    else:
+        distance = session.cluster.profile_manager.distance
+        distance.side_effect = remove_failed_pool
+
+    scheduled.pop(0)[1]()
+    # The only submitted work closes the removed pool; no replacement opens.
+    assert len(work) == 1
+    _finish_pool_recovery_work(work)
+    session.cluster.connection_factory.assert_not_called()
+    assert host not in session._pools
+    assert not healthy.is_shutdown
+    assert not scheduled
+
+
+def test_discounted_pool_recovery_respects_disabled_remote_connections(
+        discounted_pool_recovery):
+    """Allow an empty remote pool when remote connections are disabled."""
+    host, session, failed, healthy, scheduled, work = discounted_pool_recovery
+    session.cluster.profile_manager.distance.return_value = HostDistance.REMOTE
+    session.cluster.connect_to_remote_hosts = False
+    scheduled.pop(0)[1]()
+    _finish_pool_recovery_work(work)
+    assert session._pools[host] is not failed
+    assert session._pools[host].open_count == 0
+    session.cluster.connection_factory.assert_not_called()
+    assert not healthy.is_shutdown
+    assert not scheduled
+
+
+@pytest.mark.parametrize('supersession', [
+    'pool_replaced', 'pool_removed', 'host_replaced', 'host_down',
+    'session_shutdown', 'cluster_shutdown',
+])
+def test_discounted_pool_recovery_stops_after_supersession(
+        discounted_pool_recovery, supersession):
+    """Discard a queued retry after its pool or lifecycle loses ownership."""
+    host, session, failed, healthy, scheduled, work = discounted_pool_recovery
+    if supersession == 'pool_replaced':
+        session._pools[host] = healthy
+    elif supersession == 'pool_removed':
+        session._pools.pop(host)
+    elif supersession == 'host_replaced':
+        replacement = Host(host.endpoint, SimpleConvictionPolicy,
+                           host_id=host.host_id)
+        session.cluster.metadata.remove_host(host)
+        session.cluster.metadata.add_or_return_host(replacement)
+    elif supersession == 'host_down':
+        host.set_down()
+    elif supersession == 'session_shutdown':
+        session.shutdown()
+    elif supersession == 'cluster_shutdown':
+        session.cluster.shutdown()
+    scheduled.pop(0)[1]()
+    assert not work
+    assert not scheduled
+
+
+def test_discounted_pool_recovery_honors_exhausted_schedule(
+        discounted_pool_recovery, caplog):
+    """Stop and warn after a custom finite policy consumes all attempts."""
+    host, session, failed, healthy, scheduled, work = discounted_pool_recovery
+    session.cluster.connection_factory.side_effect = \
+        ConnectionException('still unavailable', host.endpoint)
+    for delay in (1, 2, 4):
+        actual_delay, recover = scheduled.pop(0)
+        assert actual_delay == delay
+        recover()
+        _finish_pool_recovery_work(work)
+    assert session._pools[host] is failed
+    assert not scheduled
+    assert not healthy.is_shutdown
+    assert 'Session pool recovery schedule exhausted' in caplog.text
+
+
+def test_discounted_recovery_discards_work_after_host_replacement(
+        discounted_pool_recovery):
+    """Reject queued creation when metadata has replaced its original host."""
+    host, session, failed, healthy, scheduled, work = discounted_pool_recovery
+    scheduled.pop(0)[1]()
+    replacement = Host(DefaultEndPoint('127.0.0.2'), SimpleConvictionPolicy,
+                       host_id=host.host_id)
+    session.cluster.metadata.remove_host(host)
+    session.cluster.metadata.add_or_return_host(replacement)
+    _finish_pool_recovery_work(work)
+    session.cluster.connection_factory.assert_not_called()
+    assert session._pools[host] is failed
+    assert not scheduled
+
+
+def test_discounted_pool_recovery_retries_cancelled_work(
+        discounted_pool_recovery):
+    """Schedule another attempt when pending creation work is cancelled."""
+    host, session, failed, healthy, scheduled, work = discounted_pool_recovery
+    scheduled.pop(0)[1]()
+    work.pop(0)[3].cancel()
+    assert len(scheduled) == 1
+    delay, recover = scheduled.pop(0)
+    assert delay == 2
+    recover()
+    _finish_pool_recovery_work(work)
+    assert session._pools[host] is not failed
+    assert not session._pools[host].is_shutdown
+    assert not scheduled
 
 
 def test_queued_replacement_cannot_remove_new_socket(socket_pool):
