@@ -2275,22 +2275,7 @@ class Cluster(object):
     def _is_current_host(self, host):
         return self._lifecycle.is_current(host)
 
-    @_lifecycle.event
-    def _on_up_future_completed(self, host, futures, results, lock, finished_future,
-                                generation=None):
-        with lock:
-            if finished_future not in futures:
-                return
-            futures.remove(finished_future)
-
-            try:
-                results.append(finished_future.result())
-            except Exception as exc:
-                results.append(exc)
-
-            if futures:
-                return
-
+    def _on_up_pools_completed(self, host, results, generation=None):
         # Retirement can publish while a callback runs. Fence every remaining
         # effect; the FIFO delivers removal after the current notification.
         try:
@@ -2371,7 +2356,6 @@ class Cluster(object):
     def _on_up_prepared(self, host, generation):
         if not self._lifecycle.readiness_is_current(host, generation):
             return
-        have_future = False
         futures = set()
         try:
             for session in tuple(self.sessions):
@@ -2390,25 +2374,17 @@ class Cluster(object):
                 return
 
             log.debug("Attempting to open new connection pools for host %s", host)
-            futures_lock = Lock()
-            futures_results = []
-            callback = partial(
-                self._on_up_future_completed, host, futures, futures_results,
-                futures_lock, generation=generation)
             for session in tuple(self.sessions):
                 if not self._lifecycle.readiness_is_current(host, generation):
                     return
                 future = session.add_or_renew_pool(host, is_host_addition=False)
                 if future is not None:
-                    have_future = True
                     futures.add(future)
 
-            # Future.add_done_callback() invokes the callback inline when the
-            # future is already complete. Register only after every session's
-            # pool has been scheduled so completion cannot finalize the host
-            # while later pools are still absent from the aggregate.
-            for future in tuple(futures):
-                future.add_done_callback(callback)
+            if futures:
+                self._lifecycle.collect_futures(
+                    futures, partial(self._on_up_pools_completed, host,
+                                     generation=generation))
         except Exception:
             log.exception("Unexpected failure handling node %s being marked up:", host)
             for future in futures:
@@ -2416,7 +2392,7 @@ class Cluster(object):
 
             raise
         else:
-            if not have_future:
+            if not futures:
                 try:
                     if self._lifecycle.mark_ready(host, readiness_generation=generation):
                         # Preserve the existing no-pool UP behavior unless it
@@ -2719,22 +2695,9 @@ class Cluster(object):
                 addition_token=addition_token)
             return
 
-        futures_lock = Lock()
-        futures_results = []
         futures = set()
 
-        def future_completed(future):
-            with futures_lock:
-                futures.discard(future)
-
-                try:
-                    futures_results.append(future.result())
-                except Exception as exc:
-                    futures_results.append(exc)
-
-                if futures:
-                    return
-
+        def pools_completed(futures_results):
             if not self._lifecycle.addition_is_current(host, addition_token):
                 return
             log.debug('All futures have completed for added host %s', host)
@@ -2879,13 +2842,7 @@ class Cluster(object):
                                addition_token=addition_token)
             return
 
-        # Register callbacks only after every session has had its pool
-        # scheduled. Future.add_done_callback() invokes the callback inline
-        # when the future is already complete, so registering inside the loop
-        # can finalize the host while later sessions are still unscheduled.
-        for future in tuple(futures):
-            future.add_done_callback(
-                lambda future: self._lifecycle.submit(future_completed, future))
+        self._lifecycle.collect_futures(futures, pools_completed)
 
     @_lifecycle.event
     def _finalize_add(self, host, set_up=True, generation=None,
