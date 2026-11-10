@@ -455,6 +455,33 @@ class LifecycleCoordinator:
             completed.set_result(None)
             return completed
 
+    def collect_futures(self, futures, callback):
+        """Deliver all results once, with aggregation owned by the FIFO.
+
+        Register only after the caller has scheduled every operation. Worker
+        callbacks enqueue completions; only the lifecycle drainer changes the
+        pending set and results. Exceptions (including cancellation) are
+        delivered as results so the caller can apply its recovery policy.
+        Closing the coordinator discards outstanding completion notifications.
+        """
+        pending = set(futures)
+        results = []
+
+        def completed(future):
+            pending.remove(future)
+            try:
+                results.append(future.result())
+            except Exception as exc:
+                results.append(exc)
+            if not pending:
+                callback(results)
+
+        if not pending:
+            self.submit(callback, results)
+            return
+        for future in tuple(pending):
+            future.add_done_callback(partial(self.submit, completed))
+
     def is_current(self, host):
         """Check that this exact, nonterminal Host owns its metadata entry."""
         return (not self.closed and not host._is_removed and

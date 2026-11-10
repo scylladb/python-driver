@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from concurrent.futures import Future
+from concurrent.futures import CancelledError, Future
 from threading import Barrier, Event, Lock, Thread, get_ident
 from unittest.mock import Mock, patch
 
@@ -31,6 +31,147 @@ from cassandra.protocol_features import ProtocolFeatures
 from tests.unit.test_control_connection import (
     HOST_ID_1, HOST_ID_2, HOST_ID_3, MockConnection, _node_meta_results)
 from tests.unit.utils import new_session_with_pool_state
+
+
+def test_pool_results_wait_for_every_operation_and_preserve_failures():
+    coordinator = LifecycleCoordinator()
+    callback = Mock()
+    success, failure, error, cancelled = [Future() for _ in range(4)]
+    exception = RuntimeError('pool creation failed')
+    success.set_result(True)
+    error.set_exception(exception)
+    cancelled.cancel()
+
+    coordinator.collect_futures([success, failure, error, cancelled], callback)
+    callback.assert_not_called()
+    failure.set_result(False)
+
+    callback.assert_called_once()
+    results, = callback.call_args.args
+    assert len(results) == 4
+    assert True in results
+    assert False in results
+    assert exception in results
+    assert sum(isinstance(result, CancelledError) for result in results) == 1
+
+
+def test_pool_results_are_aggregated_by_the_active_lifecycle_drainer():
+    coordinator = LifecycleCoordinator()
+    futures = [Future() for _ in range(8)]
+    entered, release = Event(), Event()
+    observations = []
+    workers = []
+
+    def callback(results):
+        observations.append((get_ident(), results))
+
+    def hold_drainer():
+        entered.set()
+        assert release.wait(5)
+
+    coordinator.collect_futures(futures, callback)
+    drainer = Thread(target=lambda: coordinator.submit(hold_drainer))
+    drainer.start()
+    try:
+        assert entered.wait(5)
+        for index, future in enumerate(futures):
+            worker = Thread(target=future.set_result, args=(index,))
+            workers.append(worker)
+            worker.start()
+        for worker in workers:
+            worker.join(5)
+            assert not worker.is_alive(), 'completion waited for the drainer'
+        assert observations == []
+    finally:
+        release.set()
+        drainer.join(5)
+        for worker in workers:
+            worker.join(5)
+
+    assert not drainer.is_alive()
+    assert len(observations) == 1
+    thread_id, results = observations[0]
+    assert thread_id == drainer.ident
+    assert sorted(results) == list(range(8))
+
+
+def test_pool_results_deduplicate_input_futures():
+    coordinator = LifecycleCoordinator()
+    callback = Mock()
+    future = Future()
+    coordinator.collect_futures([future, future], callback)
+    future.set_result(True)
+    callback.assert_called_once_with([True])
+
+
+def test_empty_pool_results_join_the_notification_queue():
+    coordinator = LifecycleCoordinator()
+    order = []
+
+    def notification():
+        coordinator.collect_futures([], lambda results: order.append(results))
+        order.append('notification')
+
+    coordinator.submit(notification)
+    assert order == ['notification', []]
+
+
+@pytest.mark.parametrize('completion', ['queued', 'late'])
+def test_pool_results_cannot_publish_after_coordinator_close(completion):
+    coordinator = LifecycleCoordinator()
+    callback = Mock()
+    future = Future()
+    coordinator.collect_futures([future], callback)
+    with coordinator.transaction():
+        if completion == 'queued':
+            future.set_result(True)
+        coordinator.close()
+    if completion == 'late':
+        future.set_result(True)
+    callback.assert_not_called()
+
+
+@pytest.mark.parametrize('event', ['up', 'add'])
+@pytest.mark.parametrize('outcome', ['success', 'failure', 'exception', 'cancelled'])
+def test_host_readiness_waits_for_all_session_pool_results(topology, event, outcome):
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    host.set_down()
+    cluster.control_connection.on_up = Mock()
+    cluster.control_connection.on_add = Mock()
+    sessions = [Mock(), Mock()]
+    results = [Future(), Future()]
+    results[0].set_result(True)
+    for session, result in zip(sessions, results):
+        session.add_or_renew_pool.return_value = result
+        cluster.sessions.add(session)
+    listener = Mock()
+    cluster.register_listener(listener)
+
+    getattr(cluster, 'on_' + event)(host)
+    assert not host.is_up
+    getattr(listener, 'on_' + event).assert_not_called()
+    for session in sessions:
+        session.add_or_renew_pool.assert_called_once_with(
+            host, is_host_addition=(event == 'add'))
+    if outcome == 'exception':
+        results[1].set_exception(RuntimeError('pool creation failed'))
+    elif outcome == 'cancelled':
+        results[1].cancel()
+    else:
+        results[1].set_result(outcome == 'success')
+
+    if outcome == 'success':
+        assert host.is_up
+        getattr(listener, 'on_' + event).assert_called_once_with(host)
+        for session in sessions:
+            session.update_created_pools.assert_called_once_with()
+    else:
+        assert not host.is_up
+        getattr(listener, 'on_' + event).assert_not_called()
+        for session in sessions:
+            session.update_created_pools.assert_not_called()
+    assert not host._currently_handling_node_up
 
 
 @pytest.fixture
@@ -269,7 +410,9 @@ def test_listener_refresh_during_concurrent_removal(topology, event):
             if event == 'up':
                 result = Future()
                 result.set_result(True)
-                cluster._on_up_future_completed(host, {result}, [], Lock(), result)
+                cluster._lifecycle.collect_futures(
+                    [result], lambda results: cluster._on_up_pools_completed(
+                        host, results))
             elif event == 'down':
                 Cluster.on_down_potentially_blocking.__wrapped__(
                     cluster, host, False, host._down_event_generation)
@@ -425,7 +568,9 @@ def test_successful_up_releases_pending_addition_reservation(topology, with_futu
     if with_future:
         completed = Future()
         completed.set_result(True)
-        cluster._on_up_future_completed(host, {completed}, [], Lock(), completed)
+        cluster._lifecycle.collect_futures(
+            [completed], lambda results: cluster._on_up_pools_completed(
+                host, results))
     else:
         cluster.on_up(host)
     assert host.is_up
@@ -644,7 +789,8 @@ def test_shutdown_from_executor_listener_does_not_join_itself(topology):
     result = Future()
     result.set_result(True)
     finished = cluster.executor.submit(
-        cluster._on_up_future_completed, host, {result}, [], Lock(), result)
+        cluster._lifecycle.collect_futures,
+        [result], lambda results: cluster._on_up_pools_completed(host, results))
     finished.result(timeout=5)
     assert cluster.is_shutdown
     assert shutdown_returned.is_set()
