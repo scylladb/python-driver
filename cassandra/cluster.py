@@ -4774,7 +4774,7 @@ class Session(object):
         if pool:
             log.debug("Removed connection pool for %r", host)
             try:
-                return self.submit(pool.shutdown)
+                shutdown_future = self.submit(pool.shutdown)
             except Exception:
                 # The pool is no longer indexed. Close it here if shutdown
                 # could not be submitted, so a retry does not lose it.
@@ -4783,6 +4783,11 @@ class Session(object):
                 except Exception:
                     log.exception("Error closing pool for %s after shutdown submission failed", host)
                 raise
+            if shutdown_future is None:
+                # Session shutdown no longer sees this detached pool and
+                # submit() declined its cleanup. Close it outside the lock.
+                pool.shutdown()
+            return shutdown_future
         else:
             return None
 

@@ -5540,6 +5540,39 @@ class SessionTest(unittest.TestCase):
         assert session._pools == {}
         session.cluster.executor.submit.assert_called_once_with(pool.shutdown)
 
+    def test_remove_pool_closes_pool_when_session_shuts_down_before_submit(self):
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        pool = Mock(host=host, is_shutdown=False)
+        session = new_session_with_pool_state({host: pool})
+        session._lock = Lock()
+        session.cluster = Mock()
+        session.is_shutdown = False
+        self.addCleanup(session.shutdown)
+
+        def close_pool():
+            assert session._lock.acquire(False)
+            try:
+                pool.is_shutdown = True
+            finally:
+                session._lock.release()
+
+        pool.shutdown.side_effect = close_pool
+        real_submit = session.submit
+
+        def shutdown_before_submit(fn, *args, **kwargs):
+            assert session._pools == {}
+            session.shutdown()
+            return real_submit(fn, *args, **kwargs)
+
+        session.submit = shutdown_before_submit
+
+        assert session.remove_pool(host) is None
+
+        assert session.is_shutdown
+        assert pool.is_shutdown
+        pool.shutdown.assert_called_once_with()
+        session.cluster.executor.submit.assert_not_called()
+
     def test_remove_pool_closes_pool_when_shutdown_submission_fails(self):
         host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
         pool = Mock(host=host)
