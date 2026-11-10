@@ -4,6 +4,7 @@ import importlib.util
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -23,7 +24,7 @@ spec.loader.exec_module(selection)
 
 
 class SelectionTests(unittest.TestCase):
-    def test_non_pr_ci_and_explicit_full_runs_never_select_paths(self):
+    def test_non_pr_ci_never_selects_paths(self):
         with patch.object(selection, "select_tests") as select:
             for event in (
                 "merge_group", "workflow_dispatch", "push", "workflow_call"
@@ -33,12 +34,6 @@ class SelectionTests(unittest.TestCase):
                         selection.select_ci_tests("base", event)["mode"],
                         "full",
                     )
-            self.assertEqual(
-                selection.select_ci_tests(
-                    "base", "pull_request", True,
-                )["mode"],
-                "full",
-            )
             select.assert_not_called()
 
     def test_ordinary_pr_uses_path_selection(self):
@@ -107,6 +102,7 @@ class SelectionTests(unittest.TestCase):
             "README.rst", "pyproject.toml", "uv.lock", "setup.py",
             "setup.cfg", "tox.ini", "MANIFEST.in", "new-file",
             "tests/unit/utils.py", "tests/integration/conftest.py",
+            "tests/unit/column_encryption/test_policies.py",
             "scripts/coverage.sh", "examples/client.py",
             ".github/workflows/select-tests.yml", "docs-extra/config.py",
         ):
@@ -198,7 +194,7 @@ class RunnerTests(unittest.TestCase):
             run.return_value.returncode = 7
             self.assertEqual(selection.run_tests(plan, "all"), 7)
             args = run.call_args.args[0]
-            self.assertEqual(args[-1], "tests/unit/test_scylla_source.py")
+            self.assertIn("tests/unit/test_scylla_source.py", args)
             self.assertNotIn("tests/unit", args)
             self.assertEqual(run.call_count, 1)
 
@@ -216,6 +212,46 @@ class RunnerTests(unittest.TestCase):
             selection.run_tests(plan, "unit")
             self.assertEqual(
                 run.call_args.kwargs["env"]["EVENT_LOOP_MANAGER"], "asyncio",
+            )
+            self.assertEqual(run.call_count, 1)
+
+    def test_strict_unit_run_retains_explicit_exclusions_and_failure_status(
+        self,
+    ):
+        plan = selection.plan_tests(["tests/unit/test_ci_selection.py"])
+        with (
+            patch.dict(os.environ, {"CASS_DRIVER_NO_SKIP": "1"}),
+            patch.object(selection.subprocess, "run") as run,
+        ):
+            run.return_value.returncode = 1
+            self.assertEqual(selection.run_tests(plan, "unit"), 1)
+            command = run.call_args.args[0]
+            self.assertIn("tests/unit/test_ci_selection.py", command)
+            self.assertIn("--ignore=tests/unit/column_encryption", command)
+            self.assertIn(
+                "--ignore=tests/unit/io/test_asyncioreactor.py", command,
+            )
+            self.assertEqual(command[-2:], [
+                "-k", "not test_deserialize_date_range_month",
+            ])
+            self.assertEqual(run.call_count, 1)
+
+    def test_local_unit_run_without_strict_skips_keeps_all_selected_tests(
+        self,
+    ):
+        plan = selection.plan_tests(["tests/unit/test_ci_selection.py"])
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(selection.subprocess, "run") as run,
+        ):
+            run.return_value.returncode = 0
+            self.assertEqual(selection.run_tests(plan, "unit"), 0)
+            self.assertEqual(run.call_args.args[0], [
+                "uv", "run", "--with", "lz4", "pytest", "-rf",
+                "tests/unit/test_ci_selection.py",
+            ])
+            self.assertNotIn(
+                "CASS_DRIVER_NO_SKIP", run.call_args.kwargs["env"],
             )
             self.assertEqual(run.call_count, 1)
 

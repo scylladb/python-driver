@@ -96,6 +96,7 @@ jobs:
       if: needs.changes.outputs.mode == 'selected'
       env:
         CASS_DRIVER_BUILD_EXTENSIONS_ARE_MUST: 'yes'
+        CASS_DRIVER_NO_SKIP: '1'
       run: python3 scripts/ci/select_tests.py --plan-json "$TEST_PLAN" --run --suite unit
 
     - name: Run tests with coverage

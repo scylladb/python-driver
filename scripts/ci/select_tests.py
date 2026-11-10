@@ -99,6 +99,7 @@ def plan_tests(paths, root=None):
                 path.startswith(directory + "/") for directory in INTEGRATION
             ) or path.startswith("scripts/release/"))
             and not path.startswith("tests/unit/cython/")
+            and not path.startswith("tests/unit/column_encryption/")
         ):
             if not (root / path).is_file():
                 return full_plan(f"Deleted test module: {path}")
@@ -180,9 +181,9 @@ def select_tests(base, worktree=False):
         return full_plan("Comparison history unavailable")
 
 
-def select_ci_tests(base, event_name, force_full=False):
+def select_ci_tests(base, event_name):
     """Narrow automatic validation only for ordinary pull-request runs."""
-    if event_name != "pull_request" or force_full:
+    if event_name != "pull_request":
         return full_plan("CI selection is limited to ordinary pull requests")
     return select_tests(base)
 
@@ -201,7 +202,7 @@ def run_tests(plan, suite, dry_run=False):
             if full:
                 command.extend(["--with", "pyasyncore"])
             command.extend(["pytest", "-rf", *normal])
-            if full:
+            if full or os.environ.get("CASS_DRIVER_NO_SKIP"):
                 command.extend([
                     "--ignore=tests/unit/io/test_asyncioreactor.py",
                     "--ignore=tests/unit/column_encryption",

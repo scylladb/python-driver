@@ -2,11 +2,6 @@ name: Select impacted tests
 
 on:
   workflow_call:
-    inputs:
-      force-full:
-        description: Run driver tests regardless of changed paths
-        type: boolean
-        default: false
     outputs:
       plan:
         description: Selected plan
@@ -49,12 +44,7 @@ jobs:
       - name: Select tests from the complete change
         id: select
         env:
-          FORCE_FULL: ${{ inputs.force-full }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           python3 tests/unit/test_ci_selection.py
-          if [[ "$FORCE_FULL" == true ]]; then
-            python3 scripts/ci/select_tests.py --full --github-output >> "$GITHUB_OUTPUT"
-          else
-            python3 scripts/ci/select_tests.py --base "$BASE_SHA" --github-output >> "$GITHUB_OUTPUT"
-          fi
+          python3 scripts/ci/select_tests.py --base "$BASE_SHA" --github-output >> "$GITHUB_OUTPUT"
