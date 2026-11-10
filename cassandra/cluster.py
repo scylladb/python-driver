@@ -4508,11 +4508,22 @@ class Session(object):
                                     distance)
 
             if pool_to_shutdown is not None:
+                cleanup_failure = Future()
+
+                def complete_shutdown_error(exc):
+                    intent.complete_exception(exc)
+                    cleanup_failure.set_exception(exc)
+                    return cleanup_failure
+
                 try:
-                    self.submit(pool_to_shutdown.shutdown)
+                    shutdown_future = self._shutdown_detached_pool(
+                        pool_to_shutdown,
+                        on_shutdown_error=complete_shutdown_error)
                 except Exception as exc:
                     intent.complete_exception(exc)
                     raise
+                if shutdown_future is cleanup_failure:
+                    return shutdown_future
             if terminal_result is not _NOT_SET:
                 intent.complete_result(terminal_result)
             if return_live_success:
@@ -4784,6 +4795,44 @@ class Session(object):
 
         retry()
 
+    def _shutdown_detached_pool(self, pool, on_shutdown_error=None):
+        """Close an unindexed pool even when asynchronous cleanup is rejected.
+
+        Call outside the session and host locks: synchronous shutdown may
+        wait for connection work that needs those locks.
+
+        If submission is declined, report a synchronous shutdown failure to
+        ``on_shutdown_error`` when supplied and return its result instead of
+        raising it. Submission exceptions always propagate, even when fallback
+        shutdown also fails.
+        """
+        try:
+            shutdown_future = self.submit(pool.shutdown)
+        except Exception:
+            # The pool is no longer indexed. Close it here if shutdown
+            # could not be submitted, so a retry does not lose it.
+            try:
+                pool.shutdown()
+            except Exception:
+                log.exception(
+                    "Error closing pool for %s after shutdown "
+                    "submission failed",
+                    pool.host)
+            raise
+        if shutdown_future is None:
+            # Session shutdown no longer sees this detached pool and
+            # submit() declined its cleanup.
+            try:
+                pool.shutdown()
+            except Exception as exc:
+                if on_shutdown_error is None:
+                    raise
+                log.exception(
+                    "Error closing detached pool for %s after shutdown "
+                    "submission was declined", pool.host)
+                return on_shutdown_error(exc)
+        return shutdown_future
+
     def remove_pool(self, host):
         intent_to_fail = None
         with self._lock:
@@ -4821,21 +4870,7 @@ class Session(object):
             intent_to_fail.complete_result(False)
         if pool:
             log.debug("Removed connection pool for %r", host)
-            try:
-                shutdown_future = self.submit(pool.shutdown)
-            except Exception:
-                # The pool is no longer indexed. Close it here if shutdown
-                # could not be submitted, so a retry does not lose it.
-                try:
-                    pool.shutdown()
-                except Exception:
-                    log.exception("Error closing pool for %s after shutdown submission failed", host)
-                raise
-            if shutdown_future is None:
-                # Session shutdown no longer sees this detached pool and
-                # submit() declined its cleanup. Close it outside the lock.
-                pool.shutdown()
-            return shutdown_future
+            return self._shutdown_detached_pool(pool)
         else:
             return None
 
@@ -4961,10 +4996,17 @@ class Session(object):
 
             if pool_to_shutdown is not None:
                 try:
-                    work_future = self.submit(pool_to_shutdown.shutdown)
+                    work_future = self._shutdown_detached_pool(
+                        pool_to_shutdown)
                 except Exception as exc:
                     intent.complete_exception(exc)
-                    raise
+                    log.exception(
+                        "Error scheduling or running ignored-pool shutdown "
+                        "for %s", host)
+                    cleanup_failure = Future()
+                    cleanup_failure.set_exception(exc)
+                    futures.add(cleanup_failure)
+                    continue
                 if work_future is None:
                     intent.complete_result(True)
                     future = None

@@ -3945,6 +3945,288 @@ class SessionPoolRaceTest(unittest.TestCase):
         old_pool.shutdown.assert_called_once_with()
         candidate.shutdown.assert_called_once_with()
 
+    def test_ignored_pool_closes_when_session_shuts_down_before_submit(self):
+        host = self._host()
+        pool = self._pool(host)
+        session = self._session({host: pool})
+        session._lock = Lock()
+        session._profile_manager.distance.return_value = HostDistance.IGNORED
+        real_submit = session.submit
+        completions = []
+
+        def shutdown_before_submit(fn, *args, **kwargs):
+            assert session._pools == {}
+            completions.append(session._pool_intents[host].completion)
+            session.shutdown()
+            return real_submit(fn, *args, **kwargs)
+
+        def close_pool():
+            assert session._lock.acquire(False)
+            try:
+                pool.is_shutdown = True
+            finally:
+                session._lock.release()
+
+        session.submit = shutdown_before_submit
+        pool.shutdown.side_effect = close_pool
+
+        assert session.update_created_pools(hosts=(host,)) == set()
+
+        assert session.is_shutdown
+        assert pool.is_shutdown
+        assert host not in session._pool_generations
+        pool.shutdown.assert_called_once_with()
+        assert completions[0].result(timeout=5) is True
+
+    def test_ignored_pool_closes_when_shutdown_submission_fails(self):
+        host = self._host()
+        pool = self._pool(host)
+        session = self._session({host: pool})
+        session._profile_manager.distance.return_value = HostDistance.IGNORED
+        submission_error = RuntimeError('executor stopped')
+        session.submit = Mock(side_effect=submission_error)
+
+        with self.assertLogs('cassandra.cluster', level='ERROR') as logs:
+            futures = session.update_created_pools(hosts=(host,))
+
+        assert ('Error scheduling or running ignored-pool shutdown' in
+                logs.output[0])
+        assert session._pools == {}
+        assert host not in session._pool_generations
+        assert pool.is_shutdown
+        pool.shutdown.assert_called_once_with()
+        completion = session._pool_intents[host].completion
+        assert len(futures) == 1
+        assert next(iter(futures)).exception(timeout=5) is submission_error
+        assert completion.exception(timeout=5) is submission_error
+
+    def test_ignored_pool_reports_synchronous_shutdown_failure(self):
+        host = self._host()
+        pool = self._pool(host)
+        session = self._session({host: pool})
+        session._profile_manager.distance.return_value = HostDistance.IGNORED
+        session.submit = Mock(return_value=None)
+        shutdown_error = RuntimeError('pool shutdown failed')
+        pool.shutdown.side_effect = shutdown_error
+
+        with self.assertLogs('cassandra.cluster', level='ERROR'):
+            futures = session.update_created_pools(hosts=(host,))
+
+        pool.shutdown.assert_called_once_with()
+        completion = session._pool_intents[host].completion
+        assert len(futures) == 1
+        assert next(iter(futures)).exception(timeout=5) is shutdown_error
+        assert completion.exception(timeout=5) is shutdown_error
+
+    def test_direct_ignored_pool_closes_after_session_shutdown(self):
+        host = self._host()
+        pool = self._pool(host)
+        session = self._session({host: pool})
+        session._lock = Lock()
+        session._profile_manager.distance.return_value = HostDistance.IGNORED
+        real_submit = session.submit
+        completions = []
+
+        def shutdown_before_submit(fn, *args, **kwargs):
+            assert session._pools == {}
+            completions.append(session._pool_intents[host].completion)
+            session.shutdown()
+            return real_submit(fn, *args, **kwargs)
+
+        def close_pool():
+            assert session._lock.acquire(False)
+            try:
+                pool.is_shutdown = True
+            finally:
+                session._lock.release()
+
+        session.submit = shutdown_before_submit
+        pool.shutdown.side_effect = close_pool
+
+        assert session.add_or_renew_pool(host, False) is None
+
+        assert session.is_shutdown
+        assert session._pools == {}
+        assert host not in session._pool_generations
+        assert pool.is_shutdown
+        pool.shutdown.assert_called_once_with()
+        assert completions[0].result(timeout=5) is True
+
+    def test_direct_ignored_pool_closes_after_submission_failure(self):
+        for close_fails in (False, True):
+            with self.subTest(close_fails=close_fails):
+                host = self._host()
+                pool = self._pool(host)
+                session = self._session({host: pool})
+                session._profile_manager.distance.return_value = (
+                    HostDistance.IGNORED)
+                submission_error = RuntimeError('executor stopped')
+                session.submit = Mock(side_effect=submission_error)
+                if close_fails:
+                    pool.shutdown.side_effect = RuntimeError('close failed')
+
+                with self.assertRaises(RuntimeError) as raised:
+                    if close_fails:
+                        with self.assertLogs(
+                                'cassandra.cluster', level='ERROR'):
+                            session.add_or_renew_pool(host, False)
+                    else:
+                        session.add_or_renew_pool(host, False)
+
+                assert raised.exception is submission_error
+                assert session._pools == {}
+                assert host not in session._pool_generations
+                pool.shutdown.assert_called_once_with()
+                completion = session._pool_intents[host].completion
+                assert completion.exception(timeout=5) is submission_error
+
+    def test_direct_ignored_pool_reports_declined_submission_close_failure(
+            self):
+        host = self._host()
+        pool = self._pool(host)
+        session = self._session({host: pool})
+        session._profile_manager.distance.return_value = HostDistance.IGNORED
+        session.submit = Mock(return_value=None)
+        shutdown_error = RuntimeError('pool shutdown failed')
+        pool.shutdown.side_effect = shutdown_error
+
+        with self.assertLogs('cassandra.cluster', level='ERROR'):
+            future = session.add_or_renew_pool(host, False)
+
+        pool.shutdown.assert_called_once_with()
+        assert session._pools == {}
+        assert host not in session._pool_generations
+        completion = session._pool_intents[host].completion
+        assert future.exception(timeout=5) is shutdown_error
+        assert completion.exception(timeout=5) is shutdown_error
+
+    def test_superseded_ignored_close_failure_does_not_stop_later_session_add(
+            self):
+        host = self._host()
+        pool = self._pool(host)
+        session = self._session({host: pool})
+        session._profile_manager.distance.return_value = HostDistance.IGNORED
+        real_submit = session.submit
+        completions = []
+        shutdown_error = RuntimeError('pool shutdown failed')
+        pool.shutdown.side_effect = shutdown_error
+
+        def shutdown_before_submit(fn, *args, **kwargs):
+            completions.append(session._pool_intents[host].completion)
+            # Reconciliation can complete the shared intent after detachment.
+            assert session.update_created_pools(hosts=(host,)) == set()
+            assert completions[0].result(timeout=5) is True
+            session.shutdown()
+            return real_submit(fn, *args, **kwargs)
+
+        session.submit = shutdown_before_submit
+        live_session = Mock()
+        live_future = Future()
+        live_future.set_result(True)
+        live_session.add_or_renew_pool.return_value = live_future
+        cluster = Cluster(contact_points=[])
+        self.addCleanup(cluster.shutdown)
+        cluster._lifecycle = Mock()
+        cluster.sessions = (session, live_session)
+        cluster._finalize_add = Mock()
+
+        def collect_futures(futures, callback):
+            callback([future.exception(timeout=5) or future.result(timeout=5)
+                      for future in futures])
+
+        cluster._lifecycle.collect_futures.side_effect = collect_futures
+
+        with self.assertLogs('cassandra.cluster', level='ERROR') as logs:
+            cluster._on_add_prepared(
+                host, HostDistance.LOCAL, False, True, None,
+                object(), object())
+
+        assert any('submission was declined' in entry for entry in logs.output)
+        assert session.is_shutdown
+        assert session._pools == {}
+        pool.shutdown.assert_called_once_with()
+        assert completions[0].result(timeout=5) is True
+        live_session.add_or_renew_pool.assert_called_once_with(
+            host, is_host_addition=True)
+        cluster._lifecycle.collect_futures.assert_called_once()
+        futures = cluster._lifecycle.collect_futures.call_args.args[0]
+        assert len(futures) == 2
+        assert live_future in futures
+        failed_future, = futures - {live_future}
+        assert failed_future.exception(timeout=5) is shutdown_error
+        cluster._finalize_add.assert_not_called()
+
+    def test_superseded_ignored_cleanup_reports_failure(self):
+        for submission_fails in (False, True):
+            with self.subTest(submission_fails=submission_fails):
+                host = self._host()
+                pool = self._pool(host)
+                session = self._session({host: pool})
+                session._profile_manager.distance.return_value = (
+                    HostDistance.IGNORED)
+                real_submit = session.submit
+                completions = []
+                shutdown_error = RuntimeError('pool shutdown failed')
+                submission_error = RuntimeError('executor stopped')
+                pool.shutdown.side_effect = shutdown_error
+
+                def supersede_before_submit(fn, *args, **kwargs):
+                    completions.append(session._pool_intents[host].completion)
+                    assert session.update_created_pools(hosts=(host,)) == set()
+                    assert completions[0].result(timeout=5) is True
+                    session.shutdown()
+                    if submission_fails:
+                        raise submission_error
+                    return real_submit(fn, *args, **kwargs)
+
+                session.submit = supersede_before_submit
+                with self.assertLogs('cassandra.cluster', level='ERROR'):
+                    futures = session.update_created_pools(hosts=(host,))
+
+                assert len(futures) == 1
+                failure, = futures
+                expected_error = (submission_error if submission_fails
+                                  else shutdown_error)
+                assert failure.exception(timeout=5) is expected_error
+                assert completions[0].result(timeout=5) is True
+                assert session._pools == {}
+                pool.shutdown.assert_called_once_with()
+
+    def test_ignored_close_failure_does_not_stop_later_session_reconciliation(
+            self):
+        host = self._host()
+        pool = self._pool(host)
+        session = self._session({host: pool})
+        session._profile_manager.distance.return_value = HostDistance.IGNORED
+        real_submit = session.submit
+        completions = []
+        shutdown_error = RuntimeError('pool shutdown failed')
+        pool.shutdown.side_effect = shutdown_error
+
+        def shutdown_before_submit(fn, *args, **kwargs):
+            completions.append(session._pool_intents[host].completion)
+            session.shutdown()
+            return real_submit(fn, *args, **kwargs)
+
+        session.submit = shutdown_before_submit
+        live_pool = self._pool(host, distance=HostDistance.REMOTE)
+        live_session = self._session({host: live_pool})
+        cluster = Cluster(contact_points=[])
+        self.addCleanup(cluster.shutdown)
+        cluster.metadata = self.metadata
+        # Keep the failing session first to exercise the cluster caller's loop.
+        cluster.sessions = (session, live_session)
+
+        with self.assertLogs('cassandra.cluster', level='ERROR'):
+            cluster.add_execution_profile('new', ExecutionProfile())
+
+        assert session.is_shutdown
+        assert session._pools == {}
+        pool.shutdown.assert_called_once_with()
+        assert completions[0].exception(timeout=5) is shutdown_error
+        assert live_pool.host_distance == HostDistance.LOCAL
+        live_pool.shutdown.assert_not_called()
+
     def test_superseded_ignored_shutdown_waits_for_newer_creation(self):
         host = self._host()
         old_pool = self._pool(host)
