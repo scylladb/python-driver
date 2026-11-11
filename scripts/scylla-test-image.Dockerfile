@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.28
+# syntax=docker/dockerfile:1.29
 # The caller pins this to the digest resolved from master tools/toolchain/image.
 ARG SCYLLA_TOOLCHAIN_IMAGE
 FROM ${SCYLLA_TOOLCHAIN_IMAGE} AS toolchain
