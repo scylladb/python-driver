@@ -108,7 +108,7 @@ def plan_tests(paths, root=None):
                     imported = imported_test_modules(root)
                 except (
                     SyntaxError, ValueError, ImportError, OSError,
-                    RecursionError,
+                    RecursionError, MemoryError,
                 ):
                     return full_plan("Cannot inspect shared test imports")
             module = ".".join(file.with_suffix("").parts)

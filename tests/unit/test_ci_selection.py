@@ -174,6 +174,22 @@ class SelectionTests(unittest.TestCase):
             "Cannot inspect shared test imports",
         ])
 
+    def test_ast_memory_error_falls_back_to_full_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "tests/unit").mkdir(parents=True)
+            (root / "tests/unit/test_example.py").touch()
+            with patch.object(
+                selection.ast, "parse", side_effect=MemoryError("AST"),
+            ):
+                plan = selection.plan_tests([
+                    "tests/unit/test_example.py",
+                ], root)
+        self.assertEqual(plan["mode"], "full")
+        self.assertEqual(plan["reasons"], [
+            "Cannot inspect shared test imports",
+        ])
+
 
 class RunnerTests(unittest.TestCase):
     def setUp(self):
