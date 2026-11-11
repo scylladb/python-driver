@@ -57,8 +57,8 @@ jobs:
       matrix:
         # Re-enable free-threaded Python (3.14t and 3.15t) once the thread-safety
         # issues in https://github.com/scylladb/python-driver/issues/718 are fixed.
-        # A PR runs the complete suites once. Pre-release and manual runs
-        # expand the interpreter/reactor matrix.
+        # Ordinary PRs use one interpreter/reactor pair. Pre-release and manual
+        # runs expand the matrix.
         python-version: ${{ fromJSON((github.event_name != 'pull_request' || inputs.full-matrix) && '["3.11", "3.12", "3.13", "3.14", "3.15"]' || '["3.13"]') }}
         event_loop_manager: ${{ fromJSON((github.event_name != 'pull_request' || inputs.full-matrix) && '["libev", "asyncio", "asyncore"]' || '["libev"]') }}
         exclude:
