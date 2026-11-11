@@ -31,6 +31,15 @@ Bug Fixes
 * Tablet updates no longer mutate a table's tablet list in place, so a
   concurrent lookup cannot fail with ``IndexError``, miss its tablet, or route
   to the wrong one (#1086).
+* A request whose client-timeout timer callback runs before the request is
+  admitted for sending (bound to a connection), including over the
+  control-connection fallback, now fails with ``OperationTimedOut`` instead of
+  being sent anyway. Without the GIL, the timer of a very short timeout could
+  fire first, and a fast response could then complete the request after its
+  deadline. Two cases are unchanged: a deadline that passes while the callback
+  is still delayed does not stop the send, and a callback that runs after
+  admission but before the bytes are written times the request out while the
+  request may still be sent (#603).
 
 3.29.13
 ========

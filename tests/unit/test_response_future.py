@@ -17,7 +17,7 @@ import unittest
 import uuid
 
 from collections import deque
-from threading import Barrier, Event, RLock, Thread
+from threading import Barrier, Event, RLock, Thread, current_thread
 from unittest.mock import Mock, MagicMock, ANY, patch
 
 from cassandra import ConsistencyLevel, InvalidRequest, Unavailable, SchemaTargetType, SchemaChangeType, OperationTimedOut
@@ -356,6 +356,282 @@ class ResponseFutureTests(unittest.TestCase):
         pool.return_connection.assert_called_once_with(
             connection, stream_was_orphaned=True)
         assert connection.orphaned_request_ids == {1}
+
+    def make_timeout_before_send_future(self):
+        host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
+        session = self.make_owned_pool_session(host)
+        session.cluster.metadata.get_host_by_host_id.return_value = host
+        pool, connection = self.make_owned_pool(host)
+        session._pools[host] = pool
+        rf = self.make_response_future(session)
+        return rf, pool, connection
+
+    @staticmethod
+    def assert_timed_out(rf):
+        # Bounded wait: the fixture mocks timers and transport, so if a
+        # regression leaves the future pending, result() would block forever.
+        assert rf._event.wait(1), "future was not completed"
+        with pytest.raises(OperationTimedOut):
+            rf.result()
+
+    def test_timeout_before_send_stops_the_send(self):
+        # Without the GIL the timer of a tiny timeout can fire before
+        # _query() sets _connection. The request must then time out instead
+        # of being sent and succeeding after its deadline.
+        rf, pool, connection = self.make_timeout_before_send_future()
+        create_timer = rf.session.cluster.connection_class.create_timer
+        create_timer.reset_mock()
+
+        rf._on_timeout()
+        # PYTHON-853: with no connection yet, the timeout records the flag
+        # and reschedules itself once instead of failing at once.
+        create_timer.assert_called_once()
+        assert not rf._event.is_set()
+
+        assert rf.send_request() is True
+        connection.send_msg.assert_not_called()
+        pool.borrow_connection.assert_called_once()
+        pool.return_connection.assert_called_once_with(connection)
+        assert connection.in_flight == 0
+        assert list(connection.request_ids) == [1]
+        assert rf._connection is None
+        self.assert_timed_out(rf)
+
+    def test_rescheduled_timeout_without_connection_times_out(self):
+        rf, _pool, connection = self.make_timeout_before_send_future()
+        create_timer = rf.session.cluster.connection_class.create_timer
+        create_timer.reset_mock()
+
+        rf._on_timeout()
+        rf._on_timeout(_attempts=1)
+        # No further reschedule: the request times out at once.
+        create_timer.assert_called_once()
+        self.assert_timed_out(rf)
+        # A send that only now gets to run must not go out.
+        assert rf._query(rf.session.cluster.metadata.get_host_by_host_id()) is None
+        connection.send_msg.assert_not_called()
+
+    def test_rescheduled_timeout_orphans_request_sent_meanwhile(self):
+        # Synthetic guard for the rescheduled call: when it runs with the
+        # flag set and finds a connection, it orphans the request. With
+        # _send_admission_lock a pooled send cannot set _connection after the
+        # flag, so the state is built by hand: send first, then set the flag.
+        rf, pool, connection = self.make_timeout_before_send_future()
+        host = rf.session.cluster.metadata.get_host_by_host_id()
+        assert rf._query(host) == 1
+        rf._timeout_before_send = True
+        rf._on_timeout(_attempts=1)
+        assert connection.orphaned_request_ids == {1}
+        pool.return_connection.assert_called_once_with(
+            connection, stream_was_orphaned=True)
+        self.assert_timed_out(rf)
+
+    def test_timeout_waits_for_send_admission(self):
+        # The timer reads "no connection yet" and sets the flag under the
+        # same lock _query() holds while it checks the flag and sets
+        # _connection. Here the timer enters that lock while _query() is
+        # inside admission. Its _connection read can only happen after
+        # admission ends, so it sees the connection and orphans the request
+        # instead of setting the flag. If the timer side skipped the lock,
+        # it would never reach AdmissionLock and the wait below would fail.
+        rf, pool, connection = self.make_timeout_before_send_future()
+        host = rf.session.cluster.metadata.get_host_by_host_id()
+        timer_entering = Event()
+        timeout_done = Event()
+        timeout_threads = []
+        timer_waited = []
+        real_lock = rf._send_admission_lock
+
+        def timeout():
+            rf._on_timeout()
+            timeout_done.set()
+
+        class AdmissionLock(object):
+            def __enter__(self):
+                if timeout_threads and current_thread() is timeout_threads[0]:
+                    timer_entering.set()
+                    real_lock.acquire()
+                    return self
+                real_lock.acquire()
+                if not timeout_threads:
+                    thread = Thread(target=timeout)
+                    timeout_threads.append(thread)
+                    thread.start()
+                    # Wait until the timer reaches the admission lock while
+                    # this admission holds it. Asserted below: an assert here
+                    # would be swallowed by _query()'s error handling.
+                    timer_waited.append(timer_entering.wait(1))
+                return self
+
+            def __exit__(self, *exc):
+                real_lock.release()
+
+        rf._send_admission_lock = AdmissionLock()
+        request_id = rf._query(host)
+        assert timer_waited == [True], "timer did not take the admission lock"
+        assert request_id == 1
+        assert timeout_done.wait(1)
+        timeout_threads[0].join(1)
+        assert rf._timeout_before_send is False
+        connection.send_msg.assert_called_once()
+        assert connection.orphaned_request_ids == {1}
+        pool.return_connection.assert_called_once_with(
+            connection, stream_was_orphaned=True)
+        self.assert_timed_out(rf)
+
+    def test_timeout_before_send_with_exhausted_plan(self):
+        # An empty (or exhausted) query plan must still report the timeout,
+        # not NoHostAvailable, and must not fall back to the control
+        # connection after the deadline.
+        rf, pool, _connection = self.make_timeout_before_send_future()
+        rf.query_plan = iter([])
+        rf._on_timeout()
+        with patch.object(rf, '_fallback_to_control_connection') as fallback:
+            assert rf.send_request() is True
+        fallback.assert_not_called()
+        pool.borrow_connection.assert_not_called()
+        self.assert_timed_out(rf)
+
+    def make_timeout_before_fallback_future(self, keyspace=None):
+        session = self._make_fallback_session(keyspace=keyspace)
+        connection = self.make_control_connection()
+        control_connection = session.cluster.control_connection
+        control_connection._connection = connection
+        session.cluster.get_control_connection_host.return_value = \
+            Mock(endpoint=connection.endpoint)
+        rf = self.make_response_future(session)
+        return rf, control_connection, connection
+
+    def assert_fallback_not_sent(self, rf, control_connection, connection):
+        connection.send_msg.assert_not_called()
+        connection.defunct.assert_not_called()
+        # The borrowed stream went back and the session was not bound.
+        assert connection.in_flight == 0
+        assert list(connection.request_ids) == [7]
+        assert control_connection._application_requests_in_flight == 0
+        assert not control_connection._application_sessions
+        assert not control_connection._application_internal_keyspace_changes
+        assert rf._connection is None
+        self.assert_timed_out(rf)
+
+    def test_timeout_before_fallback_starts(self):
+        # The timer fires after send_request()'s post-loop flag check but
+        # before the control-connection fallback is chosen. The fallback
+        # must not send, and the request must time out, not raise
+        # NoHostAvailable.
+        rf, control_connection, connection = \
+            self.make_timeout_before_fallback_future()
+        fallback = rf._fallback_to_control_connection
+
+        def timer_fires_then_fallback():
+            rf._on_timeout()
+            assert rf._timeout_before_send
+            return fallback()
+
+        with patch.object(rf, '_fallback_to_control_connection',
+                          side_effect=timer_fires_then_fallback):
+            assert rf.send_request() is True
+        self.assert_fallback_not_sent(rf, control_connection, connection)
+
+    def test_timeout_before_fallback_without_control_host(self):
+        # Without control-host metadata the fallback records the bare
+        # endpoint as the current host. A refused send must still time out
+        # with that endpoint as the error key.
+        rf, control_connection, connection = \
+            self.make_timeout_before_fallback_future()
+        rf.session.cluster.get_control_connection_host.return_value = None
+        borrow = rf._borrow_control_connection
+
+        def borrow_then_timer_fires(conn):
+            request_id = borrow(conn)
+            rf._on_timeout()
+            return request_id
+
+        with patch.object(rf, '_borrow_control_connection',
+                          side_effect=borrow_then_timer_fires):
+            assert rf.send_request() is True
+        self.assert_fallback_not_sent(rf, control_connection, connection)
+        with pytest.raises(OperationTimedOut) as exc_info:
+            rf.result()
+        assert list(exc_info.value.errors) == ['control-host']
+
+    def test_timeout_during_fallback_before_admission(self):
+        # The timer fires while the fallback holds a borrowed stream and is
+        # about to send the driver's own USE. Admission refuses the send,
+        # the stream is returned and the connection is kept.
+        rf, control_connection, connection = \
+            self.make_timeout_before_fallback_future(keyspace='ks1')
+        borrow = rf._borrow_control_connection
+
+        def borrow_then_timer_fires(conn):
+            request_id = borrow(conn)
+            rf._on_timeout()
+            return request_id
+
+        with patch.object(rf, '_borrow_control_connection',
+                          side_effect=borrow_then_timer_fires):
+            assert rf.send_request() is True
+        self.assert_fallback_not_sent(rf, control_connection, connection)
+
+    def test_timeout_during_fallback_use_before_admission(self):
+        # The user's own USE goes through the keyspace-change branch of the
+        # fallback. A timer that fires after the stream is borrowed must stop
+        # the send, end the keyspace change and keep the connection.
+        session = self._make_fallback_session()
+        connection = self.make_control_connection()
+        control_connection = session.cluster.control_connection
+        control_connection._connection = connection
+        session.cluster.get_control_connection_host.return_value = \
+            Mock(endpoint=connection.endpoint)
+        query = SimpleStatement("USE ks2")
+        rf = ResponseFuture(
+            session,
+            QueryMessage(query=query.query_string,
+                         consistency_level=ConsistencyLevel.ONE),
+            query, 1)
+        borrow = rf._borrow_control_connection
+
+        def borrow_then_timer_fires(conn):
+            request_id = borrow(conn)
+            rf._on_timeout()
+            return request_id
+
+        with patch.object(rf, '_borrow_control_connection',
+                          side_effect=borrow_then_timer_fires):
+            assert rf.send_request() is True
+        assert control_connection._application_keyspace_change is None
+        assert session.keyspace is None
+        self.assert_fallback_not_sent(rf, control_connection, connection)
+
+    def test_timeout_while_declining_fallback(self):
+        # Fallback disabled: the timer fires after the post-loop flag check,
+        # while send_request() decides not to fall back. The request must
+        # still time out instead of failing with NoHostAvailable.
+        rf, pool, _connection = self.make_timeout_before_send_future()
+        rf.query_plan = iter([])
+        assert rf.session.cluster.allow_control_connection_query_fallback is \
+            ControlConnectionQueryFallback.Disabled
+        fallback = rf._fallback_to_control_connection
+
+        def timer_fires_then_decline():
+            rf._on_timeout()
+            assert rf._timeout_before_send
+            return fallback()
+
+        with patch.object(rf, '_fallback_to_control_connection',
+                          side_effect=timer_fires_then_decline) as patched:
+            assert rf.send_request() is True
+        patched.assert_called_once()
+        pool.borrow_connection.assert_not_called()
+        self.assert_timed_out(rf)
+
+    def test_next_page_clears_timeout_before_send(self):
+        rf, _pool, connection = self.make_timeout_before_send_future()
+        rf._timeout_before_send = True
+        rf._paging_state = b'next'
+        rf.start_fetching_next_page()
+        assert rf._timeout_before_send is False
+        connection.send_msg.assert_called_once()
 
     def make_basic_session(self):
         s = Mock(spec=Session)
