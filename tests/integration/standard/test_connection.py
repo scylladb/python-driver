@@ -385,6 +385,10 @@ class ConnectionTests(object):
             t.join()
 
     def test_connect_timeout(self):
+        # Background cluster reconnects must not use the held handshake.
+        class TimeoutConnection(self.klass):
+            pass
+
         # Open a real socket, then hold the CQL handshake so even a fast
         # connection must exercise the timeout path.
         send_options = Mock()
@@ -396,9 +400,10 @@ class ConnectionTests(object):
 
         timeout = 0.1
         # Bind a Python function for Cython-compiled driver builds.
-        with patch.object(self.klass, '_send_options_message', hold_handshake):
+        with patch.object(TimeoutConnection, '_send_options_message',
+                          hold_handshake):
             with self.assertRaises(OperationTimedOut) as raised:
-                self.klass.factory(
+                TimeoutConnection.factory(
                     endpoint=CASSANDRA_IP, timeout=timeout,
                     protocol_version=TestCluster.DEFAULT_PROTOCOL_VERSION,
                     allow_beta_protocol_version=TestCluster.DEFAULT_ALLOW_BETA)
