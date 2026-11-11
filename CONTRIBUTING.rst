@@ -160,8 +160,9 @@ PR labels. Passing runs upload ``coverage.xml`` to
 `Codecov <https://codecov.io/gh/scylladb/python-driver>`_. Codecov's coverage
 threshold statuses remain informational.
 
-Ordinary code PRs run the full driver integration suites once against
+Ordinary code PRs with full plans run the driver integration suites once against
 ``release:2026.1.13`` using Python 3.13, libev, and the compiled driver.
+Narrow plans run only the selected integration modules, or no integration tests.
 Merge-queue coverage adds the pure-Python driver paths on the combined commit,
 alongside Linux x86_64 and ARM64 wheel/unit tests. The full integration
 interpreter/reactor matrix is reserved for pre-release and manual runs.
