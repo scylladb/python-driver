@@ -1051,15 +1051,18 @@ class TypeTestsVector(BasicSharedKeyspaceUnitTestCase):
         self._round_trip_test("varint", partial(random.randint, 0, (2 ** 63) - 1), assertEqual)
 
     def test_round_trip_floating_point(self):
-        _almost_equal_test_fn = partial(pytest.approx, abs=1e-5)
+        def _assert_almost_equal(observed, expected):
+            # pytest.approx() returns a matcher; compare it explicitly so a
+            # mismatched value actually fails the test (see #1046).
+            assert observed == pytest.approx(expected, abs=1e-5, rel=None)
         def _random_decimal():
             return Decimal(random.uniform(0.0, 100.0))
 
         # Max value here isn't really connected to max value for floating point nums in IEEE 754... it's used here
         # mainly as a convenient benchmark
-        self._round_trip_test("float", partial(random.uniform, 0.0, 100.0), _almost_equal_test_fn)
-        self._round_trip_test("double", partial(random.uniform, 0.0, 100.0), _almost_equal_test_fn)
-        self._round_trip_test("decimal", _random_decimal, _almost_equal_test_fn)
+        self._round_trip_test("float", partial(random.uniform, 0.0, 100.0), _assert_almost_equal)
+        self._round_trip_test("double", partial(random.uniform, 0.0, 100.0), _assert_almost_equal)
+        self._round_trip_test("decimal", _random_decimal, _assert_almost_equal)
 
     def test_round_trip_text(self):
         def _random_string():
