@@ -20,7 +20,7 @@ import logging
 import pytest
 from cassandra import ProtocolVersion
 from cassandra import ConsistencyLevel, Unavailable, InvalidRequest, WriteTimeout, WriteFailure, cluster
-from cassandra.protocol import SyntaxException
+from cassandra.protocol import ErrorMessage, SyntaxException
 from cassandra.query import (PreparedStatement, BoundStatement, SimpleStatement,
                              BatchStatement, BatchType, dict_factory, TraceUnavailable)
 from cassandra.cluster import NoHostAvailable, ExecutionProfile, EXEC_PROFILE_DEFAULT, Cluster
@@ -1019,6 +1019,10 @@ class LightweightTransactionTests(unittest.TestCase):
                         # Client-side timeout only -- doesn't imply the server
                         # actually returned a WriteTimeout/WriteFailure.
                         received_client_timeout = True
+                    continue
+
+                if isinstance(result, ErrorMessage) and result.code == 0x1700:
+                    # Cassandra CAS_WRITE_UNKNOWN is a valid contention result.
                     continue
 
                 pytest.fail("Unexpected exception %s: %s" % (exception_type, result))
