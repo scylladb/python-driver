@@ -23,7 +23,6 @@ from enum import Enum
 from binascii import hexlify
 from collections import defaultdict
 from collections.abc import Mapping
-from contextlib import nullcontext
 from concurrent.futures import (Future, InvalidStateError, ThreadPoolExecutor,
                                 FIRST_COMPLETED, wait as wait_futures)
 from copy import copy
@@ -7485,22 +7484,24 @@ class ResponseFuture(object):
         # query_plan is an iterator, so this will resume where we last left
         # off if send_request() is called multiple times
         for host in self.query_plan:
+            if not isinstance(host, Host):
+                self._set_final_exception(TypeError(
+                    "Query plan entries must be Host instances"))
+                return True
             # Public targets and extension query plans may retain a Host from
             # an older Cluster or endpoint generation. Resolve only new
             # selections; internal attempt callbacks keep their original owner.
             selected_host = host
-            if isinstance(host, Host):
-                host = self.session.cluster.metadata.get_host_by_host_id(
-                    host.host_id)
+            host = self.session.cluster.metadata.get_host_by_host_id(
+                host.host_id)
             if host is None:
-                host_id = getattr(selected_host, 'host_id', None)
+                host_id = selected_host.host_id
                 self._errors[selected_host] = ConnectionException(
                     "Host ID %s is not known to this cluster" % host_id)
                 log.debug("Skipping unknown host ID %s from query plan",
                           host_id)
                 req_id = None
-            elif isinstance(host, Host) and (host._is_removed or
-                                             host.is_up is False):
+            elif host._is_removed or host.is_up is False:
                 self._errors[host] = ConnectionException(
                     "Host has been marked down or removed")
                 log.debug("Skipping unavailable current host ID %s "
@@ -8028,11 +8029,9 @@ class ResponseFuture(object):
             # This prevents terminal retirement until send begins. Metadata
             # publication uses its own lock and may follow admission.
             # An admitted attempt keeps its original pool and stream owners.
-            with host.lock if isinstance(host, Host) else nullcontext():
-                if (isinstance(host, Host) and
-                        (host.is_up is False or
-                         not self.session.cluster._lifecycle.is_current(
-                             host))):
+            with host.lock:
+                if (host.is_up is False or
+                        not self.session.cluster._lifecycle.is_current(host)):
                     self._errors[host] = ConnectionException(
                         "Host is down or no longer current in this cluster")
                     log.debug(

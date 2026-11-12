@@ -1259,6 +1259,7 @@ class ConcurrencyTest((unittest.TestCase)):
         from cassandra import OperationTimedOut
         from tests.unit.test_response_future import ResponseFutureTests
         helper = ResponseFutureTests()
+        helper.setUp()
         futures = []
 
         def execute_async(*args, **kwargs):

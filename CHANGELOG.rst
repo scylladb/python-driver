@@ -1,6 +1,16 @@
 Unreleased
 ==========
 
+Compatibility Changes
+---------------------
+* Custom load-balancing query plans must yield ``Host`` instances. Invalid
+  entries now complete the request with ``TypeError``, including during
+  retries and speculative execution, instead of using test-only request
+  paths that skipped host ownership and lifecycle checks. The same request
+  failure applies to truthy values other than ``Host`` instances passed as
+  ``host=`` to ``Session.execute()`` or ``Session.execute_async()``. Asynchronous
+  calls deliver the error through their ``ResponseFuture`` (#1164).
+
 Removed
 -------
 * DataStax Enterprise (DSE) Graph support has been removed. This drops the
