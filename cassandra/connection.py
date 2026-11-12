@@ -356,7 +356,7 @@ class SniEndPoint(EndPoint):
 
     def __lt__(self, other):
         return ((self.address, self.port, self._server_name) <
-                (other.address, other.port, self._server_name))
+                (other.address, other.port, other._server_name))
 
     def __str__(self):
         return str("%s:%d:%s" % (self.address, self.port, self._server_name))

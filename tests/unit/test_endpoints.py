@@ -50,6 +50,15 @@ class SniEndPointTest(unittest.TestCase):
 
         assert self.endpoint_factory.create_from_sni('10.0.0.1') != SniEndPointFactory("proxy.datastax.com", 9999).create_from_sni('10.0.0.1')
 
+    def test_endpoint_order_uses_server_name(self):
+        node_a = self.endpoint_factory.create_from_sni('node-a')
+        node_b = self.endpoint_factory.create_from_sni('node-b')
+
+        assert node_a != node_b
+        assert node_a < node_b
+        assert node_b > node_a
+        assert sorted([node_b, node_a]) == [node_a, node_b]
+
     def test_endpoint_resolve(self):
         ips = ['127.0.0.1', '127.0.0.2', '127.0.0.3']
         it = itertools.cycle(ips)
