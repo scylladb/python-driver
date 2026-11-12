@@ -69,7 +69,8 @@ class Host(object):
 
     'system.local.broadcast_port' or 'system.peers_v2.peer_port' (Cassandra 4)
 
-    It is also not queried if :attr:`~.Cluster.token_metadata_enabled` is ``False``.
+    This is queried even when :attr:`~.Cluster.token_metadata_enabled` is
+    ``False``, if the server supports port metadata.
     """
 
     broadcast_rpc_address = None

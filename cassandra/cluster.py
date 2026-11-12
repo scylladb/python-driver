@@ -5967,6 +5967,32 @@ class ControlConnection(object):
                 peers_result = connection.wait_for_response(
                     peers_query, timeout=self._timeout)
 
+            # Learn this connection's version before asking for columns
+            # absent from older Cassandra and Scylla's system.local.
+            local_rows = dict_factory(local_result.column_names,
+                                      local_result.parsed_rows)
+            if local_rows and local_rows[0].get('release_version'):
+                local_query_with_ports = self._get_local_query(
+                    connection, local_rows[0]['release_version'])
+                if local_query_with_ports != sel_local:
+                    try:
+                        success, result = connection.wait_for_response(
+                            QueryMessage(
+                                query=local_query_with_ports,
+                                consistency_level=ConsistencyLevel.ONE),
+                            timeout=self._timeout, fail_on_error=False)
+                        if not success:
+                            raise result
+                        local_result = result
+                    except InvalidRequest:
+                        # Some compatible servers report Cassandra 4+
+                        # without supporting its local port columns.
+                        connection._local_port_columns_supported = False
+                        log.debug("[control connection] Local port columns "
+                                  "are unavailable; retaining compatible "
+                                  "metadata",
+                                  exc_info=True)
+
             shared_results = (peers_result, local_result)
             self._refresh_node_list_and_token_map(
                 connection, preloaded_results=shared_results, revision=revision)
@@ -6248,16 +6274,40 @@ class ControlConnection(object):
             sel_peers = self._get_peers_query(self.PeersQueryType.PEERS, connection)
             if not self._token_meta_enabled:
                 log.debug("[control connection] Refreshing node list without token map")
-                sel_local = self._SELECT_LOCAL_NO_TOKENS
             else:
                 log.debug("[control connection] Refreshing node list and token map")
-                sel_local = self._SELECT_LOCAL
+            sel_local = self._get_local_query(connection)
             peers_query = QueryMessage(query=maybe_add_timeout_to_query(sel_peers, self._metadata_request_timeout),
                                        consistency_level=cl)
             local_query = QueryMessage(query=maybe_add_timeout_to_query(sel_local, self._metadata_request_timeout),
                                        consistency_level=cl)
-            peers_result, local_result = connection.wait_for_responses(
-                peers_query, local_query, timeout=self._timeout)
+            compatible_query = (self._SELECT_LOCAL
+                                if self._token_meta_enabled
+                                else self._SELECT_LOCAL_NO_TOKENS)
+            if sel_local == compatible_query:
+                peers_result, local_result = connection.wait_for_responses(
+                    peers_query, local_query, timeout=self._timeout)
+            else:
+                peers_response, local_response = connection.wait_for_responses(
+                    peers_query, local_query, timeout=self._timeout,
+                    fail_on_error=False)
+                peers_success, peers_result = peers_response
+                local_success, local_result = local_response
+                if not peers_success:
+                    connection.defunct(peers_result)
+                    raise peers_result
+                if not local_success and not isinstance(local_result,
+                                                        InvalidRequest):
+                    connection.defunct(local_result)
+                    raise local_result
+                if not local_success:
+                    connection._local_port_columns_supported = False
+                    local_query = QueryMessage(
+                        query=maybe_add_timeout_to_query(
+                            compatible_query, self._metadata_request_timeout),
+                        consistency_level=cl)
+                    local_result = connection.wait_for_response(
+                        local_query, timeout=self._timeout)
 
         rows = dict_factory(peers_result.column_names, peers_result.parsed_rows)
         local_row = None
@@ -6873,6 +6923,24 @@ class ControlConnection(object):
             return host_id == host.host_id
 
         return self._get_host_for_connection(connection) is host
+
+    def _get_local_query(self, connection, release_version=None):
+        if release_version is None:
+            host = self._get_host_for_connection(connection)
+            release_version = (host.release_version
+                               if host is not None else None)
+        columns = self._SELECT_LOCAL_COLUMNS
+        try:
+            supports_ports = (release_version and
+                              Version(release_version).major >= 4)
+        except ValueError:
+            supports_ports = False
+        if (supports_ports and connection.features.sharding_info is None and
+                vars(connection).get('_local_port_columns_supported', True)):
+            columns += ", broadcast_port, rpc_port"
+        if self._token_meta_enabled:
+            columns += ", tokens"
+        return "SELECT {0} FROM system.local WHERE key='local'".format(columns)
 
     def _get_peers_query(self, peers_query_type, connection=None):
         """

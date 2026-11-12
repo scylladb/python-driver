@@ -23,11 +23,12 @@ from unittest.mock import Mock, ANY, call, patch
 
 import pytest
 
-from cassandra import (AuthenticationFailed, OperationTimedOut,
+from cassandra import (AuthenticationFailed, InvalidRequest, OperationTimedOut,
                        SchemaTargetType, SchemaChangeType,
                        UnresolvableContactPoints)
 from cassandra._lifecycle import LifecycleCoordinator, EndpointMoveRejected
 from cassandra.protocol import ResultMessage, RESULT_KIND_ROWS
+from cassandra.protocol_features import ProtocolFeatures
 from cassandra.cluster import (Cluster, ControlConnection, _Scheduler,
                                ProfileManager, EXEC_PROFILE_DEFAULT,
                                ExecutionProfile,
@@ -35,9 +36,12 @@ from cassandra.cluster import (Cluster, ControlConnection, _Scheduler,
                                NoHostAvailable, _ControlReconnectionHandler)
 from cassandra.pool import Host, _ReconnectionHandler
 from cassandra.metadata import Metadata
-from cassandra.connection import (ConnectionException, EndPoint, DefaultEndPoint,
+from cassandra.connection import (Connection, ConnectionException, EndPoint,
+                                  DefaultEndPoint,
                                   DefaultEndPointFactory, UnixSocketEndPoint,
-                                  SniEndPointFactory, ClientRoutesEndPointFactory)
+                                  SniEndPointFactory,
+                                  ClientRoutesEndPointFactory,
+                                  ResponseWaiter)
 from cassandra.policies import (DCAwareRoundRobinPolicy, HostDistance,
                                 SimpleConvictionPolicy, RoundRobinPolicy,
                                 ConstantReconnectionPolicy,
@@ -239,6 +243,7 @@ class MockConnection(object):
     def __init__(self):
         self.endpoint = DefaultEndPoint("192.168.1.0")
         self.original_endpoint = self.endpoint
+        self.features = ProtocolFeatures()
         self.local_results = [
             ["rpc_address", "schema_version", "cluster_name", "data_center", "rack", "partitioner", "release_version", "tokens", "host_id", "listen_address"],
             [["192.168.1.0", "a", "foocluster", "dc1", "rack1", "Murmur3Partitioner", "2.2.0", ["0", "100", "200"], HOST_ID_1, "192.168.1.0"]]
@@ -259,6 +264,344 @@ class MockConnection(object):
 
     def close(self):
         self.is_closed = True
+
+
+class TestLocalPortMetadata:
+
+    def setup_method(self):
+        self.cluster = MockCluster()
+        self.cluster.metadata_request_timeout = None
+        self.cluster._client_routes_handler = None
+        self.connection = MockConnection()
+        self.connection.register_watchers = Mock()
+        self.cluster.connection_factory = Mock(return_value=self.connection)
+        self.control = ControlConnection(self.cluster, 1, 0, 0, 0)
+        self.control._refresh_schema = Mock()
+        self.local_row = dict(zip(self.connection.local_results[0],
+                                  self.connection.local_results[1][0]))
+        self.local_row.update(broadcast_address='192.168.1.0',
+                              broadcast_port=7001, rpc_port=9042)
+        self.peer_result = _node_meta_results(
+            self.connection.local_results, self.connection.peer_results)[0]
+        self.connection.wait_for_responses = Mock(side_effect=self._responses)
+        self.connection.wait_for_response = Mock(
+            side_effect=self._local_response)
+
+    def _local_response(self, message, **kwargs):
+        if 'FROM system.local' in message.query:
+            projection = message.query.split(' FROM system.local', 1)[0][7:]
+            columns = projection.split(', ')
+            result = ResultMessage(kind=RESULT_KIND_ROWS)
+            result.column_names = columns
+            result.parsed_rows = [
+                [self.local_row[column] for column in columns]]
+        else:
+            result = self.peer_result
+        if kwargs.get('fail_on_error') is False:
+            return True, result
+        return result
+
+    def _responses(self, peers_query, local_query, **kwargs):
+        results = self.peer_result, self._local_response(local_query)
+        if kwargs.get('fail_on_error') is False:
+            return tuple((True, result) for result in results)
+        return results
+
+    def _use_real_response_helpers(self):
+        connection = Connection(self.connection.endpoint)
+        connection.register_watchers = Mock()
+        connection.close = Mock(side_effect=lambda: setattr(
+            connection, 'is_closed', True))
+
+        def send(message, request_id, callback):
+            if 'broadcast_port' in message.query:
+                result = InvalidRequest('Undefined column name broadcast_port')
+            elif 'FROM system.local' in message.query:
+                result = self._local_response(message)
+            else:
+                result = self.peer_result
+            callback(result)
+
+        connection.send_msg = Mock(side_effect=send)
+        self.connection = connection
+        self.cluster.connection_factory.return_value = connection
+
+    @pytest.mark.parametrize('version', ['4.0.0', '4.1.8', '5.0.2'])
+    @pytest.mark.parametrize('tokens_enabled', [True, False])
+    def test_initial_connection_discovers_local_ports(
+            self, version, tokens_enabled):
+        self.local_row['release_version'] = version
+        self.control._token_meta_enabled = tokens_enabled
+
+        candidate = self.control._try_connect(self.connection.endpoint)
+        assert candidate is self.connection
+
+        host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
+        assert host.broadcast_port == 7001
+        assert host.broadcast_rpc_port == 9042
+        self.connection.wait_for_response.assert_called_once()
+        query = self.connection.wait_for_response.call_args.args[0].query
+        assert ('tokens' in query) is tokens_enabled
+
+    @pytest.mark.parametrize('tokens_enabled', [True, False])
+    def test_refresh_retains_local_ports(self, tokens_enabled):
+        self.local_row['release_version'] = '4.0.0'
+        host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
+        host.release_version = '4.0.0'
+        self.control._token_meta_enabled = tokens_enabled
+        self.control._connection = self.connection
+
+        assert self.control.refresh_node_list_and_token_map()
+
+        assert host.broadcast_port == 7001
+        assert host.broadcast_rpc_port == 9042
+        query = self.connection.wait_for_responses.call_args.args[1].query
+        assert ('tokens' in query) is tokens_enabled
+        self.connection.wait_for_responses.assert_called_once()
+        self.connection.wait_for_response.assert_not_called()
+
+    @pytest.mark.parametrize('version,scylla', [
+        ('2.2.0', False), ('3.11.19', False), (None, False),
+        ('unknown', False),
+        ('4.6.0', True), ('2025.1.0', True)])
+    @pytest.mark.parametrize('tokens_enabled', [True, False])
+    def test_unsupported_servers_keep_compatible_projection(
+            self, version, scylla, tokens_enabled):
+        self.local_row['release_version'] = version
+        self.local_row.pop('broadcast_port')
+        self.local_row.pop('rpc_port')
+        self.connection.features.sharding_info = object() if scylla else None
+        self.control._token_meta_enabled = tokens_enabled
+        # Ignore remembered versions when querying a new connection.
+        remembered_host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
+        remembered_host.release_version = '5.0.0'
+
+        self.control._try_connect(self.connection.endpoint)
+        self.control._connection = self.connection
+        assert self.control.refresh_node_list_and_token_map()
+
+        self.connection.wait_for_response.assert_not_called()
+        host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
+        assert host.broadcast_port is None
+        assert host.broadcast_rpc_port is None
+
+    @pytest.mark.parametrize('version', ['4.0.0.681', '2025.1.0'])
+    @pytest.mark.parametrize('tokens_enabled', [True, False])
+    def test_rejected_port_columns_keep_compatible_metadata(
+            self, version, tokens_enabled):
+        self.local_row['release_version'] = version
+        self.local_row.pop('broadcast_port')
+        self.local_row.pop('rpc_port')
+        self.control._token_meta_enabled = tokens_enabled
+        self._use_real_response_helpers()
+
+        candidate = self.control._try_connect(self.connection.endpoint)
+        assert candidate is self.connection
+        assert not candidate.is_closed
+        assert not candidate.is_defunct
+        host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
+        assert host.broadcast_port is None
+        assert host.broadcast_rpc_port is None
+        assert self.connection.send_msg.call_count == 3
+
+        self.control._connection = candidate
+        assert self.control.refresh_node_list_and_token_map()
+
+        query = self.connection.send_msg.call_args.args[0].query
+        assert 'broadcast_port' not in query
+        assert 'rpc_port' not in query
+        assert ('tokens' in query) is tokens_enabled
+        assert self.connection.send_msg.call_count == 5
+        self.connection.close.assert_not_called()
+
+        # Rejection belongs to this connection, not every future server.
+        new_connection = MockConnection()
+        new_query = self.control._get_local_query(new_connection, '4.0.0')
+        assert 'broadcast_port' in new_query
+        assert 'rpc_port' in new_query
+
+    @pytest.mark.parametrize('tokens_enabled', [True, False])
+    def test_refresh_rejected_port_columns_retries_compatible_projection(
+            self, tokens_enabled):
+        self.local_row['release_version'] = '4.0.0'
+        self.local_row.pop('broadcast_port')
+        self.local_row.pop('rpc_port')
+        host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
+        host.release_version = '4.0.0'
+        self.control._token_meta_enabled = tokens_enabled
+        self._use_real_response_helpers()
+        self.control._connection = self.connection
+
+        assert self.control.refresh_node_list_and_token_map()
+        assert self.connection.send_msg.call_count == 3
+        assert self.control.refresh_node_list_and_token_map()
+        assert self.connection.send_msg.call_count == 5
+        assert not self.connection.is_defunct
+        self.connection.close.assert_not_called()
+        assert host.broadcast_port is None
+        assert host.broadcast_rpc_port is None
+        query = self.connection.send_msg.call_args.args[0].query
+        assert 'broadcast_port' not in query
+        assert 'rpc_port' not in query
+        assert ('tokens' in query) is tokens_enabled
+
+    @pytest.mark.parametrize('tokens_enabled', [True, False])
+    def test_refresh_remembers_rejection_when_compatible_retry_times_out(
+            self, tokens_enabled):
+        host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
+        host.release_version = '4.0.0'
+        self.control._token_meta_enabled = tokens_enabled
+        self.control._timeout = 0
+        self._use_real_response_helpers()
+        self.control._connection = self.connection
+        self.control._submit = Mock(return_value=object())
+        send = self.connection.send_msg.side_effect
+        pending = []
+
+        def withhold_compatible_reply(message, request_id, callback):
+            if ('FROM system.local' in message.query and
+                    'broadcast_port' not in message.query):
+                pending.append((message, callback))
+            else:
+                send(message, request_id, callback)
+
+        self.connection.send_msg.side_effect = withhold_compatible_reply
+        try:
+            assert not self.control.refresh_node_list_and_token_map()
+            self.control._submit.assert_called_once_with(
+                self.control._reconnect)
+            assert self.control._connection is self.connection
+            assert not self.connection.is_closed
+            assert not self.connection.is_defunct
+            assert self.connection.send_msg.call_count == 3
+        finally:
+            for message, callback in pending:
+                callback(self._local_response(message))
+            self.connection.send_msg.side_effect = send
+
+        assert self.control.refresh_node_list_and_token_map()
+        assert self.connection.send_msg.call_count == 5
+        query = self.connection.send_msg.call_args.args[0].query
+        assert 'broadcast_port' not in query
+        assert 'rpc_port' not in query
+        assert ('tokens' in query) is tokens_enabled
+        self.connection.close.assert_not_called()
+
+    @pytest.mark.parametrize('timeout', [None, 1])
+    @pytest.mark.parametrize('tokens_enabled', [True, False])
+    def test_refresh_pipelines_peer_and_local_requests(
+            self, timeout, tokens_enabled):
+        self.local_row['release_version'] = '4.0.0'
+        host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
+        host.release_version = '4.0.0'
+        self._use_real_response_helpers()
+        self.control._connection = self.connection
+        self.control._timeout = timeout
+        self.control._token_meta_enabled = tokens_enabled
+        requests = []
+
+        def send(message, request_id, callback):
+            requests.append((message, callback))
+            if len(requests) == 2:
+                for pending, respond in reversed(requests):
+                    respond(self._local_response(pending))
+
+        deliver = ResponseWaiter.deliver
+
+        def require_both_requests(waiter, timeout=None):
+            assert len(requests) == 2, 'Waiting before sending both requests'
+            assert waiter.event.is_set(), 'Waiting for undelivered responses'
+            return deliver(waiter, timeout)
+
+        self.connection.send_msg.side_effect = send
+        with patch.object(ResponseWaiter, 'deliver', require_both_requests):
+            self.control._refresh_node_list_and_token_map(self.connection)
+
+        assert host.broadcast_port == 7001
+        assert host.broadcast_rpc_port == 9042
+        assert ('tokens' in requests[1][0].query) is tokens_enabled
+        assert self.connection.send_msg.call_count == 2
+        assert self.connection.in_flight == 0
+        assert not self.connection.is_defunct
+        self.connection.close.assert_not_called()
+
+    @pytest.mark.parametrize('local_rejected', [True, False])
+    def test_refresh_peer_error_does_not_disable_local_ports(
+            self, local_rejected):
+        host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
+        host.release_version = '4.0.0'
+        self._use_real_response_helpers()
+
+        def peer_error(message, request_id, callback):
+            if 'FROM system.peers' in message.query:
+                callback(InvalidRequest('Invalid peers projection'))
+            elif local_rejected:
+                callback(InvalidRequest('Invalid local projection'))
+            else:
+                callback(self._local_response(message))
+
+        self.connection.send_msg.side_effect = peer_error
+        with pytest.raises(InvalidRequest, match='Invalid peers projection'):
+            self.control._refresh_node_list_and_token_map(self.connection)
+        assert self.connection.is_defunct
+        self.connection.close.assert_called_once_with()
+        assert self.connection.send_msg.call_count == 2
+        assert '_local_port_columns_supported' not in vars(self.connection)
+
+    def test_refresh_local_operational_error_defuncts_connection(self):
+        host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
+        host.release_version = '4.0.0'
+        self._use_real_response_helpers()
+
+        def local_error(message, request_id, callback):
+            if 'FROM system.peers' in message.query:
+                callback(self.peer_result)
+            else:
+                callback(ConnectionException('local connection lost'))
+
+        self.connection.send_msg.side_effect = local_error
+        with pytest.raises(ConnectionException, match='local connection lost'):
+            self.control._refresh_node_list_and_token_map(self.connection)
+        assert self.connection.is_defunct
+        self.connection.close.assert_called_once_with()
+        assert self.connection.send_msg.call_count == 2
+        assert '_local_port_columns_supported' not in vars(self.connection)
+
+    def test_refresh_peer_error_waits_for_local_response(self):
+        host = self.cluster.metadata.get_host_by_host_id(HOST_ID_1)
+        host.release_version = '4.0.0'
+        self._use_real_response_helpers()
+        self.control._timeout = 0
+        pending = []
+
+        def withhold_local(message, request_id, callback):
+            if 'FROM system.peers' in message.query:
+                callback(InvalidRequest('Invalid peers projection'))
+            else:
+                pending.append((message, callback))
+
+        self.connection.send_msg.side_effect = withhold_local
+        try:
+            with pytest.raises(OperationTimedOut):
+                self.control._refresh_node_list_and_token_map(self.connection)
+            assert self.connection.send_msg.call_count == 2
+            assert not self.connection.is_defunct
+            assert '_local_port_columns_supported' not in vars(self.connection)
+        finally:
+            for message, callback in pending:
+                callback(self._local_response(message))
+        assert self.connection.in_flight == 0
+
+    @pytest.mark.parametrize('error', [OperationTimedOut(),
+                                     ConnectionException('connection lost')])
+    def test_port_query_failure_closes_candidate_connection(self, error):
+        self.local_row['release_version'] = '4.0.0'
+        self.connection.wait_for_response.side_effect = error
+
+        with pytest.raises(type(error)):
+            self.control._try_connect(self.connection.endpoint)
+
+        assert self.connection.is_closed
 
 
 class FakeTime(object):
