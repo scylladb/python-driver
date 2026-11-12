@@ -22,8 +22,8 @@ _saved_scylla_ext_opts = None
 def setup_module():
     global _saved_scylla_ext_opts
     _saved_scylla_ext_opts = os.environ.get('SCYLLA_EXT_OPTS')
-    os.environ['SCYLLA_EXT_OPTS'] = "--smp 2 --memory 2048M"
-    use_cluster('shared_aware', [3], start=True)
+    os.environ['SCYLLA_EXT_OPTS'] = "--memory 2048M"
+    use_cluster('shared_aware', [3], start=True, smp=2)
 
 
 def teardown_module():

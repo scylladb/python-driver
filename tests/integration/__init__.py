@@ -515,12 +515,14 @@ def remove_cluster():
         raise RuntimeError("Failed to remove cluster after 100 attempts")
 
 
-def is_current_cluster(cluster_name, node_counts, workloads):
+def is_current_cluster(cluster_name, node_counts, workloads, smp=None):
     global CCM_CLUSTER
     if CCM_CLUSTER and CCM_CLUSTER.name == cluster_name:
         if [len(list(nodes)) for dc, nodes in
                 groupby(CCM_CLUSTER.nodelist(), lambda n: n.data_center)] == node_counts:
             for node in CCM_CLUSTER.nodelist():
+                if SCYLLA_VERSION and smp is not None and node.smp() != smp:
+                    return False
                 if set(getattr(node, 'workloads', [])) != set(workloads):
                     print("node workloads don't match creating new cluster")
                     return False
@@ -537,8 +539,10 @@ def start_cluster_wait_for_up(cluster):
     log.debug("Binary port are open")
 
 
-def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, set_keyspace=True, ccm_options=None,
-                configuration_options=None, dse_options=None, use_single_interface=USE_SINGLE_INTERFACE):
+def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None,
+                set_keyspace=True, ccm_options=None,
+                configuration_options=None, dse_options=None,
+                use_single_interface=USE_SINGLE_INTERFACE, smp=None):
     configuration_options = configuration_options or {}
     dse_options = dse_options or {}
     workloads = workloads or []
@@ -549,7 +553,7 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
     cassandra_version = ccm_options.get('version', CCM_VERSION)
 
     global CCM_CLUSTER
-    if is_current_cluster(cluster_name, nodes, workloads):
+    if is_current_cluster(cluster_name, nodes, workloads, smp=smp):
         log.debug("Using existing cluster, matching topology: {0}".format(cluster_name))
     else:
         if CCM_CLUSTER:
@@ -616,6 +620,12 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None, 
             CCM_CLUSTER.populate(nodes, ipformat=ipformat)
     try:
         jvm_args = []
+
+        # CCM ignores --smp in SCYLLA_EXT_OPTS. Set each node's shard
+        # count before startup so it survives subsequent restarts.
+        if SCYLLA_VERSION and smp is not None:
+            for node in CCM_CLUSTER.nodelist():
+                node.set_smp(smp)
 
         # This will enable the Mirroring query handler which will echo our custom payload k,v pairs back
 
