@@ -54,7 +54,7 @@ class ReplacementListener(HostStateListener):
 class TestIpAddressChange(unittest.TestCase):
     def setUp(self):
         options = patch.dict(
-            os.environ, {'SCYLLA_EXT_OPTS': '--smp 2 --memory 2048M'})
+            os.environ, {'SCYLLA_EXT_OPTS': '--memory 2048M'})
         options.start()
         self.addCleanup(options.stop)
         # Register before setup so partial startup failures are cleaned up too.
@@ -65,7 +65,7 @@ class TestIpAddressChange(unittest.TestCase):
         # A unique name also avoids reusing mutations with KEEP_TEST_CLUSTER.
         cluster_name = 'test_ip_change_{}'.format(uuid4().hex[:8])
         use_cluster(cluster_name, [nodes], ipformat='127.0.92.%d',
-                    start=True, set_keyspace=False)
+                    start=True, set_keyspace=False, smp=2)
         self.cluster = TestCluster(
             contact_points=[get_node(1).network_interfaces['binary'][0]],
             execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(

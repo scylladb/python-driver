@@ -44,6 +44,7 @@ from cassandra.policies import RoundRobinPolicy
 from cassandra.query import SimpleStatement
 from tests.client_routes_rest import MAX_ATTEMPTS, post_client_routes
 from tests.integration import (
+    SCYLLA_VERSION,
     TestCluster,
     get_cluster,
     get_node,
@@ -371,8 +372,8 @@ _saved_scylla_ext_opts = None
 def setup_module():
     global _saved_scylla_ext_opts
     _saved_scylla_ext_opts = os.environ.get('SCYLLA_EXT_OPTS')
-    os.environ['SCYLLA_EXT_OPTS'] = "--smp 2 --memory 2048M"
-    use_cluster('shared_aware', [3], start=True)
+    os.environ['SCYLLA_EXT_OPTS'] = "--memory 2048M"
+    use_cluster('shared_aware', [3], start=True, smp=2)
 
 
 def teardown_module():
@@ -1094,8 +1095,8 @@ class TestFullNodeReplacementThroughNlb(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._saved_scylla_ext_opts = os.environ.get('SCYLLA_EXT_OPTS')
-        os.environ['SCYLLA_EXT_OPTS'] = "--smp 2 --memory 2048M"
-        use_cluster('test_client_routes_replacement', [3], start=True)
+        os.environ['SCYLLA_EXT_OPTS'] = "--memory 2048M"
+        use_cluster('test_client_routes_replacement', [3], start=True, smp=2)
 
         cls.direct_cluster = TestCluster()
         cls.direct_session = cls.direct_cluster.connect()
@@ -1281,6 +1282,8 @@ class TestFullNodeReplacementThroughNlb(unittest.TestCase):
             remote_debug_port=0,
             initial_token=None,
         )
+        if SCYLLA_VERSION:
+            node_instance.set_smp(next(iter(ccm_cluster.nodes.values())).smp())
         # CCM requires explicit data_center/rack when adding a node so that
         # cassandra-rackdc.properties is written correctly.  Without this the
         # snitch fails to parse the empty properties file and the node crashes
