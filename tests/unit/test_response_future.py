@@ -21,6 +21,8 @@ from threading import Barrier, Event, RLock, Thread, current_thread
 from unittest.mock import Mock, MagicMock, ANY, patch
 
 from cassandra import ConsistencyLevel, InvalidRequest, Unavailable, SchemaTargetType, SchemaChangeType, OperationTimedOut
+from cassandra._lifecycle import LifecycleCoordinator
+from cassandra.metadata import Metadata
 from cassandra.cluster import (Cluster, Session, ResponseFuture, NoHostAvailable, ProtocolVersion,
                                ControlConnection, ControlConnectionQueryFallback, _NOT_SET)
 from cassandra.connection import (Connection, ConnectionBusy, ConnectionException,
@@ -43,13 +45,28 @@ from tests.util import assertEqual, assertIsInstance
 import pytest
 
 
+class PoolMap(dict):
+    """Track lookups while preserving a real pool mapping."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.get = Mock(wraps=super().get)
+
+
 class ResponseFutureTests(unittest.TestCase):
+
+    @staticmethod
+    def make_host(endpoint):
+        return Host(endpoint, SimpleConvictionPolicy, host_id=uuid.uuid4())
+
+    def setUp(self):
+        self.host1 = self.make_host('ip1')
+        self.host2 = self.make_host('ip2')
 
     def make_owned_pool_session(self, host):
         session = self.make_basic_session()
         session.cluster._default_load_balancing_policy.make_query_plan.return_value = [host]
-        session._pool_matches_host.side_effect = (
-            lambda selected, pool: Session._pool_matches_host(session, selected, pool))
+        session.cluster.metadata.add_or_return_host(host)
         session._pools = {}
         return session
 
@@ -180,8 +197,8 @@ class ResponseFutureTests(unittest.TestCase):
                 elif scenario == 'current_removed':
                     current_host._is_removed = True
                 session = self.make_owned_pool_session(current_host)
-                session.cluster.metadata.get_host_by_host_id.return_value = (
-                    None if scenario in ('unknown', 'changed_identity') else current_host)
+                if scenario == 'unknown':
+                    session.cluster.metadata.remove_host(current_host)
                 pool, connection = self.make_owned_pool(current_host)
                 session._pools[current_host] = pool
 
@@ -191,6 +208,32 @@ class ResponseFutureTests(unittest.TestCase):
                 assert isinstance(rf._final_exception, NoHostAvailable)
                 pool.borrow_connection.assert_not_called()
                 connection.send_msg.assert_not_called()
+
+    def test_query_returns_stream_when_host_loses_admission(self):
+        for scenario in ('down', 'metadata_removed'):
+            with self.subTest(scenario=scenario):
+                host = self.make_host('127.0.0.1')
+                session = self.make_owned_pool_session(host)
+                pool, connection = self.make_owned_pool(host)
+                session._pools[host] = pool
+                borrow = pool.borrow_connection.side_effect
+
+                def lose_admission(**kwargs):
+                    result = borrow(**kwargs)
+                    if scenario == 'down':
+                        host.is_up = False
+                    else:
+                        session.cluster.metadata.remove_host(host)
+                    return result
+
+                pool.borrow_connection.side_effect = lose_admission
+                rf = self.make_response_future(session)
+                assert rf._query(host) is None
+                connection.send_msg.assert_not_called()
+                pool.return_connection.assert_called_once_with(connection)
+                assert connection.in_flight == 0
+                assert list(connection.request_ids) == [1]
+                assert rf._connection is None
 
     def test_query_restores_borrowed_stream_when_endpoint_changes_during_borrow(self):
         host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
@@ -222,6 +265,7 @@ class ResponseFutureTests(unittest.TestCase):
         first_pool, first_connection = self.make_owned_pool(first_host)
         second_pool, second_connection = self.make_owned_pool(second_host)
         session._pools = {first_host: first_pool, second_host: second_pool}
+        session.cluster.metadata.add_or_return_host(second_host)
         rf = self.make_response_future(session)
         assert rf._query(first_host) == 1
         borrow = second_pool.borrow_connection.side_effect
@@ -250,6 +294,8 @@ class ResponseFutureTests(unittest.TestCase):
         replacement = move_host(host, DefaultEndPoint('127.0.0.2'))
         new_pool, new_connection = self.make_owned_pool(replacement, request_id=2)
         session._pools = {replacement: new_pool}
+        session.cluster.metadata.remove_host(host)
+        session.cluster.metadata.add_or_return_host(replacement)
         assert rf._query(replacement) == 2
         new_connection.send_msg.assert_called_once()
         old_connection.send_msg.assert_called_once()
@@ -298,6 +344,7 @@ class ResponseFutureTests(unittest.TestCase):
         first_pool, first_connection = self.make_owned_pool(first_host)
         second_pool, second_connection = self.make_owned_pool(second_host)
         session._pools = {first_host: first_pool, second_host: second_pool}
+        session.cluster.metadata.add_or_return_host(second_host)
         first_send_started = Event()
         release_first_send = Event()
         first_result = []
@@ -360,7 +407,6 @@ class ResponseFutureTests(unittest.TestCase):
     def make_timeout_before_send_future(self):
         host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
         session = self.make_owned_pool_session(host)
-        session.cluster.metadata.get_host_by_host_id.return_value = host
         pool, connection = self.make_owned_pool(host)
         session._pools[host] = pool
         rf = self.make_response_future(session)
@@ -408,7 +454,7 @@ class ResponseFutureTests(unittest.TestCase):
         create_timer.assert_called_once()
         self.assert_timed_out(rf)
         # A send that only now gets to run must not go out.
-        assert rf._query(rf.session.cluster.metadata.get_host_by_host_id()) is None
+        assert rf._query(next(iter(rf.session._pools))) is None
         connection.send_msg.assert_not_called()
 
     def test_rescheduled_timeout_orphans_request_sent_meanwhile(self):
@@ -417,7 +463,7 @@ class ResponseFutureTests(unittest.TestCase):
         # _send_admission_lock a pooled send cannot set _connection after the
         # flag, so the state is built by hand: send first, then set the flag.
         rf, pool, connection = self.make_timeout_before_send_future()
-        host = rf.session.cluster.metadata.get_host_by_host_id()
+        host = next(iter(rf.session._pools))
         assert rf._query(host) == 1
         rf._timeout_before_send = True
         rf._on_timeout(_attempts=1)
@@ -435,7 +481,7 @@ class ResponseFutureTests(unittest.TestCase):
         # instead of setting the flag. If the timer side skipped the lock,
         # it would never reach AdmissionLock and the wait below would fail.
         rf, pool, connection = self.make_timeout_before_send_future()
-        host = rf.session.cluster.metadata.get_host_by_host_id()
+        host = next(iter(rf.session._pools))
         timer_entering = Event()
         timeout_done = Event()
         timeout_threads = []
@@ -498,7 +544,7 @@ class ResponseFutureTests(unittest.TestCase):
         control_connection = session.cluster.control_connection
         control_connection._connection = connection
         session.cluster.get_control_connection_host.return_value = \
-            Mock(endpoint=connection.endpoint)
+            self.make_host(connection.endpoint)
         rf = self.make_response_future(session)
         return rf, control_connection, connection
 
@@ -582,7 +628,7 @@ class ResponseFutureTests(unittest.TestCase):
         control_connection = session.cluster.control_connection
         control_connection._connection = connection
         session.cluster.get_control_connection_host.return_value = \
-            Mock(endpoint=connection.endpoint)
+            self.make_host(connection.endpoint)
         query = SimpleStatement("USE ks2")
         rf = ResponseFuture(
             session,
@@ -637,6 +683,15 @@ class ResponseFutureTests(unittest.TestCase):
         s = Mock(spec=Session)
         s.keyspace = None
         s.is_shutdown = False
+        s.cluster.is_shutdown = False
+        s.cluster.metadata = Metadata()
+        for host in (self.host1, self.host2):
+            s.cluster.metadata.add_or_return_host(host)
+        s.cluster._lifecycle = LifecycleCoordinator(s.cluster)
+        s._pool_matches_host.side_effect = (
+            lambda host, pool: Session._pool_matches_host(s, host, pool))
+        s._pools = PoolMap({
+            host: self.make_pool(host) for host in (self.host1, self.host2)})
         s.row_factory = lambda col_names, rows: [(col_names, rows)]
         s.cluster.allow_control_connection_query_fallback = ControlConnectionQueryFallback.Disabled
         s.cluster.control_connection = ControlConnection(
@@ -646,8 +701,9 @@ class ResponseFutureTests(unittest.TestCase):
             status_event_refresh_window=0)
         return s
 
-    def make_pool(self):
-        pool = Mock()
+    def make_pool(self, host=None):
+        host = self.host1 if host is None else host
+        pool = Mock(host=host, endpoint=host.endpoint)
         pool.is_shutdown = False
         pool.borrow_connection.return_value = [Mock(), Mock()]
         return pool
@@ -676,8 +732,8 @@ class ResponseFutureTests(unittest.TestCase):
 
     def make_session(self):
         session = self.make_basic_session()
-        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1', 'ip2']
-        session._pools.get.return_value = self.make_pool()
+        policy = session.cluster._default_load_balancing_policy
+        policy.make_query_plan.return_value = [self.host1, self.host2]
         return session
 
     def make_response_future(self, session, host=None):
@@ -685,11 +741,45 @@ class ResponseFutureTests(unittest.TestCase):
         message = QueryMessage(query=query, consistency_level=ConsistencyLevel.ONE)
         return ResponseFuture(session, message, query, 1, host=host)
 
+    def test_invalid_query_plan_entry_completes_future(self):
+        for path in ('initial', 'retry', 'speculative'):
+            for invalid_host in ('ip1', object(), []):
+                with self.subTest(path=path, invalid_host=invalid_host):
+                    session = self.make_session()
+                    plan = [invalid_host, self.host2]
+                    if path != 'initial':
+                        plan.insert(0, self.host1)
+                    policy = session.cluster._default_load_balancing_policy
+                    policy.make_query_plan.return_value = plan
+                    query = SimpleStatement("SELECT * FROM foo")
+                    message = QueryMessage(
+                        query=query, consistency_level=ConsistencyLevel.ONE)
+                    rf = ResponseFuture(session, message, query, None)
+                    errback = Mock()
+                    rf.add_errback(errback)
+
+                    if path == 'initial':
+                        assert rf.send_request()
+                    else:
+                        assert rf.send_request()
+                        assert rf.attempted_hosts == [self.host1]
+                        if path == 'retry':
+                            rf._retry_task(False, self.host1)
+                        else:
+                            rf._on_speculative_execute()
+
+                    assert rf._event.is_set()
+                    with self.assertRaisesRegex(TypeError, 'Host instances'):
+                        rf.result()
+                    errback.assert_called_once_with(rf._final_exception)
+                    skipped_pool = session._pools[self.host2]
+                    skipped_pool.borrow_connection.assert_not_called()
+
     def test_query_releases_borrowed_request_id_when_send_fails(self):
         for failure in (ConnectionBusy("busy"), ConnectionException("write failed")):
             with self.subTest(failure=failure):
                 session = self.make_session()
-                pool = session._pools.get.return_value
+                pool = session._pools[self.host1]
                 connection = Connection(DefaultEndPoint('127.0.0.1'))
                 initial_request_ids = set(connection.request_ids)
                 connection.orphaned_threshold_reached = True
@@ -712,7 +802,7 @@ class ResponseFutureTests(unittest.TestCase):
                 pool.return_connection.side_effect = return_connection
 
                 rf = self.make_response_future(session)
-                assert rf._query('ip1') is None
+                assert rf._query(self.host1) is None
                 assert connection.in_flight == 0
                 assert set(connection.request_ids) == initial_request_ids
                 assert len(connection.request_ids) == len(initial_request_ids)
@@ -722,10 +812,10 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_query_send_failure_retires_timed_out_stream(self):
         session = self.make_session()
-        pool = session._pools.get.return_value
+        pool = session._pools[self.host1]
         connection = Connection(DefaultEndPoint('127.0.0.1'))
         initial_request_ids = set(connection.request_ids)
-        host = Mock(endpoint='127.0.0.1')
+        host = self.host1
 
         def borrow_connection(**kwargs):
             with connection.lock:
@@ -757,11 +847,11 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_query_send_failure_clears_timeout_target_before_id_reuse(self):
         session = self.make_session()
-        pool = session._pools.get.return_value
+        pool = session._pools[self.host1]
         connection = Connection(DefaultEndPoint('127.0.0.1'))
         connection.request_ids.clear()
         connection.request_ids.append(0)
-        host = Mock(endpoint='127.0.0.1')
+        host = self.host1
         callback = Mock()
 
         def borrow_connection(**kwargs):
@@ -791,15 +881,15 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_query_send_failure_restores_previous_timeout_connection(self):
         session = self.make_session()
-        pool = session._pools.get.return_value
+        pool = session._pools[self.host1]
         previous_connection = Connection(DefaultEndPoint('127.0.0.1'))
         failed_connection = Connection(DefaultEndPoint('127.0.0.2'))
         failed_connection.request_ids.clear()
         failed_connection.request_ids.append(0)
         previous_connection._requests[0] = (Mock(), None, None)
         previous_connection.in_flight = 1
-        previous_host = Mock(endpoint='127.0.0.1')
-        failed_host = Mock(endpoint='127.0.0.2')
+        previous_host = self.host2
+        failed_host = self.host1
         unrelated_callback = Mock()
 
         def borrow_connection(**kwargs):
@@ -836,8 +926,9 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_result_message(self):
         session = self.make_basic_session()
-        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1', 'ip2']
-        pool = session._pools.get.return_value
+        policy = session.cluster._default_load_balancing_policy
+        policy.make_query_plan.return_value = [self.host1, self.host2]
+        pool = session._pools[self.host1]
         pool.is_shutdown = False
 
         connection = Mock(spec=Connection)
@@ -846,7 +937,7 @@ class ResponseFutureTests(unittest.TestCase):
         rf = self.make_response_future(session)
         rf.send_request()
 
-        rf.session._pools.get.assert_any_call('ip1')
+        rf.session._pools.get.assert_any_call(self.host1)
         pool.borrow_connection.assert_called_once_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY, routing_token=ANY)
 
         connection.send_msg.assert_called_once_with(rf.message, 1, cb=ANY, encoder=ProtocolHandler.encode_message, decoder=ProtocolHandler.decode_message, result_metadata=[])
@@ -858,7 +949,7 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_unknown_result_class(self):
         session = self.make_session()
-        pool = session._pools.get.return_value
+        pool = session._pools[self.host1]
         connection = Mock(spec=Connection)
         pool.borrow_connection.return_value = (connection, 1)
 
@@ -870,7 +961,7 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_query_retires_connection_when_push_fails_after_queueing(self):
         session = self.make_session()
-        pool = session._pools.get.return_value
+        pool = session._pools[self.host1]
         connection = Connection('1.2.3.4')
         connection.close = Mock()
         queued = []
@@ -913,7 +1004,7 @@ class ResponseFutureTests(unittest.TestCase):
         rf._req_id = 7
         rf._request_pool = previous_pool
 
-        assert rf._query('ip1') is None
+        assert rf._query(self.host1) is None
         assert [call.kwargs for call in pool.return_connection.call_args_list] == \
             [{}, {'replace_only': True}]
         connection.close.assert_called_once_with()
@@ -929,7 +1020,7 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_query_preserves_other_defunct_failure_after_push_error(self):
         session = self.make_session()
-        pool = session._pools.get.return_value
+        pool = session._pools[self.host1]
         connection = Connection('1.2.3.4')
         request_id = connection.request_ids.popleft()
         connection.in_flight += 1
@@ -941,14 +1032,14 @@ class ResponseFutureTests(unittest.TestCase):
 
         connection.send_msg = send_msg
         rf = self.make_response_future(session)
-        assert rf._query('ip1') is None
+        assert rf._query(self.host1) is None
         assert not connection.signaled_error
         assert connection.last_error.args[0] == 'socket failed'
         pool.return_connection.assert_called_once_with(connection)
 
     def test_query_releases_request_id_when_connection_is_busy(self):
         session = self.make_session()
-        pool = session._pools.get.return_value
+        pool = session._pools[self.host1]
         connection = Connection('1.2.3.4')
         connection._socket_writable = False
         request_id = connection.request_ids.popleft()
@@ -962,7 +1053,7 @@ class ResponseFutureTests(unittest.TestCase):
         pool.return_connection.side_effect = return_connection
 
         rf = self.make_response_future(session)
-        assert rf._query('ip1') is None
+        assert rf._query(self.host1) is None
         pool.return_connection.assert_called_once_with(connection)
         assert connection.in_flight == 0
         assert request_id in connection.request_ids
@@ -970,7 +1061,7 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_failed_query_does_not_timeout_reused_request_id(self):
         session = self.make_session()
-        pool = session._pools.get.return_value
+        pool = session._pools[self.host1]
         connection = Connection('1.2.3.4')
         connection._socket_writable = False
         request_id = connection.request_ids.popleft()
@@ -993,14 +1084,14 @@ class ResponseFutureTests(unittest.TestCase):
             rf._on_timeout()
 
         pool.return_connection.side_effect = return_connection
-        assert rf._query('ip1') is None
+        assert rf._query(self.host1) is None
         assert request_id in connection._requests
         assert request_id not in connection.orphaned_request_ids
         callback.assert_not_called()
 
     def test_query_clears_timeout_orphan_when_encoding_fails(self):
         session = self.make_session()
-        pool = session._pools.get.return_value
+        pool = session._pools[self.host1]
         connection = Connection('1.2.3.4')
         connection.orphaned_threshold = 1
         request_id = connection.request_ids.popleft()
@@ -1022,7 +1113,7 @@ class ResponseFutureTests(unittest.TestCase):
             raise ConnectionException("encoding failed")
 
         rf._protocol_handler = Mock(encode_message=encode)
-        assert rf._query(Mock(endpoint='ip1')) is None
+        assert rf._query(self.host1) is None
         assert connection.in_flight == 0
         assert request_id in connection.request_ids
         assert request_id not in connection.orphaned_request_ids
@@ -1080,13 +1171,13 @@ class ResponseFutureTests(unittest.TestCase):
         connection.in_flight = 5
         connection.orphaned_request_ids = set()
 
-        pool = Mock()
-        pool.is_shutdown = False
+        pool = self.make_pool()
         pool.borrow_connection.return_value = [connection, 1]
 
         session = self.make_basic_session()
-        session.cluster._default_load_balancing_policy.make_query_plan.return_value = [Mock(), Mock()]
-        session._pools.get.return_value = pool
+        policy = session.cluster._default_load_balancing_policy
+        policy.make_query_plan.return_value = [self.host1, self.host2]
+        session._pools[self.host1] = pool
 
         query = SimpleStatement("SELECT * FROM foo")
         message = QueryMessage(query=query, consistency_level=ConsistencyLevel.ONE)
@@ -1120,13 +1211,13 @@ class ResponseFutureTests(unittest.TestCase):
         connection.features.tablets_routing_v2 = False
         connection.features.tablets_routing_v1 = False
 
-        pool = Mock()
-        pool.is_shutdown = False
+        pool = self.make_pool()
         pool.borrow_connection.return_value = [connection, 1]
 
         session = self.make_basic_session()
-        session.cluster._default_load_balancing_policy.make_query_plan.return_value = [Mock(), Mock()]
-        session._pools.get.return_value = pool
+        policy = session.cluster._default_load_balancing_policy
+        policy.make_query_plan.return_value = [self.host1, self.host2]
+        session._pools[self.host1] = pool
 
         query = SimpleStatement("DROP KEYSPACE ks")
         message = QueryMessage(query=query, consistency_level=ConsistencyLevel.ONE)
@@ -1236,7 +1327,7 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_retry_policy_says_retry(self):
         session = self.make_session()
-        pool = session._pools.get.return_value
+        pool = session._pools[self.host1]
 
         query = SimpleStatement("INSERT INFO foo (a, b) VALUES (1, 2)")
         message = QueryMessage(query=query, consistency_level=ConsistencyLevel.QUORUM)
@@ -1249,12 +1340,12 @@ class ResponseFutureTests(unittest.TestCase):
         rf = ResponseFuture(session, message, query, 1, retry_policy=retry_policy)
         rf.send_request()
 
-        rf.session._pools.get.assert_any_call('ip1')
+        rf.session._pools.get.assert_any_call(self.host1)
         pool.borrow_connection.assert_called_once_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY, routing_token=ANY)
         connection.send_msg.assert_called_once_with(rf.message, 1, cb=ANY, encoder=ProtocolHandler.encode_message, decoder=ProtocolHandler.decode_message, result_metadata=[])
 
         result = Mock(spec=UnavailableErrorMessage, info={})
-        host = Mock()
+        host = self.host1
         rf._set_result(host, None, None, result)
 
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
@@ -1275,7 +1366,7 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_retry_with_different_host(self):
         session = self.make_session()
-        pool = session._pools.get.return_value
+        pool = session._pools[self.host1]
 
         connection = Mock(spec=Connection)
         pool.borrow_connection.return_value = (connection, 1)
@@ -1284,13 +1375,13 @@ class ResponseFutureTests(unittest.TestCase):
         rf.message.consistency_level = ConsistencyLevel.QUORUM
         rf.send_request()
 
-        rf.session._pools.get.assert_any_call('ip1')
+        rf.session._pools.get.assert_any_call(self.host1)
         pool.borrow_connection.assert_called_once_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY, routing_token=ANY)
         connection.send_msg.assert_called_once_with(rf.message, 1, cb=ANY, encoder=ProtocolHandler.encode_message, decoder=ProtocolHandler.decode_message, result_metadata=[])
         assert ConsistencyLevel.QUORUM == rf.message.consistency_level
 
         result = Mock(spec=OverloadedErrorMessage, info={})
-        host = Mock()
+        host = self.host1
         rf._set_result(host, None, None, result)
 
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
@@ -1298,13 +1389,14 @@ class ResponseFutureTests(unittest.TestCase):
         # query_retries does get incremented for Overloaded/Bootstrapping errors (since 3.18)
         assert 1 == rf._query_retries
 
+        pool = session._pools[self.host2]
         connection = Mock(spec=Connection)
         pool.borrow_connection.return_value = (connection, 2)
         # simulate the executor running this
         rf._retry_task(False, host)
 
         # it should try with a different host
-        rf.session._pools.get.assert_called_with('ip2')
+        rf.session._pools.get.assert_called_with(self.host2)
         pool.borrow_connection.assert_called_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY, routing_token=ANY)
         connection.send_msg.assert_called_with(rf.message, 2, cb=ANY, encoder=ProtocolHandler.encode_message, decoder=ProtocolHandler.decode_message, result_metadata=[])
 
@@ -1313,16 +1405,16 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_all_retries_fail(self):
         session = self.make_session()
-        pool = session._pools.get.return_value
+        pool = session._pools[self.host1]
         connection = Mock(spec=Connection)
         pool.borrow_connection.return_value = (connection, 1)
 
         rf = self.make_response_future(session)
         rf.send_request()
-        rf.session._pools.get.assert_any_call('ip1')
+        rf.session._pools.get.assert_any_call(self.host1)
 
         result = Mock(spec=IsBootstrappingErrorMessage, info={})
-        host = Mock()
+        host = self.host1
         rf._set_result(host, None, None, result)
 
         # simulate the executor running this
@@ -1332,7 +1424,7 @@ class ResponseFutureTests(unittest.TestCase):
         rf._retry_task(False, host)
 
         # it should try with a different host
-        rf.session._pools.get.assert_called_with('ip2')
+        rf.session._pools.get.assert_called_with(self.host2)
 
         result = Mock(spec=IsBootstrappingErrorMessage, info={})
         rf._set_result(host, None, None, result)
@@ -1347,7 +1439,7 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_exponential_retry_policy_fail(self):
         session = self.make_session()
-        pool = session._pools.get.return_value
+        pool = session._pools[self.host1]
         connection = Mock(spec=Connection)
         pool.borrow_connection.return_value = (connection, 1)
 
@@ -1355,10 +1447,10 @@ class ResponseFutureTests(unittest.TestCase):
         message = QueryMessage(query=query, consistency_level=ConsistencyLevel.ONE)
         rf = ResponseFuture(session, message, query, 1, retry_policy=ExponentialBackoffRetryPolicy(2))
         rf.send_request()
-        rf.session._pools.get.assert_any_call('ip1')
+        rf.session._pools.get.assert_any_call(self.host1)
 
         result = Mock(spec=IsBootstrappingErrorMessage, info={})
-        host = Mock()
+        host = self.host1
         rf._set_result(host, None, None, result)
 
         # simulate the executor running this
@@ -1530,8 +1622,10 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_all_pools_shutdown(self):
         session = self.make_basic_session()
-        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1', 'ip2']
-        session._pools.get.return_value.is_shutdown = True
+        policy = session.cluster._default_load_balancing_policy
+        policy.make_query_plan.return_value = [self.host1, self.host2]
+        for pool in session._pools.values():
+            pool.is_shutdown = True
 
         rf = ResponseFuture(session, Mock(), Mock(), 1)
         rf.send_request()
@@ -1540,7 +1634,8 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_control_connection_fallback_disabled_by_default(self):
         session = self.make_basic_session()
-        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
+        policy = session.cluster._default_load_balancing_policy
+        policy.make_query_plan.return_value = [self.host1]
         session._pools = {}
         connection = self.make_control_connection()
         session.cluster.control_connection._connection = connection
@@ -1582,7 +1677,8 @@ class ResponseFutureTests(unittest.TestCase):
                 session = self.make_basic_session()
                 session.cluster.allow_control_connection_query_fallback = \
                     ControlConnectionQueryFallback.Fallback
-                session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
+                policy = session.cluster._default_load_balancing_policy
+                policy.make_query_plan.return_value = [self.host1]
                 session._pools = {}
 
                 connection = self.make_control_connection()
@@ -1901,7 +1997,7 @@ class ResponseFutureTests(unittest.TestCase):
         connection = self.make_control_connection()
         connection.get_request_id.side_effect = [7, 8, 9]
         session1.cluster.control_connection._connection = connection
-        control_host = Mock(endpoint=connection.endpoint)
+        control_host = self.make_host(connection.endpoint)
         session1.cluster.get_control_connection_host.return_value = control_host
 
         rf1 = self.make_response_future(session1)
@@ -1986,7 +2082,7 @@ class ResponseFutureTests(unittest.TestCase):
         connection.get_request_id.side_effect = [7, 8]
         control_connection._connection = connection
         session.cluster.get_control_connection_host.return_value = \
-            Mock(endpoint=connection.endpoint)
+            self.make_host(connection.endpoint)
 
         rf1 = self.make_response_future(session)
         assert rf1.send_request()
@@ -2014,7 +2110,8 @@ class ResponseFutureTests(unittest.TestCase):
         connection = self.make_control_connection()
         connection.get_request_id.side_effect = [7, 8]
         session.cluster.control_connection._connection = connection
-        session.cluster.get_control_connection_host.return_value = Mock(endpoint=connection.endpoint)
+        session.cluster.get_control_connection_host.return_value = (
+            self.make_host(connection.endpoint))
 
         def send_msg(message, request_id, cb=None, **kwargs):
             lock = session.cluster.control_connection._application_query_lock
@@ -2053,7 +2150,8 @@ class ResponseFutureTests(unittest.TestCase):
         session = self._make_fallback_session(keyspace=None)
         connection = self.make_control_connection()
         session.cluster.control_connection._connection = connection
-        session.cluster.get_control_connection_host.return_value = Mock(endpoint=connection.endpoint)
+        session.cluster.get_control_connection_host.return_value = (
+            self.make_host(connection.endpoint))
         connection.send_msg.side_effect = ConnectionBusy('no streams')
 
         rf = self.make_response_future(session)
@@ -2075,7 +2173,8 @@ class ResponseFutureTests(unittest.TestCase):
         session.cluster.control_connection.reconnect = Mock()
         session.cluster.control_connection.return_connection = Mock(
             wraps=session.cluster.control_connection.return_connection)
-        session.cluster.get_control_connection_host.return_value = Mock(endpoint=connection.endpoint)
+        session.cluster.get_control_connection_host.return_value = (
+            self.make_host(connection.endpoint))
         connection.send_msg.side_effect = ConnectionSendError('wake failed', connection.endpoint)
 
         rf = self.make_response_future(session)
@@ -2115,7 +2214,7 @@ class ResponseFutureTests(unittest.TestCase):
         connection.get_request_id.side_effect = [7, 8, 9]
         control_connection._connection = connection
         session.cluster.get_control_connection_host.return_value = \
-            Mock(endpoint=connection.endpoint)
+            self.make_host(connection.endpoint)
 
         first_send_started = Event()
         second_send_started = Event()
@@ -2199,10 +2298,10 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_speculative_timeout_during_first_send_orphans_real_stream(self):
         session = self.make_basic_session()
-        host = Mock(endpoint='ip1')
+        host = self.host1
         session.cluster._default_load_balancing_policy.make_query_plan.return_value = [host]
 
-        pool = Mock(is_shutdown=False)
+        pool = self.make_pool()
         connection = Mock(spec=Connection)
         connection.lock = RLock()
         connection._requests = {}
@@ -2276,7 +2375,8 @@ class ResponseFutureTests(unittest.TestCase):
         connection = self.make_control_connection()
         connection.get_request_id.side_effect = [7, 8, 9]
         session1.cluster.control_connection._connection = connection
-        session1.cluster.get_control_connection_host.return_value = Mock(endpoint=connection.endpoint)
+        session1.cluster.get_control_connection_host.return_value = (
+            self.make_host(connection.endpoint))
 
         assert self.make_response_future(session1).send_request()
         assert connection.send_msg.call_args_list[0][0][0].query == 'USE ks1'
@@ -2318,7 +2418,8 @@ class ResponseFutureTests(unittest.TestCase):
         connection = self.make_control_connection()
         connection.get_request_id.side_effect = [7, 8, 9]
         session1.cluster.control_connection._connection = connection
-        session1.cluster.get_control_connection_host.return_value = Mock(endpoint=connection.endpoint)
+        session1.cluster.get_control_connection_host.return_value = (
+            self.make_host(connection.endpoint))
 
         rf1 = self.make_response_future(session1)
         assert rf1.send_request()
@@ -2448,11 +2549,12 @@ class ResponseFutureTests(unittest.TestCase):
     def test_control_connection_fallback_when_no_usable_pools(self):
         session = self.make_basic_session()
         session.cluster.allow_control_connection_query_fallback = ControlConnectionQueryFallback.SkipPoolCreation
-        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1', 'ip2']
+        policy = session.cluster._default_load_balancing_policy
+        policy.make_query_plan.return_value = [self.host1, self.host2]
         session._pools = {}
         connection = self.make_control_connection()
         session.cluster.control_connection._connection = connection
-        control_host = Mock(endpoint=connection.endpoint)
+        control_host = self.make_host(connection.endpoint)
         session.cluster.get_control_connection_host.return_value = control_host
 
         rf = self.make_response_future(session)
@@ -2474,12 +2576,13 @@ class ResponseFutureTests(unittest.TestCase):
     def test_control_connection_fallback_retries_after_server_error(self):
         session = self.make_basic_session()
         session.cluster.allow_control_connection_query_fallback = ControlConnectionQueryFallback.Fallback
-        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
+        policy = session.cluster._default_load_balancing_policy
+        policy.make_query_plan.return_value = [self.host1]
         session._pools = {}
         connection = self.make_control_connection()
         connection.get_request_id.side_effect = [7, 8]
         session.cluster.control_connection._connection = connection
-        control_host = Mock(endpoint=connection.endpoint)
+        control_host = self.make_host(connection.endpoint)
         session.cluster.get_control_connection_host.return_value = control_host
 
         rf = self.make_response_future(session)
@@ -2513,12 +2616,13 @@ class ResponseFutureTests(unittest.TestCase):
     def test_control_connection_fallback_fetches_next_page(self):
         session = self.make_basic_session()
         session.cluster.allow_control_connection_query_fallback = ControlConnectionQueryFallback.Fallback
-        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
+        policy = session.cluster._default_load_balancing_policy
+        policy.make_query_plan.return_value = [self.host1]
         session._pools = {}
         connection = self.make_control_connection()
         connection.get_request_id.side_effect = [7, 8]
         session.cluster.control_connection._connection = connection
-        control_host = Mock(endpoint=connection.endpoint)
+        control_host = self.make_host(connection.endpoint)
         session.cluster.get_control_connection_host.return_value = control_host
 
         rf = self.make_response_future(session)
@@ -2549,7 +2653,8 @@ class ResponseFutureTests(unittest.TestCase):
         session.cluster.allow_control_connection_query_fallback = ControlConnectionQueryFallback.Fallback
         session.cluster.protocol_version = ProtocolVersion.V4
         session.keyspace = "FooKeyspace"
-        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
+        policy = session.cluster._default_load_balancing_policy
+        policy.make_query_plan.return_value = [self.host1]
         session._pools = {}
         session.submit.side_effect = lambda fn, *args, **kwargs: fn(*args, **kwargs)
 
@@ -2566,7 +2671,7 @@ class ResponseFutureTests(unittest.TestCase):
         connection.keyspace = "FooKeyspace"
         connection.get_request_id.side_effect = [7, 8, 9]
         session.cluster.control_connection._connection = connection
-        control_host = Mock(endpoint=connection.endpoint)
+        control_host = self.make_host(connection.endpoint)
         session.cluster.get_control_connection_host.return_value = control_host
 
         rf = self.make_response_future(session)
@@ -2610,7 +2715,7 @@ class ResponseFutureTests(unittest.TestCase):
         connection = self.make_control_connection()
         connection.send_msg.side_effect = ConnectionBusy()
         session.cluster.control_connection._connection = connection
-        host = Mock(endpoint=connection.endpoint)
+        host = self.make_host(connection.endpoint)
 
         rf = self.make_response_future(session)
         rf.send_request = Mock()
@@ -2679,7 +2784,7 @@ class ResponseFutureTests(unittest.TestCase):
         connection.keyspace = None
         connection.get_request_id.side_effect = [7, 8]
         session.cluster.control_connection._connection = connection
-        host = Mock(endpoint=connection.endpoint)
+        host = self.make_host(connection.endpoint)
 
         rf = self.make_response_future(session)
         prepare_message = PrepareMessage("SELECT * FROM foo")
@@ -2705,10 +2810,11 @@ class ResponseFutureTests(unittest.TestCase):
     def test_control_connection_fallback_not_used_when_pool_can_serve(self):
         session = self.make_basic_session()
         session.cluster.allow_control_connection_query_fallback = ControlConnectionQueryFallback.Fallback
-        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
-        pool = Mock(is_shutdown=False)
+        policy = session.cluster._default_load_balancing_policy
+        policy.make_query_plan.return_value = [self.host1]
+        pool = self.make_pool()
         pool.borrow_connection.side_effect = NoConnectionsAvailable()
-        session._pools = {'ip1': pool}
+        session._pools = {self.host1: pool}
         connection = self.make_control_connection()
         session.cluster.control_connection._connection = connection
 
@@ -2722,13 +2828,14 @@ class ResponseFutureTests(unittest.TestCase):
     def test_control_connection_fallback_orphans_stream_on_timeout(self):
         session = self.make_basic_session()
         session.cluster.allow_control_connection_query_fallback = ControlConnectionQueryFallback.Fallback
-        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
+        policy = session.cluster._default_load_balancing_policy
+        policy.make_query_plan.return_value = [self.host1]
         connection = self.make_control_connection()
         session.cluster.control_connection._connection = connection
         control_host = Host(
             connection.endpoint, SimpleConvictionPolicy, host_id=uuid.uuid4())
         session.cluster.get_control_connection_host.return_value = control_host
-        data_pool = Mock(is_shutdown=False)
+        data_pool = self.make_pool(control_host)
         session._pools = {}
 
         def send_msg(message, request_id, cb, **kwargs):
@@ -2784,7 +2891,7 @@ class ResponseFutureTests(unittest.TestCase):
             (unrelated_cb, unrelated_decoder, unrelated_metadata)
         connection._requests[7] = unrelated_request
         connection.in_flight = 1
-        recovered_pool = Mock(is_shutdown=False)
+        recovered_pool = self.make_pool(rf._current_host)
         session._pools = {rf._current_host: recovered_pool}
 
         rf._on_timeout()
@@ -2804,7 +2911,7 @@ class ResponseFutureTests(unittest.TestCase):
         connection.get_request_id.side_effect = [7, 8]
         control_connection._connection = connection
         session1.cluster.get_control_connection_host.return_value = \
-            Mock(endpoint=connection.endpoint)
+            self.make_host(connection.endpoint)
 
         def send_msg(message, request_id, cb, **kwargs):
             connection._requests[request_id] = \
@@ -2876,13 +2983,15 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_first_pool_shutdown(self):
         session = self.make_basic_session()
-        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1', 'ip2']
+        policy = session.cluster._default_load_balancing_policy
+        policy.make_query_plan.return_value = [self.host1, self.host2]
         # first return a pool with is_shutdown=True, then is_shutdown=False
         pool_shutdown = self.make_pool()
         pool_shutdown.is_shutdown = True
-        pool_ok = self.make_pool()
+        pool_ok = self.make_pool(self.host2)
         pool_ok.is_shutdown = False
-        session._pools.get.side_effect = [pool_shutdown, pool_ok, pool_ok]
+        session._pools = PoolMap({
+            self.host1: pool_shutdown, self.host2: pool_ok})
 
         rf = self.make_response_future(session)
         rf.send_request()
@@ -2895,19 +3004,21 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_timeout_getting_connection_from_pool(self):
         session = self.make_basic_session()
-        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1', 'ip2']
+        policy = session.cluster._default_load_balancing_policy
+        policy.make_query_plan.return_value = [self.host1, self.host2]
 
         # the first pool will raise an exception on borrow_connection()
         exc = NoConnectionsAvailable()
-        first_pool = Mock(is_shutdown=False)
+        first_pool = self.make_pool(self.host1)
         first_pool.borrow_connection.side_effect = exc
 
         # the second pool will return a connection
-        second_pool = Mock(is_shutdown=False)
+        second_pool = self.make_pool(self.host2)
         connection = Mock(spec=Connection)
         second_pool.borrow_connection.return_value = (connection, 1)
 
-        session._pools.get.side_effect = [first_pool, second_pool, second_pool]
+        session._pools = PoolMap({
+            self.host1: first_pool, self.host2: second_pool})
 
         rf = self.make_response_future(session)
         rf.send_request()
@@ -2917,7 +3028,7 @@ class ResponseFutureTests(unittest.TestCase):
         assert rf.result()[0] == expected_result
 
         # make sure the exception is recorded correctly
-        assert rf._errors == {'ip1': exc}
+        assert rf._errors == {self.host1: exc}
 
     def test_callback(self):
         session = self.make_session()
@@ -2942,7 +3053,7 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_errback(self):
         session = self.make_session()
-        pool = session._pools.get.return_value
+        pool = session._pools[self.host1]
         connection = Mock(spec=Connection)
         pool.borrow_connection.return_value = (connection, 1)
 
@@ -2991,7 +3102,7 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_multiple_errbacks(self):
         session = self.make_session()
-        pool = session._pools.get.return_value
+        pool = session._pools[self.host1]
         connection = Mock(spec=Connection)
         pool.borrow_connection.return_value = (connection, 1)
 
@@ -3064,7 +3175,7 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_prepared_query_not_found(self):
         session = self.make_session()
-        pool = session._pools.get.return_value
+        pool = session._pools[self.host1]
         connection = Mock(spec=Connection)
         pool.borrow_connection.return_value = (connection, 1)
 
@@ -3089,7 +3200,7 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_prepared_query_not_found_bad_keyspace(self):
         session = self.make_session()
-        pool = session._pools.get.return_value
+        pool = session._pools[self.host1]
         connection = Mock(spec=Connection)
         pool.borrow_connection.return_value = (connection, 1)
 
@@ -3208,9 +3319,10 @@ class ResponseFutureTests(unittest.TestCase):
         risk getting a response for the old, timed out query.
         """
         session = self.make_basic_session()
-        session.cluster._default_load_balancing_policy.make_query_plan.return_value = [Mock(endpoint='ip1'), Mock(endpoint='ip2')]
+        policy = session.cluster._default_load_balancing_policy
+        policy.make_query_plan.return_value = [self.host1, self.host2]
         pool = self.make_pool()
-        session._pools.get.return_value = pool
+        session._pools[self.host1] = pool
         connection = Mock(spec=Connection, lock=RLock(), _requests={}, request_ids=deque(),
                 orphaned_request_ids=set(), orphaned_threshold=256, in_flight=3,
                 is_control_connection=False)
@@ -3242,10 +3354,10 @@ class ResponseFutureTests(unittest.TestCase):
         """
         session = self.make_basic_session()
         pool = self.make_pool()
-        session._pools.get.return_value = pool
+        session._pools[self.host1] = pool
         
         # Create a specific host
-        specific_host = Mock()
+        specific_host = self.host1
         
         connection = Mock(spec=Connection)
         pool.borrow_connection.return_value = (connection, 1)
@@ -3328,7 +3440,7 @@ class ResponseFutureTests(unittest.TestCase):
             # mirror _create_response_future: snapshot the metadata paired with the id
             bound_result_metadata=prepared_statement.result_metadata,
         )
-        pool = session._pools.get.return_value
+        pool = session._pools[self.host1]
         pool.borrow_connection.return_value = (connection, 1)
         return rf
 
@@ -3345,7 +3457,8 @@ class ResponseFutureTests(unittest.TestCase):
         profile.serial_consistency_level = None
         profile.continuous_paging_options = continuous_paging_options
         profile.speculative_execution_policy = None
-        profile.load_balancing_policy.make_query_plan.return_value = ['ip1']
+        profile.load_balancing_policy.make_query_plan.return_value = (
+            [self.host1])
         session.default_fetch_size = 5000
         session.use_client_timestamp = False
         bound = BoundStatement(prepared_statement).bind(())
@@ -3363,7 +3476,7 @@ class ResponseFutureTests(unittest.TestCase):
         prepared_statement.result_metadata and prepared_statement.result_metadata_id.
         """
         session = self.make_session()
-        pool = session._pools.get.return_value
+        pool = session._pools[self.host1]
         connection = Mock(spec=Connection)
         connection.protocol_version = 4
         connection.features = Mock()
@@ -3396,7 +3509,7 @@ class ResponseFutureTests(unittest.TestCase):
         prepared_statement's cached metadata untouched.
         """
         session = self.make_session()
-        pool = session._pools.get.return_value
+        pool = session._pools[self.host1]
         connection = Mock(spec=Connection)
         connection.protocol_version = 4
         connection.features = Mock()
@@ -3431,7 +3544,7 @@ class ResponseFutureTests(unittest.TestCase):
         detects the mismatch, and the driver recovers with full metadata.
         """
         session = self.make_session()
-        pool = session._pools.get.return_value
+        pool = session._pools[self.host1]
         connection = Mock(spec=Connection)
         connection.protocol_version = 4
         connection.features = Mock()
@@ -3465,7 +3578,7 @@ class ResponseFutureTests(unittest.TestCase):
         the warning branch is taken and the cached pair is left unchanged.
         """
         session = self.make_session()
-        pool = session._pools.get.return_value
+        pool = session._pools[self.host1]
         connection = Mock(spec=Connection)
         connection.protocol_version = 4
         connection.features = Mock()
@@ -3501,7 +3614,7 @@ class ResponseFutureTests(unittest.TestCase):
         avoid decoding rows against stale columns.
         """
         session = self.make_session()
-        pool = session._pools.get.return_value
+        pool = session._pools[self.host1]
         connection = Mock(spec=Connection)
         connection.protocol_version = 4
         connection.features = Mock()
@@ -3535,7 +3648,7 @@ class ResponseFutureTests(unittest.TestCase):
         in between re-arms the warning so a later recurrence is logged again.
         """
         session = self.make_session()
-        pool = session._pools.get.return_value
+        pool = session._pools[self.host1]
         connection = Mock(spec=Connection)
         connection.protocol_version = 4
         connection.features = Mock()
@@ -3696,11 +3809,17 @@ class ResponseFutureTests(unittest.TestCase):
     def test_previous_page_response_does_not_complete_next_page(self):
         # A late speculative reply or retry for page N must not complete page N+1.
         session = self.make_session()
-        connection = session._pools.get.return_value.borrow_connection.return_value[0]
+        connection = (
+            session._pools[self.host1].borrow_connection.return_value[0])
         rf = self.make_response_future(session)
         rf.send_request()
         rf.send_request()  # speculative execution of page 1
-        winner_cb, late_cb = [c.kwargs['cb'] for c in connection.send_msg.call_args_list]
+        connection.send_msg.assert_called_once()
+        winner_cb = connection.send_msg.call_args.kwargs['cb']
+        late_connection = (
+            session._pools[self.host2].borrow_connection.return_value[0])
+        late_connection.send_msg.assert_called_once()
+        late_cb = late_connection.send_msg.call_args.kwargs['cb']
         page1 = self.make_mock_response(['x'], [(1,)])
         page1.paging_state = b'page-2'
         page1.custom_payload = None
@@ -3726,14 +3845,16 @@ class ResponseFutureTests(unittest.TestCase):
         speculative executions sending the same message on another connection.
         """
         session = self.make_basic_session()
-        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
-        session._pools.get.return_value = self.make_pool()
+        policy = session.cluster._default_load_balancing_policy
+        policy.make_query_plan.return_value = [self.host1]
+        session._pools[self.host1] = self.make_pool()
 
         connection = Mock(spec=Connection)
         connection.protocol_version = 4
         connection.features = Mock()
         connection.features.use_metadata_id = True
-        session._pools.get.return_value.borrow_connection.return_value = (connection, 1)
+        session._pools[self.host1].borrow_connection.return_value = (
+            (connection, 1))
 
         ps = self._make_prepared_statement([('ks', 'tbl', 'col', Mock())], b'meta_hash')
         rf = self._make_execute_response_future(session, connection, ps)
@@ -3758,14 +3879,16 @@ class ResponseFutureTests(unittest.TestCase):
         version's metadata — the torn read the atomic pair was meant to prevent.
         """
         session = self.make_basic_session()
-        session.cluster._default_load_balancing_policy.make_query_plan.return_value = ['ip1']
-        session._pools.get.return_value = self.make_pool()
+        policy = session.cluster._default_load_balancing_policy
+        policy.make_query_plan.return_value = [self.host1]
+        session._pools[self.host1] = self.make_pool()
 
         connection = Mock(spec=Connection)
         connection.protocol_version = 4
         connection.features = Mock()
         connection.features.use_metadata_id = True
-        session._pools.get.return_value.borrow_connection.return_value = (connection, 1)
+        session._pools[self.host1].borrow_connection.return_value = (
+            (connection, 1))
 
         meta_v1 = [('ks', 'tbl', 'col_v1', Mock())]
         ps = self._make_prepared_statement(meta_v1, b'id1')
