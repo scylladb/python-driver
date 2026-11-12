@@ -25,6 +25,7 @@ socket-level code under test needs.
 import gc
 import socket
 import ssl
+import sys
 import tempfile
 import threading
 import time
@@ -150,6 +151,20 @@ class TlsResumptionTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        if sys.implementation.name == 'pypy':
+            # PyPy's CFFI type parser can cache another thread's type
+            # during concurrent first use (pypy/pypy commit
+            # babac47d6ad4). Exercise both I/O paths before starting the
+            # threaded TLS server, so the required types are cached
+            # without racing read against write.
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            connection = context.wrap_bio(
+                ssl.MemoryBIO(), ssl.MemoryBIO(), server_hostname='localhost')
+            with pytest.raises(ssl.SSLWantReadError):
+                connection.write(b'ping')
+            with pytest.raises(ssl.SSLWantReadError):
+                connection.read(4)
+
         cls._cert_dir = tempfile.TemporaryDirectory(prefix='tls_resumption_')
         cls.addClassCleanup(cls._cert_dir.cleanup)
         cls._cert_path, cls._key_path = write_self_signed_cert(cls._cert_dir.name)
