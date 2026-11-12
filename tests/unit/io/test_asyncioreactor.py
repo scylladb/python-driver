@@ -59,7 +59,16 @@ class AsyncioTimerTests(TimerTestMixin, unittest.TestCase):
         socket_patcher.start()
 
         old_selector = AsyncioConnection._loop._selector
-        AsyncioConnection._loop._selector = MagicMock(spec=selectors.BaseSelector)
+        mock_selector = MagicMock(spec=selectors.BaseSelector)
+
+        def select(timeout=None):
+            # Cap idle sleep at 1 ms because this selector cannot report
+            # self-pipe wakeups for cross-thread work.
+            time.sleep(.001 if timeout is None else min(timeout, .001))
+            return []
+
+        mock_selector.select.side_effect = select
+        AsyncioConnection._loop._selector = mock_selector
 
         def reset_selector():
             AsyncioConnection._loop._selector = old_selector
@@ -67,6 +76,25 @@ class AsyncioTimerTests(TimerTestMixin, unittest.TestCase):
         self.addCleanup(reset_selector)
 
         super(AsyncioTimerTests, self).setUp()
+
+    def test_idle_loop_does_not_busy_spin(self):
+        selector = AsyncioConnection._loop._selector
+
+        async def count_idle_polls():
+            # Measure on the reactor thread so unittest scheduling
+            # delays cannot inflate the number of idle polls.
+            start = selector.select.call_count
+            await asyncio.sleep(.05)
+            return selector.select.call_count - start
+
+        measurement = asyncio.run_coroutine_threadsafe(
+            count_idle_polls(), AsyncioConnection._loop)
+        try:
+            # A yielding loop normally polls about 50 times in this
+            # interval; a bare selector mock polls thousands of times.
+            assert measurement.result(timeout=5) < 500
+        finally:
+            measurement.cancel()
 
     def test_timer_cancellation(self):
         # Various lists for tracking callback stage
