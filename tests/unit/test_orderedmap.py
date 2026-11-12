@@ -20,6 +20,7 @@ import uuid
 from cassandra.util import OrderedMap, OrderedMapSerializedKey
 from cassandra.cqltypes import (EMPTY, DateType, InetAddressType, Int32Type, UTF8Type,
                                UUIDType, lookup_casstype)
+from cassandra.cqlengine.columns import Text
 from tests.util import assertListEqual
 import pytest
 
@@ -273,14 +274,14 @@ class OrderedMapSerializedKeyTest(unittest.TestCase):
             with self.subTest(error_type=error_type):
                 error = error_type('serializer failed')
 
-                class FailingType(UTF8Type):
+                class _FailingType(UTF8Type):
                     @staticmethod
                     def serialize(val, protocol_version):
                         if val == 'bad':
                             raise error
                         return UTF8Type.serialize(val, protocol_version)
 
-                om = OrderedMapSerializedKey(FailingType, 3)
+                om = OrderedMapSerializedKey(_FailingType, 3)
                 om['one'] = 1
                 om['two'] = 2
 
@@ -300,3 +301,9 @@ class OrderedMapSerializedKeyTest(unittest.TestCase):
                 assert list(om.items()) == [('two', 2)]
                 assert om['two'] == 2
                 assert 'one' not in om
+
+        # Test-only serializers must not replace the normal text type globally.
+        with self.subTest(check='text type identity'):
+            assert Text().cql_type is UTF8Type
+        with self.subTest(check='text serialization'):
+            assert Text().cql_type.serialize('bad', 3) == b'bad'
