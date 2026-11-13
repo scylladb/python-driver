@@ -132,9 +132,8 @@ class TestTabletsRoutingV2Integration:
         session.execute("CREATE TABLE test_v2_sc.t (pk int PRIMARY KEY, v int)")
         prepared_sc = session.prepare("INSERT INTO test_v2_sc.t (pk, v) VALUES (?, ?)")
         # Writes to a strongly-consistent (Raft) table are rejected unless they
-        # use QUORUM/LOCAL_QUORUM. The session default is LOCAL_ONE, so request
-        # LOCAL_QUORUM for these inserts; it propagates to every statement bound
-        # from this prepared one.
+        # use QUORUM/LOCAL_QUORUM. Set LOCAL_QUORUM explicitly for these inserts;
+        # it propagates to every statement bound from this prepared one.
         prepared_sc.consistency_level = ConsistencyLevel.LOCAL_QUORUM
         for i in range(50):
             session.execute(prepared_sc.bind((i, i)))
@@ -525,8 +524,7 @@ class TestTabletsRoutingV2Integration:
         select = self.session.prepare("SELECT v FROM test_v2_sc.t WHERE pk = ?")
         bound = select.bind([2])
         # Leader-first routing only applies to requests that actually need the
-        # leader, so request LOCAL_QUORUM (a strong read). The session default is
-        # LOCAL_ONE, which the policy would deliberately spread across replicas.
+        # leader, so request LOCAL_QUORUM explicitly (a strong read).
         bound.consistency_level = ConsistencyLevel.LOCAL_QUORUM
 
         tablet = self._ensure_cached(bound)

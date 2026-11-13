@@ -375,7 +375,8 @@ on the wire has no whitespace:
       },
       "query": {
         "defaults": {
-          "consistency": "LOCAL_ONE",
+          "consistency": "LOCAL_QUORUM",
+          "serial-consistency": "LOCAL_SERIAL",
           "idempotence": false,
           "request": {"timeout-ms": 10000},
           "page": {"size": 5000},

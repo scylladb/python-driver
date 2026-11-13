@@ -1289,7 +1289,8 @@ def query_report(test, profile=None, **cluster_kwargs):
 class QueryDefaultsTest(unittest.TestCase):
     def test_defaults(self):
         assert query_report(self)['defaults'] == {
-            'consistency': 'LOCAL_ONE',
+            'consistency': 'LOCAL_QUORUM',
+            'serial-consistency': 'LOCAL_SERIAL',
             'idempotence': False,
             'request': {'timeout-ms': 10000},
             'page': {'size': 5000},
@@ -1325,7 +1326,8 @@ class QueryDefaultsTest(unittest.TestCase):
         Unset means the server's own default applies, which is not this driver's
         to describe.
         """
-        assert 'serial-consistency' not in query_report(self)['defaults']
+        assert 'serial-consistency' not in query_report(
+            self, ExecutionProfile(serial_consistency_level=None))['defaults']
 
     def test_a_level_that_is_not_serial_is_left_out_and_warned_about(self):
         """
@@ -1437,7 +1439,7 @@ class QueryDefaultsTest(unittest.TestCase):
             built._driver_config_reporter._build_report(built, is_scylla=True))
 
         assert 'client-timestamps' not in report['query']['defaults']
-        assert report['query']['defaults']['consistency'] == 'LOCAL_ONE'
+        assert report['query']['defaults']['consistency'] == 'LOCAL_QUORUM'
 
 
 class RetryReportTest(unittest.TestCase):
@@ -2354,8 +2356,8 @@ class ProfileSourceTest(unittest.TestCase):
                 cluster._driver_config_reporter._build_report(cluster, is_scylla=True))
 
         defaults = report['query']['defaults']
-        assert defaults['consistency'] == 'LOCAL_ONE'
-        assert 'serial-consistency' not in defaults
+        assert defaults['consistency'] == 'LOCAL_QUORUM'
+        assert defaults['serial-consistency'] == 'LOCAL_SERIAL'
         assert defaults['request']['timeout-ms'] == 10000
 
     def test_legacy_defaults_follow_the_session_class(self):
@@ -2523,7 +2525,7 @@ class UnnameableConsistencyTest(unittest.TestCase):
         consistency is a required key, so no conformant report describes such a
         configuration. Naming the driver's default instead would tell an
         operator that a client which cannot execute a query is querying at
-        LOCAL_ONE.
+        LOCAL_QUORUM.
         """
         for level in (None, 99):
             options = {}

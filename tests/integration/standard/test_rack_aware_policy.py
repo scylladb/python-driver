@@ -1,6 +1,7 @@
 import logging
 import unittest
 
+from cassandra import ConsistencyLevel
 from cassandra.cluster import Cluster
 from cassandra.policies import ConstantReconnectionPolicy, RackAwareRoundRobinPolicy
 
@@ -62,6 +63,9 @@ class RackAwareRoundRobinPolicyTests(unittest.TestCase):
             """
             SELECT pk, ck, v FROM test1.table1 WHERE pk = ?
             """)
+        # Keep testing coordinator failover after stopping two local nodes,
+        # which may leave a partition without a local quorum.
+        prepared.consistency_level = ConsistencyLevel.LOCAL_ONE
 
         for i in range (10):
             bound = prepared.bind([i])

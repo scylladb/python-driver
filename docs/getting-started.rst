@@ -396,7 +396,8 @@ The consistency level used for a query determines how many of the
 replicas of the data you are interacting with need to respond for
 the query to be considered a success.
 
-By default, :attr:`.ConsistencyLevel.LOCAL_ONE` will be used for all queries.
+By default, :attr:`.ConsistencyLevel.LOCAL_QUORUM` will be used for all queries.
+This requires a quorum of replicas in the local data center to respond.
 You can specify a different default by setting the :attr:`.ExecutionProfile.consistency_level`
 for the execution profile with key :data:`~.cluster.EXEC_PROFILE_DEFAULT`.
 To specify a different consistency level per request, wrap queries

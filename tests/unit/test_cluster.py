@@ -5603,9 +5603,9 @@ class SessionTest(unittest.TestCase):
         s = Session(c, [Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())])
         c.connection_class.initialize_reactor()
 
-        # default is None
+        # default is LOCAL_SERIAL
         default_profile = c.profile_manager.default
-        assert default_profile.serial_consistency_level is None
+        assert default_profile.serial_consistency_level == ConsistencyLevel.LOCAL_SERIAL
 
         for cl in (None, ConsistencyLevel.LOCAL_SERIAL, ConsistencyLevel.SERIAL):
             s.get_execution_profile(EXEC_PROFILE_DEFAULT).serial_consistency_level = cl
@@ -5632,8 +5632,8 @@ class SessionTest(unittest.TestCase):
         self.addCleanup(c.shutdown)
         s = Session(c, [Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())])
         c.connection_class.initialize_reactor()
-        # default is None
-        assert s.default_serial_consistency_level is None
+        # default is LOCAL_SERIAL
+        assert s.default_serial_consistency_level == ConsistencyLevel.LOCAL_SERIAL
 
         # Should fail
         with pytest.raises(ValueError):
@@ -6330,10 +6330,10 @@ class ExecutionProfileTest(unittest.TestCase):
         session = Session(cluster, hosts=[Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())])
         assert session.default_timeout == 10.0
         assert cluster.profile_manager.default.request_timeout == 10.0
-        assert session.default_consistency_level == ConsistencyLevel.LOCAL_ONE
-        assert cluster.profile_manager.default.consistency_level == ConsistencyLevel.LOCAL_ONE
-        assert session.default_serial_consistency_level is None
-        assert cluster.profile_manager.default.serial_consistency_level is None
+        assert session.default_consistency_level == ConsistencyLevel.LOCAL_QUORUM
+        assert cluster.profile_manager.default.consistency_level == ConsistencyLevel.LOCAL_QUORUM
+        assert session.default_serial_consistency_level == ConsistencyLevel.LOCAL_SERIAL
+        assert cluster.profile_manager.default.serial_consistency_level == ConsistencyLevel.LOCAL_SERIAL
         assert session.row_factory == named_tuple_factory
         assert cluster.profile_manager.default.row_factory == named_tuple_factory
 

@@ -1,5 +1,6 @@
 import pytest
 
+from cassandra import ConsistencyLevel
 from cassandra.cluster import Cluster, EXEC_PROFILE_DEFAULT, ExecutionProfile
 from cassandra.policies import ConstantReconnectionPolicy, RoundRobinPolicy, TokenAwarePolicy
 
@@ -9,7 +10,9 @@ from tests.unit.test_host_connection_pool import LOGGER
 
 
 def setup_module():
-    use_cluster('tablets', [3], start=True, set_keyspace=False)
+    # Keep server read balancing from obscuring the driver's routing in traces.
+    use_cluster('tablets', [3], start=True, set_keyspace=False,
+                configuration_options={'cache_hit_rate_read_balancing': False})
 
 
 class TestTabletsIntegration:
@@ -48,9 +51,18 @@ class TestTabletsIntegration:
         assert len(host_set) == expected
         assert 'locally' in "\n".join([event.activity for event in events])
 
-    def get_tablet_record(self, query):
-        metadata = self.session.cluster.metadata
+    def get_tablet_record(self, query, session=None):
+        metadata = (session or self.session).cluster.metadata
         return metadata._tablets.get_tablet_for_key(query.keyspace, query.table, metadata.token_map.token_class.from_key(query.routing_key))
+
+    def warm_up_tablet(self, session, bound):
+        # A nonreplica coordinator supplies routing information for this key.
+        for host in session.cluster.metadata.all_hosts():
+            session.execute(bound, host=host)
+            record = self.get_tablet_record(bound, session)
+            if record is not None:
+                return record
+        raise AssertionError("failed to find tablet record")
 
     def verify_same_shard_in_tracing(self, results):
         traces = results.get_query_trace(max_wait_sec=10)
@@ -94,7 +106,8 @@ class TestTabletsIntegration:
 
         session.execute(
             """
-            CREATE TABLE test1.table1 (pk int, ck int, v int, PRIMARY KEY (pk, ck));
+            CREATE TABLE test1.table1 (pk int, ck int, v int, PRIMARY KEY (pk, ck))
+            WITH speculative_retry = 'NONE';
             """)
 
     @staticmethod
@@ -113,8 +126,11 @@ class TestTabletsIntegration:
             """
             SELECT pk, ck, v FROM test1.table1 WHERE pk = ?
             """)
+        # Trace a single replica to check the selected shard.
+        prepared.consistency_level = ConsistencyLevel.LOCAL_ONE
 
         bound = prepared.bind([(2)])
+        self.warm_up_tablet(session, bound)
         results = session.execute(bound, trace=True)
         assert results == [(2, 2, 0)]
         if verify_in_tracing:
@@ -125,8 +141,11 @@ class TestTabletsIntegration:
             """
             SELECT pk, ck, v FROM test1.table1 WHERE pk = ?
             """)
+        # The trace below must contain only the selected replica's host.
+        prepared.consistency_level = ConsistencyLevel.LOCAL_ONE
 
         bound = prepared.bind([(2)])
+        self.warm_up_tablet(session, bound)
         results = session.execute(bound, trace=True)
         assert results == [(2, 2, 0)]
         if verify_in_tracing:
@@ -139,6 +158,7 @@ class TestTabletsIntegration:
             """)
 
         bound = prepared.bind([(51), (1), (2)])
+        self.warm_up_tablet(session, bound)
         results = session.execute(bound, trace=True)
         if verify_in_tracing:
             self.verify_same_shard_in_tracing(results)
@@ -150,6 +170,7 @@ class TestTabletsIntegration:
             """)
 
         bound = prepared.bind([(52), (1), (2)])
+        self.warm_up_tablet(session, bound)
         results = session.execute(bound, trace=True)
         if verify_in_tracing:
             self.verify_hosts_in_tracing(results, 2)
@@ -171,8 +192,8 @@ class TestTabletsIntegration:
                           reconnection_policy=ConstantReconnectionPolicy(1))
         session = cluster.connect()
         try:
-            self.query_data_host_select(self.session)
-            self.query_data_host_insert(self.session)
+            self.query_data_host_select(session)
+            self.query_data_host_insert(session)
         finally:
             session.shutdown()
             cluster.shutdown()
@@ -277,22 +298,12 @@ class TestTabletsIntegration:
 
 
     def run_tablets_invalidation_test(self, invalidate, keyspace="test1", table="table1"):
-        # Make sure driver holds tablet info
-        # By landing query to the host that is not in replica set
         bound = self.session.prepare(
             f"""
             SELECT pk, ck, v FROM {keyspace}.{table} WHERE pk = ?
             """).bind([(2)])
 
-        rec = None
-        for host in self.cluster.metadata.all_hosts():
-            self.session.execute(bound, host=host)
-            rec = self.get_tablet_record(bound)
-            if rec is not None:
-                break
-
-        assert rec is not None, "failed to find tablet record"
-
+        rec = self.warm_up_tablet(self.session, bound)
         invalidate(rec)
 
         # Wait for tablets information to be purged (invalidation is async)

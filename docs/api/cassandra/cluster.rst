@@ -118,12 +118,12 @@ Clusters and Sessions
 .. autoclass:: ControlConnectionQueryFallback
    :members:
 
-.. autoclass:: ExecutionProfile (load_balancing_policy=<object object>, retry_policy=None, consistency_level=ConsistencyLevel.LOCAL_ONE, serial_consistency_level=None, request_timeout=10.0, row_factory=<function named_tuple_factory>, speculative_execution_policy=None)
+.. autoclass:: ExecutionProfile (load_balancing_policy=<object object>, retry_policy=None, consistency_level=ConsistencyLevel.LOCAL_QUORUM, serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL, request_timeout=10.0, row_factory=<function named_tuple_factory>, speculative_execution_policy=None)
    :members:
    :exclude-members: consistency_level
 
    .. autoattribute:: consistency_level
-      :annotation: = LOCAL_ONE
+      :annotation: = LOCAL_QUORUM
 
 .. autodata:: EXEC_PROFILE_DEFAULT
    :annotation:
@@ -134,10 +134,10 @@ Clusters and Sessions
       :annotation: = 10.0
 
    .. autoattribute:: default_consistency_level
-      :annotation: = LOCAL_ONE
+      :annotation: = LOCAL_QUORUM
 
    .. autoattribute:: default_serial_consistency_level
-      :annotation: = None
+      :annotation: = LOCAL_SERIAL
 
    .. autoattribute:: row_factory
       :annotation: = <function named_tuple_factory>
