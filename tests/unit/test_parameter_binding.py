@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import unittest
+from decimal import Decimal
 import pytest
 
 from cassandra.encoder import Encoder
@@ -70,6 +71,12 @@ class ParamBindingTest(unittest.TestCase):
     def test_float_precision(self):
         f = 3.4028234663852886e+38
         assert float(bind_params("%s", (f,), Encoder())) == f
+
+    def test_decimal_precision(self):
+        d = Decimal('1234567890.123456789012345678')
+        assert bind_params("%s", (d,), Encoder()) == '1234567890.123456789012345678'
+        assert bind_params("%s", (Decimal('1.50'),), Encoder()) == '1.50'
+        assert bind_params("%s", (Decimal('-Infinity'),), Encoder()) == '-Infinity'
 
 class BoundStatementTestV3(unittest.TestCase):
 
