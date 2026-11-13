@@ -131,6 +131,98 @@ def test_pool_results_cannot_publish_after_coordinator_close(completion):
     callback.assert_not_called()
 
 
+@pytest.mark.parametrize('event', ['down', 'remove'])
+@pytest.mark.parametrize('outcome', ['success', 'exception', 'cancelled'])
+def test_pool_removal_reconciliation_waits_for_lifecycle_delivery(
+        topology, event, outcome):
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    session = new_session_with_pool_state()
+    session.cluster = cluster
+    cleanup = Future()
+    session.remove_pool = Mock(return_value=cleanup)
+    observations = []
+    session.update_created_pools = Mock(
+        side_effect=lambda: observations.append(('reconcile', get_ident())))
+    entered, release = Event(), Event()
+
+    def hold_drainer():
+        entered.set()
+        assert release.wait(5)
+        observations.append(('notification', get_ident()))
+
+    def finish_cleanup():
+        if outcome == 'exception':
+            cleanup.set_exception(RuntimeError('pool shutdown failed'))
+        elif outcome == 'cancelled':
+            cleanup.cancel()
+        else:
+            cleanup.set_result(None)
+
+    drainer = Thread(target=lambda: cluster._lifecycle.submit(hold_drainer))
+    worker = Thread(target=finish_cleanup)
+    drainer.start()
+    try:
+        assert entered.wait(5)
+        getattr(session, 'on_' + event)(host)
+        worker.start()
+        worker.join(5)
+        assert not worker.is_alive(), 'pool cleanup waited for lifecycle delivery'
+        session.update_created_pools.assert_not_called()
+    finally:
+        release.set()
+        drainer.join(5)
+        if worker.ident is not None:
+            worker.join(5)
+
+    assert not drainer.is_alive()
+    session.remove_pool.assert_called_once_with(host)
+    session.update_created_pools.assert_called_once_with()
+    assert observations == [
+        ('notification', drainer.ident), ('reconcile', drainer.ident)]
+
+
+@pytest.mark.parametrize('completion', ['queued', 'late'])
+def test_pool_removal_reconciliation_is_abandoned_on_close(topology, completion):
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    session = new_session_with_pool_state()
+    session.cluster = cluster
+    cleanup = Future()
+    session.remove_pool = Mock(return_value=cleanup)
+    session.update_created_pools = Mock()
+    session.on_down(host)
+
+    with cluster._lifecycle.transaction():
+        if completion == 'queued':
+            cleanup.set_result(None)
+        cluster._lifecycle.close()
+    if completion == 'late':
+        cleanup.set_result(None)
+
+    session.update_created_pools.assert_not_called()
+
+
+def test_completed_pool_removal_reconciliation_joins_lifecycle_queue(topology):
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    session = new_session_with_pool_state()
+    session.cluster = cluster
+    cleanup = Future()
+    cleanup.set_result(None)
+    session.remove_pool = Mock(return_value=cleanup)
+    order = []
+    session.update_created_pools = lambda: order.append('reconcile')
+
+    def notification():
+        session.on_down(host)
+        order.append('notification')
+
+    cluster._lifecycle.submit(notification)
+
+    assert order == ['notification', 'reconcile']
+
+
 @pytest.mark.parametrize('event', ['up', 'add'])
 @pytest.mark.parametrize('outcome', ['success', 'failure', 'exception', 'cancelled'])
 def test_host_readiness_waits_for_all_session_pool_results(topology, event, outcome):

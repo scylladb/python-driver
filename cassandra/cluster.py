@@ -5037,7 +5037,10 @@ class Session(object):
         """
         future = self.remove_pool(host)
         if future:
-            future.add_done_callback(lambda f: self.update_created_pools())
+            # Queue this pool-removal completion through the lifecycle FIFO so
+            # its reconciliation follows active host notifications.
+            future.add_done_callback(
+                lambda f: self.cluster._lifecycle.submit(self.update_created_pools))
 
     def on_remove(self, host, trigger_reconciliation=True):
         """Remove this host's pool and optionally reconcile remaining pools."""
