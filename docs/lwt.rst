@@ -7,6 +7,17 @@ preceding the transaction.
 
 For pertinent execution parameters, see :attr:`.Statement.serial_consistency_level`.
 
+By default, conditional writes use :attr:`.ConsistencyLevel.LOCAL_SERIAL` for
+the serial (Paxos) phase and :attr:`.ConsistencyLevel.LOCAL_QUORUM` for the
+learn phase. The default serial scope is the local data center. Applications
+that require serial coordination across data centers should explicitly set
+:attr:`.ConsistencyLevel.SERIAL` on the statement or execution profile.
+
+Simple, prepared, bound, and batch statements inherit these settings from the
+selected execution profile, or from the session in legacy configuration mode.
+For a batch, set consistency on the batch itself; individual statements added
+to it do not override the batch's consistency.
+
 This section discusses working with specialized result sets returned by the server for LWTs,
 and how to work with them using the driver.
 

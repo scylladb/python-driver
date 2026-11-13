@@ -3,6 +3,14 @@ Unreleased
 
 Compatibility Changes
 ---------------------
+* Query defaults are now ``LOCAL_QUORUM`` for ordinary consistency and
+  ``LOCAL_SERIAL`` for the serial phase of lightweight transactions, in both
+  execution profiles and legacy sessions. This requires a local quorum and
+  limits the default LWT serial scope to the local data center. Explicit
+  application settings are preserved. To retain the previous defaults,
+  configure ``LOCAL_ONE`` and ``SERIAL`` explicitly, except on DataStax
+  Apollo/Astra clusters: those already used ``LOCAL_QUORUM`` and need only
+  ``SERIAL`` to retain their previous behavior (#1253).
 * Custom load-balancing query plans must yield ``Host`` instances. Invalid
   entries now complete the request with ``TypeError``, including during
   retries and speculative execution, instead of using test-only request

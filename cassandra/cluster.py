@@ -586,14 +586,16 @@ class ExecutionProfile(object):
     Defaults to :class:`.RetryPolicy` if not specified
     """
 
-    consistency_level = ConsistencyLevel.LOCAL_ONE
+    consistency_level = ConsistencyLevel.LOCAL_QUORUM
     """
     :class:`.ConsistencyLevel` used when not specified on a :class:`.Statement`.
     """
 
-    serial_consistency_level = None
+    serial_consistency_level = ConsistencyLevel.LOCAL_SERIAL
     """
     Serial :class:`.ConsistencyLevel` used when not specified on a :class:`.Statement` (for LWT conditional statements).
+    Defaults to :attr:`.ConsistencyLevel.LOCAL_SERIAL`. Set to :const:`None` to
+    omit the serial consistency field and use the server's ``SERIAL`` default.
     """
 
     request_timeout = 10.0
@@ -640,7 +642,7 @@ class ExecutionProfile(object):
     _consistency_level_explicit = False
 
     def __init__(self, load_balancing_policy=_NOT_SET, retry_policy=None,
-                 consistency_level=_NOT_SET, serial_consistency_level=None,
+                 consistency_level=_NOT_SET, serial_consistency_level=ConsistencyLevel.LOCAL_SERIAL,
                  request_timeout=10.0, row_factory=named_tuple_factory, speculative_execution_policy=None,
                  continuous_paging_options=None):
 
@@ -653,7 +655,7 @@ class ExecutionProfile(object):
 
         if consistency_level is _NOT_SET:
             self._consistency_level_explicit = False
-            self.consistency_level = ConsistencyLevel.LOCAL_ONE
+            self.consistency_level = ConsistencyLevel.LOCAL_QUORUM
         else:
             self._consistency_level_explicit = True
             self.consistency_level = consistency_level
@@ -3398,7 +3400,7 @@ class Session(object):
     def default_timeout(self, timeout):
         self._validate_set_legacy_config('default_timeout', timeout)
 
-    _default_consistency_level = ConsistencyLevel.LOCAL_ONE
+    _default_consistency_level = ConsistencyLevel.LOCAL_QUORUM
 
     @property
     def default_consistency_level(self):
@@ -3407,12 +3409,14 @@ class Session(object):
         The default :class:`~ConsistencyLevel` for operations executed through
         this session.  This default may be overridden by setting the
         :attr:`~.Statement.consistency_level` on individual statements.
+        Defaults to :attr:`~ConsistencyLevel.LOCAL_QUORUM`.
 
         .. versionadded:: 1.2.0
 
         .. versionchanged:: 3.0.0
 
             default changed from ONE to LOCAL_ONE
+
         """
         return self._default_consistency_level
 
@@ -3426,7 +3430,7 @@ class Session(object):
              , DeprecationWarning)
         self._validate_set_legacy_config('default_consistency_level', cl)
 
-    _default_serial_consistency_level = None
+    _default_serial_consistency_level = ConsistencyLevel.LOCAL_SERIAL
 
     @property
     def default_serial_consistency_level(self):
@@ -3434,8 +3438,12 @@ class Session(object):
         The default :class:`~ConsistencyLevel` for serial phase of  conditional updates executed through
         this session.  This default may be overridden by setting the
         :attr:`~.Statement.serial_consistency_level` on individual statements.
+        Defaults to :attr:`~ConsistencyLevel.LOCAL_SERIAL`. Set to :const:`None`
+        to omit the serial consistency field and use the server's ``SERIAL``
+        default.
 
         Only valid for ``protocol_version >= 2``.
+
         """
         return self._default_serial_consistency_level
 

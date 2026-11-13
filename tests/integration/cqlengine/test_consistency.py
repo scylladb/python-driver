@@ -114,7 +114,7 @@ class TestConsistency(BaseConsistencyTest):
 
     def test_default_consistency(self):
         # verify global assumed default
-        assert Session._default_consistency_level == ConsistencyLevel.LOCAL_ONE
+        assert Session._default_consistency_level == ConsistencyLevel.LOCAL_QUORUM
 
         # verify that this session default is set according to connection.setup
         # assumes tests/cqlengine/__init__ setup uses CL.ONE
