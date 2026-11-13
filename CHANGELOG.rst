@@ -32,6 +32,15 @@ Removed
   ``get_schema_parser()`` is now ignored, and the driver no longer queries
   ``system.local.dse_version`` when ``release_version`` is unknown.
 
+Features
+--------
+* Extend ``TABLETS_ROUTING_V2`` to ``BATCH`` requests: when a ``BatchStatement``
+  is routed by a prepared statement whose partition key is bound by markers,
+  ``BATCH`` requests sent over a V2 connection name that statement, as long as
+  the batch still targets its keyspace and table, and the routing information
+  the server returns for that statement's tablet is cached under its table
+  (SCYLLADB-4807).
+
 Bug Fixes
 ---------
 * Schema metadata reads no longer fail with ``AttributeError`` when a later
@@ -50,6 +59,18 @@ Bug Fixes
   is still delayed does not stop the send, and a callback that runs after
   admission but before the bytes are written times the request out while the
   request may still be sent (#603).
+* ``BatchStatement`` now takes ``table`` from the statement it is routed by, as
+  it already did for ``keyspace`` and ``routing_key``. A batch on a tablet table
+  can now be sent to the replicas and the shard of its tablet, when the driver
+  knows them, instead of being routed by the token ring.
+
+Behavior Changes
+----------------
+* ``TABLETS_ROUTING_V2`` is now negotiated under the wire name
+  ``TABLETS_ROUTING_V2_EXPERIMENTAL_V2``, matching the revision of the
+  experimental extension in ScyllaDB that adds a routing hint to ``BATCH``
+  requests. Nodes that only advertise the original
+  ``TABLETS_ROUTING_V2_EXPERIMENTAL`` fall back to ``TABLETS_ROUTING_V1``.
 
 3.29.13
 ========

@@ -463,6 +463,11 @@ class PreparedStatement(object):
     _result_metadata_and_id = (None, None)
     column_encryption_policy = None
     routing_key_indexes = None
+    # The partition key bind indices the server sent in the PREPARED metadata.
+    # Unlike routing_key_indexes, which the driver may guess from the names of
+    # the bind markers, or the user may set, these are the ones the server
+    # computes the token from.
+    _pk_indexes = None
     _routing_key_index_set = None
     serial_consistency_level = None  # TODO never used?
     _is_lwt = False
@@ -562,9 +567,13 @@ class PreparedStatement(object):
                     except KeyError:  # we're missing a partition key component in the prepared
                         pass          # statement; just leave routing_key_indexes as None
 
-        return PreparedStatement(column_metadata, query_id, routing_key_indexes,
-                                 query, prepared_keyspace, protocol_version, result_metadata,
-                                 result_metadata_id, is_lwt, column_encryption_policy)
+        prepared_statement = PreparedStatement(column_metadata, query_id, routing_key_indexes,
+                                               query, prepared_keyspace, protocol_version, result_metadata,
+                                               result_metadata_id, is_lwt, column_encryption_policy)
+        # A copy: routing_key_indexes may be the same list, and changing it in
+        # place mustn't change these.
+        prepared_statement._pk_indexes = list(pk_indexes) if pk_indexes else None
+        return prepared_statement
 
     def bind(self, values):
         """
@@ -604,6 +613,28 @@ class BoundStatement(Statement):
     """
     The sequence of values that were bound to the prepared statement.
     """
+
+    # The routing key the routing_key property packed from the values of the
+    # columns the server computes the token from, or None. While the routing
+    # key cached in _routing_key is this very object, it's exactly the one the
+    # server computes the token from, so _server_routing_key() can return it
+    # instead of packing an equal copy.
+    #
+    # The server computes the token from the partition key columns it named
+    # when the statement was prepared (PreparedStatement._pk_indexes). The
+    # cached routing key may differ from that:
+    # - the user may have passed a routing key of their own to __init__;
+    # - the cached routing key may have been replaced, e.g. with
+    #   _set_routing_key();
+    # - routing_key_indexes may point at other columns or list them in
+    #   another order, because the user set them or the driver guessed them;
+    # - bind() replaces the values but keeps the routing key cached from the
+    #   previous ones.
+    #
+    # So the routing_key property sets this when it computes the routing key
+    # from the server's columns, and bind() clears it. A routing key replaced
+    # in any other way is another object, so nothing else has to clear it.
+    _routing_key_packed_from_server_pk_indexes = None
 
     def __init__(self, prepared_statement, retry_policy=None, consistency_level=None, routing_key=None,
                  serial_consistency_level=None, fetch_size=FETCH_SIZE_UNSET, keyspace=None,
@@ -693,6 +724,7 @@ class BoundStatement(Statement):
 
         self.raw_values = values
         self.values = []
+        self._routing_key_packed_from_server_pk_indexes = None
         for value, col_spec in zip(values, col_meta):
             if value is None:
                 self.values.append(None)
@@ -744,8 +776,40 @@ class BoundStatement(Statement):
             self._routing_key = self.values[routing_indexes[0]]
         else:
             self._routing_key = b"".join(self._key_parts_packed(self.values[i] for i in routing_indexes))
+        self._routing_key_packed_from_server_pk_indexes = (
+            self._routing_key if routing_indexes == self.prepared_statement._pk_indexes else None)
 
         return self._routing_key
+
+    def _server_routing_key(self):
+        """
+        Return the routing key the server computes the token of this statement
+        from, or :const:`None` if it can't.
+
+        The server only computes it from the partition key bind indices it sent
+        in the PREPARED metadata, and ignores the routing hint of a BATCH whose
+        routing statement has none: the batch gets no routing information.
+        :attr:`routing_key` may come from elsewhere: from indices the
+        driver guessed from the names of the bind markers, or from indices or a
+        routing key the user set.
+        """
+        indexes = self.prepared_statement._pk_indexes
+        if not indexes:
+            return None
+        parts = [self.values[i] for i in indexes]
+        if any(part is None or part is UNSET_VALUE for part in parts):
+            # There's no token without a value. The server rejects the
+            # statement anyway.
+            return None
+        if len(parts) == 1:
+            return parts[0]
+        routing_key = self.routing_key
+        if routing_key is not None and routing_key is self._routing_key_packed_from_server_pk_indexes:
+            # routing_key is computed from the same values and indices, so it's
+            # this one, already packed. A batch routed by this statement keeps
+            # it anyway: reuse it rather than keep a copy.
+            return routing_key
+        return b"".join(self._key_parts_packed(parts))
 
     def is_lwt(self):
         return self.prepared_statement.is_lwt()
@@ -796,6 +860,14 @@ BatchType.UNLOGGED = BatchType("UNLOGGED", 1)
 BatchType.COUNTER = BatchType("COUNTER", 2)
 
 
+# The statement a batch takes its routing attributes from, together with the
+# keyspace and the table it gave the batch (see
+# BatchStatement._get_routing_statement), and the routing key the server
+# computes its token from. That's the key of the partition the statement
+# writes, which the batch isn't necessarily routed by.
+_RoutingStatement = namedtuple('_RoutingStatement', ['index', 'keyspace', 'table', 'routing_key'])
+
+
 class BatchStatement(Statement):
     """
     A protocol-level batch of operations which are applied atomically
@@ -819,6 +891,7 @@ class BatchStatement(Statement):
     _statements_and_parameters = None
     _session = None
     _is_lwt = False
+    _routing_statement = None
 
     def __init__(self, batch_type=BatchType.LOGGED, retry_policy=None,
                  consistency_level=None, serial_consistency_level=None,
@@ -882,7 +955,9 @@ class BatchStatement(Statement):
         """
         del self._statements_and_parameters[:]
         self.keyspace = None
+        self.table = None
         self.routing_key = None
+        self._routing_statement = None
         if self.custom_payload:
             self.custom_payload.clear()
 
@@ -946,6 +1021,33 @@ class BatchStatement(Statement):
             if statement.keyspace and statement.routing_key:
                 self.routing_key = statement.routing_key
                 self.keyspace = statement.keyspace
+                self.table = statement.table
+                if isinstance(statement, BoundStatement):
+                    server_routing_key = statement._server_routing_key()
+                    if server_routing_key is not None:
+                        # It's appended right after this, so its index is the
+                        # current length.
+                        self._routing_statement = _RoutingStatement(
+                            len(self._statements_and_parameters),
+                            self.keyspace, self.table, server_routing_key)
+
+    def _get_routing_statement(self):
+        """
+        Return the statement this batch is routed by, for the routing hint of
+        ``TABLETS_ROUTING_V2``, as a ``_RoutingStatement``, or :const:`None`.
+
+        The routing attributes of a batch are public, so they may have changed
+        since the statement gave them to the batch. The statement only counts
+        while the batch targets its table: otherwise the routing information
+        the server returns would be filed under a different table. The batch
+        may be routed by another routing key: the tablet_version_block is
+        chosen for the partition the statement writes, which is the one the
+        server checks it against.
+        """
+        rs = self._routing_statement
+        if rs is not None and rs.keyspace == self.keyspace and rs.table == self.table:
+            return rs
+        return None
 
     def _update_custom_payload(self, statement):
         if statement.custom_payload:
