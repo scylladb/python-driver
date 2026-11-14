@@ -1192,6 +1192,8 @@ def test_result_reserved_before_close_is_still_disposed(runtime, pool):
         thread.ident for thread in manager._threads}
 
 
+
+
 def test_synchronous_admission_waits_without_allocating_pending_records(
         runtime, monkeypatch):
     manager, dispatch = runtime
@@ -1789,7 +1791,7 @@ def test_bulk_owner_rejection_unwinds_all_conditions(runtime, terminal_first):
 
 @pytest.mark.parametrize(
     'outcome', ['return', 'error', 'base_error', 'rejected_reacquire'])
-def test_policy_phase_restores_context_and_only_reacquires_after_success(
+def test_policy_phase_restores_admission_after_policy_exit(
         runtime, outcome):
     from cassandra import _management
     manager, dispatch = runtime
@@ -1817,7 +1819,12 @@ def test_policy_phase_restores_context_and_only_reacquires_after_success(
                      'rejected_reacquire': ManagementClosed}[outcome]
             with pytest.raises(error):
                 policy()
-            assert call.record is None
+            if outcome == 'rejected_reacquire':
+                assert call.record is None
+            else:
+                assert call.record is not None
+                assert call.record is not original
+                assert manager.counts()['ordinary'] == 1
         assert _management._context.call is call
     assert getattr(_management._context, 'call', None) is None
     assert manager.counts()['ordinary'] == 0
@@ -5306,3 +5313,46 @@ def test_handoff_target_disposal_allows_reentry(factory, operation, expected):
     assert getattr(entry, operation)() is expected
     gc.collect()
     assert observed == [('released', expected)]
+
+
+def test_callback_pool_fanout_uses_bounded_reserved_capacity():
+    from cassandra._management import compatibility_work
+    dispatch = Dispatcher()
+    manager = ManagementRuntime(dispatch, limit=1, reentry_window=2)
+    release, started = Event(), Event()
+    submitted = []
+    errors = []
+    executor = ThreadPoolExecutor(2)
+    def work():
+        assert release.wait(5)
+        return True
+    def fanout():
+        try:
+            for _ in range(5):
+                with compatibility_work(manager) as attach:
+                    future = executor.submit(work)
+                    submitted.append(future)
+                    attach(future)
+            started.set()
+        except BaseException as exc:
+            errors.append(exc)
+    notification = manager.notify(fanout)
+    try:
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: manager._reentry_credits == 2, 5)
+        assert manager.counts()['ordinary'] == 1
+        assert not started.is_set()
+        release.set()
+        notification.result(5)
+        assert started.is_set()
+        assert not errors
+        assert len(submitted) == 5
+        assert all(future.result(5) is True for future in submitted)
+        assert manager.high_waters['reentry'] == 2
+    finally:
+        release.set()
+        executor.shutdown()
+        manager.close()
+        dispatch.drain()
+        manager.join(5)
