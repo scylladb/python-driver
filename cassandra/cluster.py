@@ -4797,7 +4797,9 @@ class Session(object):
             else:
                 retry()
 
-        lifecycle.submit(retry)
+        # Connection return may run on a reactor or heartbeat thread. Admit
+        # recovery without making that caller deliver lifecycle callbacks.
+        lifecycle.submit_async(self.cluster.executor, retry)
 
     def _shutdown_detached_pool(self, pool, on_shutdown_error=None):
         """Close an unindexed pool even when asynchronous cleanup is rejected.

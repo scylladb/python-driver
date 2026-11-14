@@ -1792,7 +1792,10 @@ def test_concurrent_session_failures_retire_before_health_inspection(
             assert all(connection.is_closed for connection in failed + siblings)
             assert all(connection.in_flight == 0 for connection in failed)
             assert host.is_up is independent_healthy_pool
-            assert len(scheduled) == int(not independent_healthy_pool)
+            # Recovery admission also hands its lifecycle drain to the
+            # executor, so neither failed-connection caller delivers events.
+            assert len(scheduled) == 2
+            assert not order
             # Check actual FIFO delivery and recovery, including a later
             # notification. A stale second failure must not duplicate DOWN.
             with cluster._lifecycle.transaction(drain=False):

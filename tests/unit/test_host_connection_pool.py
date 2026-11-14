@@ -426,6 +426,8 @@ def discounted_pool_recovery(request):
         cluster.reconnection_policy = Mock()
         # Reconnection policies may return an iterable rather than an iterator.
         cluster.reconnection_policy.new_schedule.return_value = [1, 2, 4]
+        # Hold asynchronous lifecycle drains until the test delivers them.
+        cluster.executor.submit = Mock(return_value=Future())
         scheduled = []
         cluster.scheduler.schedule = Mock(
             side_effect=lambda delay, fn: scheduled.append((delay, fn)))
@@ -447,6 +449,8 @@ def discounted_pool_recovery(request):
         original.last_error = ConnectionException(
             'failed socket', host.endpoint)
         pool.return_connection(original)
+        cluster._lifecycle.drain()
+        cluster.executor.submit.reset_mock()
         assert pool.is_shutdown
         assert host.is_up is initial_state
         assert len(scheduled) == 1
@@ -776,7 +780,7 @@ def test_discounted_recovery_completion_waits_for_lifecycle_notification(
 @pytest.mark.parametrize('close', ['queued', 'late'])
 def test_discounted_recovery_abandons_queued_work_on_lifecycle_close(
         discounted_pool_recovery, phase, close):
-    """Closing the coordinator discards queued recovery and retry results."""
+    """Cluster shutdown discards queued recovery and retry results."""
     host, session, failed, healthy, scheduled, work = discounted_pool_recovery
     recover = scheduled.pop(0)[1]
     if phase == 'completion':
@@ -785,12 +789,12 @@ def test_discounted_recovery_abandons_queued_work_on_lifecycle_close(
 
     def notify():
         if close == 'late':
-            session.cluster._lifecycle.close()
+            session.cluster.shutdown()
         if phase == 'timer':
             recover()
         else:
             future.set_result(False)
-        session.cluster._lifecycle.close()
+        session.cluster.shutdown()
 
     session.cluster._lifecycle.submit(notify)
     assert not work
@@ -811,6 +815,28 @@ def test_discounted_recovery_initial_retry_joins_lifecycle_queue(
 
     session.cluster._lifecycle.submit(notify)
     assert during_notification == [0]
+    assert len(scheduled) == 1
+    assert scheduled[0][0] == 1
+
+
+def test_discounted_recovery_initial_retry_does_not_drain_on_caller(
+        discounted_pool_recovery):
+    """Returning a failed connection leaves queued callbacks to a drainer."""
+    host, session, failed, healthy, scheduled, work = discounted_pool_recovery
+    scheduled.clear()
+    lifecycle = session.cluster._lifecycle
+    executor = session.cluster.executor
+    notification = Mock()
+    lifecycle.submit_async(executor, notification)
+
+    session._recover_pool(failed)
+
+    notification.assert_not_called()
+    assert not scheduled
+    assert not work
+    assert executor.submit.call_count == 2
+    executor.submit.call_args_list[0].args[0]()
+    notification.assert_called_once_with()
     assert len(scheduled) == 1
     assert scheduled[0][0] == 1
 
