@@ -622,6 +622,7 @@ class BoundStatement(Statement):
         self.custom_payload = prepared_statement.custom_payload
         self.is_idempotent = prepared_statement.is_idempotent
         self.values = []
+        self._routing_key_cache = None
 
         meta = prepared_statement.column_metadata
         if meta:
@@ -691,14 +692,13 @@ class BoundStatement(Statement):
                 "Too few arguments provided to bind() (got %d, required %d for routing key)" %
                 (value_len, len(self.prepared_statement.routing_key_indexes)))
 
-        self.raw_values = values
-        self.values = []
+        serialized_values = []
         for value, col_spec in zip(values, col_meta):
             if value is None:
-                self.values.append(None)
+                serialized_values.append(None)
             elif value is UNSET_VALUE:
                 if proto_version >= 4:
-                    self._append_unset_value()
+                    self._append_unset_value(serialized_values)
                 else:
                     raise ValueError("Attempt to bind UNSET_VALUE while using unsuitable protocol version (%d < 4)" % proto_version)
             else:
@@ -709,7 +709,7 @@ class BoundStatement(Statement):
                     col_bytes = col_type.serialize(value, proto_version)
                     if uses_ce:
                         col_bytes = ce_policy.encrypt(col_desc, col_bytes)
-                    self.values.append(col_bytes)
+                    serialized_values.append(col_bytes)
                 except (TypeError, struct.error) as exc:
                     actual_type = type(value)
                     message = ('Received an argument of invalid type for column "%s". '
@@ -717,19 +717,26 @@ class BoundStatement(Statement):
                     raise TypeError(message)
 
         if proto_version >= 4:
-            diff = col_meta_len - len(self.values)
+            diff = col_meta_len - len(serialized_values)
             if diff:
                 for _ in range(diff):
-                    self._append_unset_value()
+                    self._append_unset_value(serialized_values)
 
+        # Replace the values and their cached key only after a successful
+        # bind, so serialization failures preserve the previous bound state.
+        self.raw_values = values
+        self.values = serialized_values
+        self._routing_key_cache = None
         return self
 
-    def _append_unset_value(self):
-        next_index = len(self.values)
+    def _append_unset_value(self, serialized_values=None):
+        if serialized_values is None:
+            serialized_values = self.values
+        next_index = len(serialized_values)
         if self.prepared_statement.is_routing_key_index(next_index):
             col_meta = self.prepared_statement.column_metadata[next_index]
             raise ValueError("Cannot bind UNSET_VALUE as a part of the routing key '%s'" % col_meta.name)
-        self.values.append(UNSET_VALUE)
+        serialized_values.append(UNSET_VALUE)
 
     @property
     def routing_key(self):
@@ -739,13 +746,16 @@ class BoundStatement(Statement):
         if self._routing_key is not None:
             return self._routing_key
 
+        if self._routing_key_cache is not None:
+            return self._routing_key_cache
+
         routing_indexes = self.prepared_statement.routing_key_indexes
         if len(routing_indexes) == 1:
-            self._routing_key = self.values[routing_indexes[0]]
+            self._routing_key_cache = self.values[routing_indexes[0]]
         else:
-            self._routing_key = b"".join(self._key_parts_packed(self.values[i] for i in routing_indexes))
+            self._routing_key_cache = b"".join(self._key_parts_packed(self.values[i] for i in routing_indexes))
 
-        return self._routing_key
+        return self._routing_key_cache
 
     def is_lwt(self):
         return self.prepared_statement.is_lwt()
