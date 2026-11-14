@@ -16,17 +16,52 @@
 Module containing the definitions and declarations (parsing.pxd) for parsers.
 """
 
+from cassandra.tuple cimport tuple_new, tuple_set
+
 cdef class ParseDesc:
     """Description of what structure to parse"""
 
     def __init__(self, colnames, coltypes, column_encryption_policy, coldescs, deserializers, protocol_version):
-        self.colnames = colnames
-        self.coltypes = coltypes
+        # Store tuples rather than the lists passed in: a ParseDesc may be
+        # cached and shared between executions, so it must not carry mutable
+        # state that a consumer could alter.  tuple() on an existing tuple
+        # returns it unchanged, so this costs nothing when the caller already
+        # has tuples.
+        self.colnames = tuple(colnames)
+        self.coltypes = tuple(coltypes)
         self.column_encryption_policy = column_encryption_policy
-        self.coldescs = coldescs
-        self.deserializers = deserializers
+        self.coldescs = tuple(coldescs)
+        self.deserializers = _as_deserializer_tuple(deserializers)
         self.protocol_version = protocol_version
         self.rowsize = len(colnames)
+
+
+cdef tuple _as_deserializer_tuple(deserializers):
+    """Return *deserializers* as an immutable tuple.
+
+    Accepts a tuple (already immutable), a Cython memoryview of
+    Deserializers, or any other sequence.  A memoryview is read through a
+    typed view and copied at C level: iterating a memoryview from Python is
+    several times slower than copying it, and this runs on every result set.
+    """
+    cdef Deserializer[::1] d
+    cdef Py_ssize_t i, n
+    cdef tuple result
+
+    if type(deserializers) is tuple:
+        return deserializers
+
+    try:
+        d = deserializers
+    except (TypeError, ValueError):
+        # Not a buffer of Deserializers -- e.g. a plain Python list.
+        return tuple(deserializers)
+
+    n = len(d)
+    result = tuple_new(n)
+    for i in range(n):
+        tuple_set(result, i, d[i])
+    return result
 
 
 cdef class ColumnParser:
