@@ -707,6 +707,137 @@ def test_discounted_pool_recovery_retries_cancelled_work(
     assert not scheduled
 
 
+@pytest.mark.parametrize('worker', [False, True])
+def test_discounted_recovery_waits_for_lifecycle_notification(
+        discounted_pool_recovery, worker):
+    """A timer cannot run distance callbacks during a host notification."""
+    host, session, failed, healthy, scheduled, work = discounted_pool_recovery
+    recover = scheduled.pop(0)[1]
+    distance = session.cluster.profile_manager.distance
+    distance.reset_mock()
+    during_notification = []
+
+    def notify():
+        if worker:
+            timer = Thread(target=recover)
+            timer.start()
+            timer.join(5)
+            during_notification.append(timer.is_alive())
+        else:
+            recover()
+            during_notification.append(False)
+        during_notification.extend([distance.call_count, len(work)])
+
+    session.cluster._lifecycle.submit(notify)
+    assert during_notification == [False, 0, 0]
+    distance.assert_called_once_with(host)
+    assert len(work) == 1
+    _finish_pool_recovery_work(work)
+    assert session._pools[host] is not failed
+    assert not healthy.is_shutdown
+    assert not scheduled
+
+
+@pytest.mark.parametrize('completion', ['failure', 'exception', 'cancelled'])
+def test_discounted_recovery_completion_waits_for_lifecycle_notification(
+        discounted_pool_recovery, completion):
+    """Worker results consume the retry schedule after active notifications."""
+    host, session, failed, healthy, scheduled, work = discounted_pool_recovery
+    scheduled.pop(0)[1]()
+    future = work.pop(0)[3]
+    during_notification = []
+
+    def notify():
+        def complete():
+            if completion == 'exception':
+                future.set_exception(ConnectionException('creation failed'))
+            elif completion == 'cancelled':
+                future.cancel()
+            else:
+                future.set_result(False)
+
+        worker = Thread(target=complete)
+        worker.start()
+        worker.join(5)
+        during_notification.extend([worker.is_alive(), len(scheduled)])
+
+    session.cluster._lifecycle.submit(notify)
+    assert during_notification == [False, 0]
+    assert len(scheduled) == 1
+    assert scheduled[0][0] == 2
+    scheduled.pop(0)[1]()
+    _finish_pool_recovery_work(work)
+    assert session._pools[host] is not failed
+    assert not healthy.is_shutdown
+    assert not scheduled
+
+
+@pytest.mark.parametrize('phase', ['timer', 'completion'])
+@pytest.mark.parametrize('close', ['queued', 'late'])
+def test_discounted_recovery_abandons_queued_work_on_lifecycle_close(
+        discounted_pool_recovery, phase, close):
+    """Closing the coordinator discards queued recovery and retry results."""
+    host, session, failed, healthy, scheduled, work = discounted_pool_recovery
+    recover = scheduled.pop(0)[1]
+    if phase == 'completion':
+        recover()
+        future = work.pop(0)[3]
+
+    def notify():
+        if close == 'late':
+            session.cluster._lifecycle.close()
+        if phase == 'timer':
+            recover()
+        else:
+            future.set_result(False)
+        session.cluster._lifecycle.close()
+
+    session.cluster._lifecycle.submit(notify)
+    assert not work
+    assert not scheduled
+    assert session._pools[host] is failed
+
+
+def test_discounted_recovery_initial_retry_joins_lifecycle_queue(
+        discounted_pool_recovery):
+    """Initial recovery admission uses the same ordering as later results."""
+    host, session, failed, healthy, scheduled, work = discounted_pool_recovery
+    scheduled.clear()
+    during_notification = []
+
+    def notify():
+        session._recover_pool(failed)
+        during_notification.append(len(scheduled))
+
+    session.cluster._lifecycle.submit(notify)
+    assert during_notification == [0]
+    assert len(scheduled) == 1
+    assert scheduled[0][0] == 1
+
+
+@pytest.mark.parametrize('supersession', ['pool_replaced', 'pool_removed'])
+def test_discounted_recovery_rechecks_ownership_after_queueing(
+        discounted_pool_recovery, supersession):
+    """A queued timer must still own its failed pool when delivery starts."""
+    host, session, failed, healthy, scheduled, work = discounted_pool_recovery
+    recover = scheduled.pop(0)[1]
+    distance = session.cluster.profile_manager.distance
+    distance.reset_mock()
+
+    def notify():
+        recover()
+        if supersession == 'pool_replaced':
+            session._pools[host] = healthy
+        else:
+            session._pools.pop(host)
+
+    session.cluster._lifecycle.submit(notify)
+    distance.assert_not_called()
+    assert not work
+    assert not scheduled
+    assert not healthy.is_shutdown
+
+
 def test_queued_replacement_cannot_remove_new_socket(socket_pool):
     host, session, pool, original, replacement = socket_pool
     pool.borrow_connection(timeout=0)
