@@ -41,7 +41,13 @@ class AsyncioTimerTests(TimerTestMixin, unittest.TestCase):
         if skip_me:
             return
         if ASYNCIO_AVAILABLE and AsyncioConnection._loop:
-            AsyncioConnection._loop.stop()
+            loop = AsyncioConnection._loop
+            loop.call_soon_threadsafe(loop.stop)
+            AsyncioConnection._loop_thread.join(5)
+            assert not AsyncioConnection._loop_thread.is_alive()
+            loop.close()
+            AsyncioConnection._loop = None
+            AsyncioConnection._loop_thread = None
 
     @property
     def create_timer(self):

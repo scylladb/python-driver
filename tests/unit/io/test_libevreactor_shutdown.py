@@ -26,6 +26,7 @@ import subprocess
 import tempfile
 import os
 from pathlib import Path
+from unittest.mock import patch
 
 from cassandra import DependencyException
 
@@ -215,6 +216,17 @@ class LibevShutdownRaceConditionTest(unittest.TestCase):
         """
         from cassandra.io import libevreactor
         from cassandra.io.libevreactor import _cleanup, _atexit_cleanup
+
+        # Simulated process exit must not stop the shared reactor used by later
+        # tests. Restore its singleton even if an assertion below fails.
+        singleton = patch.object(libevreactor, '_global_loop', None)
+        singleton.start()
+        self.addCleanup(singleton.stop)
+        def close_private_loop():
+            loop = libevreactor._global_loop
+            if loop is not None and not loop._shutdown:
+                _cleanup(loop)
+        self.addCleanup(close_private_loop)
 
         LibevConnection.initialize_reactor()
         
