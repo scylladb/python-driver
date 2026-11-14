@@ -14,7 +14,7 @@ import warnings
 ROOT = Path(__file__).resolve().parents[2]
 SUPPORT_FILES = {
     ".gitattributes", ".gitignore", ".github/dependabot.yml",
-    "CONTRIBUTING.rst", "CHANGELOG.rst", "LICENSE",
+    "CONTRIBUTING.rst", "MANAGER_OWNERSHIP.rst", "CHANGELOG.rst", "LICENSE",
     ".github/workflows/docs-pr.yml", ".github/workflows/docs-pages.yml",
 }
 INTEGRATION = ["tests/integration/standard", "tests/integration/cqlengine"]

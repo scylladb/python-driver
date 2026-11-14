@@ -205,7 +205,7 @@ when the working tree has changes; use ``--worktree`` to plan those changes.
 Selection follows these rules:
 
 * Documentation/support-only changes select no driver tests. This includes
-  ``docs/``, Markdown files, ``CONTRIBUTING.rst``,
+  ``docs/``, Markdown files, ``CONTRIBUTING.rst``, ``MANAGER_OWNERSHIP.rst``,
   ``CHANGELOG.rst``, ``LICENSE``,
   ``.gitignore``, ``.gitattributes``, ``.github/dependabot.yml``, and the two
   documentation workflows. Applicable docs builds and release-note

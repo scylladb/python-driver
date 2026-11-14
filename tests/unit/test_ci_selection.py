@@ -58,7 +58,8 @@ class SelectionTests(unittest.TestCase):
     def test_documentation_only_skips_driver_tests(self):
         plan = selection.plan_tests([
             "docs/conf.py", "docs/pyproject.toml", "docs/guide.rst",
-            "CONTRIBUTING.rst", "CHANGELOG.rst", "AGENTS.md", "LICENSE",
+            "CONTRIBUTING.rst", "MANAGER_OWNERSHIP.rst", "CHANGELOG.rst",
+            "AGENTS.md", "LICENSE",
             ".github/pull_request_template.md",
             ".github/ISSUE_TEMPLATE/bug.md",
             ".github/workflows/docs-pr.yml",
