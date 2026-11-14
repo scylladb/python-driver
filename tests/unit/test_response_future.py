@@ -154,7 +154,7 @@ class ResponseFutureTests(unittest.TestCase):
         response.parsed_rows = [(42,)]
         connection._requests.pop(1)(response)
 
-        assert rf._event.is_set()
+        assert rf._is_final()
         assert rf.result().one() == (['value'], [(42,)])
         assert rf._request_pool is old_pool
         assert connection.in_flight == 0
@@ -1554,7 +1554,7 @@ class ResponseFutureTests(unittest.TestCase):
             thread.join(5)
             assert not thread.is_alive()
 
-        assert rf._event.is_set()
+        assert rf._is_final()
         assert callback.call_count + errback.call_count == 1
         if rf._retry_aborted:
             assert rf._final_result is _NOT_SET
@@ -1578,7 +1578,7 @@ class ResponseFutureTests(unittest.TestCase):
         rf._timer = current_timer
         on_shutdown()
 
-        assert not rf._event.is_set()
+        assert not rf._is_final()
         assert rf._final_result is _NOT_SET
         assert rf._final_exception is None
         assert not rf._retry_aborted
@@ -1599,7 +1599,7 @@ class ResponseFutureTests(unittest.TestCase):
         with pytest.raises(ConnectionShutdown, match='scheduler was shut down'):
             rf.start_fetching_next_page()
 
-        assert rf._event.is_set()
+        assert rf._is_final()
         assert rf._retry_aborted
         rf._make_query_plan.assert_not_called()
         rf.send_request.assert_not_called()
@@ -1615,7 +1615,7 @@ class ResponseFutureTests(unittest.TestCase):
         with pytest.raises(RuntimeError, match='plan failed'):
             rf.start_fetching_next_page()
 
-        assert rf._event.is_set()
+        assert rf._is_final()
         assert rf._final_result is result
         assert rf._final_exception is None
         assert rf._page_generation == 0
@@ -2880,7 +2880,7 @@ class ResponseFutureTests(unittest.TestCase):
         response_cb(Mock(spec=ResultMessage,
                          kind=RESULT_KIND_SCHEMA_CHANGE,
                          schema_change_event={}))
-        assert not rf._event.is_set()
+        assert not rf._is_final()
         assert not rf._control_connection_requests
         assert session.cluster.control_connection._application_requests_in_flight == 0
 
@@ -3128,7 +3128,6 @@ class ResponseFutureTests(unittest.TestCase):
         result = Mock(spec=UnavailableErrorMessage, info={"required_replicas":2, "alive_replicas": 1, "consistency": 1})
         result.to_exception.return_value = expected_exception
         rf._set_result(None, None, None, result)
-        rf._event.set()
         with pytest.raises(Exception):
             rf.result()
 
@@ -3762,6 +3761,23 @@ class ResponseFutureTests(unittest.TestCase):
         assert rf.message.skip_meta is False
         assert rf.message.result_metadata_id == b'meta_hash'
 
+    def test_result_waits_without_eager_event(self):
+        rf = self.make_response_future(self.make_session())
+        assert rf._event is None
+        rf._set_final_result(['done'])
+        assert rf._event is None  # nobody waited
+        assert rf.result().current_rows == ['done']
+
+        rf = self.make_response_future(self.make_session())
+        out = []
+        waiter = Thread(target=lambda: out.append(rf.result().current_rows))
+        waiter.start()
+        while rf._event is None:
+            time.sleep(0.001)
+        rf._set_final_result(['later'])
+        waiter.join(5)
+        assert out == [['later']]
+
     def test_late_response_after_final_is_ignored(self):
         # e.g. a speculative response arriving after a client timeout or after another speculative response won
         for first, second in ((OperationTimedOut(), ['late']),
@@ -3832,7 +3848,7 @@ class ResponseFutureTests(unittest.TestCase):
         late_cb(page1)
         retry_task(*retry_args)
 
-        assert not rf._event.is_set()
+        assert not rf._is_final()
         assert rf._paging_state == b'page-2'
         assert rf.send_request.call_count == 0
 
