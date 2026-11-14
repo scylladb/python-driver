@@ -16,7 +16,88 @@ import unittest
 
 import pytest
 
-from cassandra.query import BatchStatement, PreparedStatement, SimpleStatement, Statement
+from cassandra.cqltypes import Int32Type
+from cassandra.protocol import ColumnMetadata
+from cassandra.query import (
+    BatchStatement, BoundStatement, PreparedStatement, SimpleStatement,
+    Statement, UNSET_VALUE)
+
+
+class TestBoundStatementRebind:
+    @staticmethod
+    def make_prepared(routing_key_indexes, protocol_version):
+        return PreparedStatement(
+            column_metadata=[ColumnMetadata('ks', 'tbl', name, Int32Type)
+                             for name in ('pk1', 'pk2', 'v')],
+            query_id=b'query-id', routing_key_indexes=routing_key_indexes,
+            query='INSERT INTO ks.tbl (pk1, pk2, v) VALUES (?, ?, ?)',
+            keyspace='ks', protocol_version=protocol_version,
+            result_metadata=[], result_metadata_id=None)
+
+    @pytest.mark.parametrize('protocol_version', [3, 4, 5])
+    @pytest.mark.parametrize('named', [False, True])
+    @pytest.mark.parametrize('routing_key_indexes,first_key,second_key', [
+        ([0], b'\x00\x00\x00\x01', b'\x00\x00\x00\x02'),
+        ([1, 0], b'\x00\x04\x00\x00\x00\x0a\x00\x00\x04\x00\x00\x00\x01\x00',
+         b'\x00\x04\x00\x00\x00\x14\x00\x00\x04\x00\x00\x00\x02\x00'),
+    ])
+    def test_rebind_recomputes_routing_key(
+            self, protocol_version, named, routing_key_indexes,
+            first_key, second_key):
+        prepared = self.make_prepared(routing_key_indexes, protocol_version)
+        first = (1, 10, 100)
+        second = (2, 20, 200)
+        if named:
+            first = dict(zip(('pk1', 'pk2', 'v'), first))
+            second = dict(zip(('pk1', 'pk2', 'v'), second))
+
+        bound = prepared.bind(first)
+        assert bound.routing_key == first_key
+        assert bound.bind(second) is bound
+        assert bound.routing_key == second_key
+        assert bound.routing_key == second_key
+
+    def test_rebind_to_null_clears_routing_key(self):
+        bound = self.make_prepared([0], 4).bind((1, 10, 100))
+        assert bound.routing_key == b'\x00\x00\x00\x01'
+        bound.bind((None, 20, 200))
+        assert bound.routing_key is None
+        bound.bind((2, 20, 200))
+        assert bound.routing_key == b'\x00\x00\x00\x02'
+
+    def test_rebind_preserves_explicit_routing_key(self):
+        bound = BoundStatement(
+            self.make_prepared([0], 4), routing_key=b'explicit')
+        bound.bind((1, 10, 100))
+        assert bound.routing_key == b'explicit'
+        bound.bind((2, 20, 200))
+        assert bound.routing_key == b'explicit'
+
+    def test_rebind_preserves_updated_routing_override(self):
+        bound = self.make_prepared([0], 4).bind((1, 10, 100))
+        assert bound.routing_key == b'\x00\x00\x00\x01'
+        bound._set_routing_key(b'explicit')
+        bound.bind((2, 20, 200))
+        assert bound.routing_key == b'explicit'
+        bound._del_routing_key()
+        assert bound.routing_key == b'\x00\x00\x00\x02'
+
+    @pytest.mark.parametrize('invalid_values,error', [
+        (('invalid', 20, 200), TypeError),
+        ((2, 'invalid', 200), TypeError),
+        ((UNSET_VALUE, 20, 200), ValueError),
+    ])
+    def test_failed_rebind_preserves_bound_state(self, invalid_values, error):
+        bound = self.make_prepared([0], 4).bind((1, 10, 100))
+        previous_values = bound.values
+        assert bound.routing_key == b'\x00\x00\x00\x01'
+        with pytest.raises(error):
+            bound.bind(invalid_values)
+        assert bound.values is previous_values
+        assert bound.raw_values == (1, 10, 100)
+        assert bound.routing_key == b'\x00\x00\x00\x01'
+        bound.bind((2, 20, 200))
+        assert bound.routing_key == b'\x00\x00\x00\x02'
 
 
 class BatchStatementTest(unittest.TestCase):
