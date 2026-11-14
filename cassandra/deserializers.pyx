@@ -49,6 +49,9 @@ cdef class DesBytesType(Deserializer):
 # this is to facilitate cqlsh integration, which requires bytearrays for BytesType
 # It is switched in by simply overwriting DesBytesType:
 # deserializers.DesBytesType = deserializers.DesBytesTypeByteArray
+# Note: find_deserializer() caches its results, so after overwriting
+# DesBytesType you must also call deserializers.clear_deserializer_caches()
+# to drop any entries cached before the override.
 cdef class DesBytesTypeByteArray(Deserializer):
     cdef deserialize(self, Buffer *buf, int protocol_version):
         if buf.size == 0:
@@ -184,7 +187,7 @@ cdef class DesVarcharType(DesUTF8Type):
 cdef class _DesParameterizedType(Deserializer):
 
     cdef object subtypes
-    cdef Deserializer[::1] deserializers
+    cdef tuple deserializers
     cdef Py_ssize_t subtypes_len
 
     def __init__(self, cqltype):
@@ -299,7 +302,6 @@ cdef _deserialize_map(Buffer *buf, int protocol_version,
 
     cdef int32_t numelements
     cdef int offset
-    cdef list result = []
 
     _unpack_len(buf, 0, &numelements)
     offset = sizeof(int32_t)
@@ -334,7 +336,6 @@ cdef class DesTupleType(_DesParameterizedType):
         protocol_version = max(3, protocol_version)
 
         p = 0
-        values = []
         for i in range(self.subtypes_len):
             item = None
             if p < buf.size:
@@ -444,16 +445,65 @@ cdef class GenericDeserializer(Deserializer):
 #--------------------------------------------------------------------------
 # Helper utilities
 
+# Maximum number of entries in each deserializer cache.  In practice the
+# caches are bounded by the number of distinct column-type signatures in
+# the schema (typically dozens to low hundreds).  Most parameterized types
+# are interned by _CassandraType.apply_parameters() (see cqltypes.py), so
+# their cache keys are stable across executions; VectorType.apply_parameters()
+# is the exception -- it builds a fresh class on every call -- so workloads
+# that repeatedly resolve vector columns can still accumulate entries.  The
+# cap prevents unbounded growth in such edge cases.
+cdef int _CACHE_MAX_SIZE = 256
+
+# Cache make_deserializers results keyed on the tuple of cqltype objects.
+# Using the cqltype objects themselves (rather than id()) as keys ensures
+# the dict holds strong references, preventing GC and id() reuse issues
+# with non-singleton parameterized types.
+#
+# The cached value is an immutable tuple of Deserializers.  It is shared
+# between all callers, so it must not be handed out in a mutable form: a
+# single mutation would corrupt the cached entry for every subsequent
+# consumer.
+cdef dict _make_deserializers_cache = {}
+
 def make_deserializers(cqltypes):
-    """Create an array of Deserializers for each given cqltype in cqltypes"""
-    cdef Deserializer[::1] deserializers
-    return obj_array([find_deserializer(ct) for ct in cqltypes])
+    """Return a tuple of Deserializers, one for each cqltype in cqltypes.
+
+    The returned tuple may be a cached object shared across callers.  It is
+    immutable, so callers cannot corrupt the cached entry."""
+    cdef tuple key = tuple(cqltypes)
+    try:
+        return _make_deserializers_cache[key]
+    except KeyError:
+        pass
+    # Iterate the key: cqltypes may be a one-shot iterator already consumed above.
+    result = tuple([find_deserializer(ct) for ct in key])
+    if len(_make_deserializers_cache) >= _CACHE_MAX_SIZE:
+        _make_deserializers_cache.clear()
+    _make_deserializers_cache[key] = result
+    return result
 
 
 cdef dict classes = globals()
 
+# Cache deserializer instances keyed on the cqltype object itself to avoid
+# repeated class lookups and object creation on every result set.
+# Using the object as key (rather than id()) holds a strong reference,
+# preventing GC and id() reuse issues with parameterized types.
+#
+# Note: if a Des* class is overridden at runtime (e.g. DesBytesType =
+# DesBytesTypeByteArray for cqlsh), callers must invoke
+# clear_deserializer_caches() to flush stale entries so that subsequent
+# find_deserializer() calls pick up the new class.
+cdef dict _deserializer_cache = {}
+
 cpdef Deserializer find_deserializer(cqltype):
     """Find a deserializer for a cqltype"""
+    try:
+        return <Deserializer>_deserializer_cache[cqltype]
+    except KeyError:
+        pass
+
     name = 'Des' + cqltype.__name__
 
     if name in globals():
@@ -481,11 +531,37 @@ cpdef Deserializer find_deserializer(cqltype):
     else:
         cls = GenericDeserializer
 
-    return cls(cqltype)
+    cdef Deserializer result = cls(cqltype)
+    if len(_deserializer_cache) >= _CACHE_MAX_SIZE:
+        _deserializer_cache.clear()
+    _deserializer_cache[cqltype] = result
+    return result
+
+
+def clear_deserializer_caches():
+    """Clear the find_deserializer and make_deserializers caches.
+
+    Call this after overriding a Des* class at runtime (e.g.
+    ``deserializers.DesBytesType = deserializers.DesBytesTypeByteArray``)
+    so that subsequent lookups pick up the new class instead of returning
+    stale cached instances.
+    """
+    _deserializer_cache.clear()
+    _make_deserializers_cache.clear()
+
+
+def get_deserializer_cache_sizes():
+    """Return ``(find_cache_size, make_cache_size)`` for diagnostic use."""
+    return len(_deserializer_cache), len(_make_deserializers_cache)
 
 
 def obj_array(list objs):
-    """Create a (Cython) array of objects given a list of objects"""
+    """Create a (Cython) array of objects given a list of objects
+
+    Note: make_deserializers() no longer uses this -- it returns an
+    immutable tuple instead, so that the shared, cached result cannot be
+    mutated by a caller.  This helper is kept for backwards compatibility.
+    """
     cdef object[:] arr
     cdef Py_ssize_t i
     arr = cython_array(shape=(len(objs),), itemsize=sizeof(void *), format="O")
