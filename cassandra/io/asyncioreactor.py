@@ -7,7 +7,7 @@ import logging
 import os
 import socket
 import ssl
-from threading import Lock, Thread
+from threading import Event, Lock, Thread, current_thread
 
 
 log = logging.getLogger(__name__)
@@ -258,13 +258,34 @@ class AsyncioConnection(Connection):
                 cls._pid = os.getpid()
             if cls._loop is None:
                 assert cls._loop_thread is None
-                cls._loop = asyncio.new_event_loop()
-                # daemonize so the loop will be shut down on interpreter
-                # shutdown
-                cls._loop_thread = Thread(
-                    target=cls._loop.run_forever, daemon=True, name="asyncio_thread"
-                )
-                cls._loop_thread.start()
+                loop = asyncio.new_event_loop()
+                thread = Thread(target=loop.run_forever, daemon=True,
+                                name="asyncio_thread")
+                ready = Event()
+                try:
+                    loop.call_soon(ready.set)
+                    thread.start()
+                    if not ready.wait(5):
+                        raise RuntimeError("Asyncio reactor startup did not complete")
+                except BaseException:
+                    if thread.is_alive():
+                        loop.call_soon_threadsafe(loop.stop)
+                        thread.join(5)
+                    if not thread.is_alive():
+                        loop.close()
+                    raise
+                cls._loop, cls._loop_thread = loop, thread
+
+    @classmethod
+    def _management_dispatch(cls, callback):
+        loop = cls._loop
+        if loop is None or loop.is_closed() or not cls._loop_thread.is_alive():
+            raise RuntimeError("Asyncio reactor is unavailable")
+        loop.call_soon_threadsafe(callback)
+
+    @classmethod
+    def _management_in_context(cls):
+        return current_thread() is cls._loop_thread
 
     @classmethod
     def create_timer(cls, timeout, callback):
@@ -381,3 +402,12 @@ class AsyncioConnection(Connection):
                 log.debug("Connection %s closed by server", self)
                 self.close()
                 return
+
+
+def _reset_management_startup_lock_after_fork():
+    # A parent thread may own this lock when another thread forks.
+    AsyncioConnection._lock = Lock()
+
+
+if hasattr(os, 'register_at_fork'):
+    os.register_at_fork(after_in_child=_reset_management_startup_lock_after_fork)
