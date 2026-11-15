@@ -1,4 +1,5 @@
 import threading
+from collections import deque
 
 from cassandra.connection import Connection, ConnectionShutdown
 import sys
@@ -133,6 +134,7 @@ class AsyncioConnection(Connection):
 
     _lock = Lock()
     _loop_thread = None
+    _management_state = None
 
     _write_queue = None
     _write_queue_lock = None
@@ -259,7 +261,34 @@ class AsyncioConnection(Connection):
             if cls._loop is None:
                 assert cls._loop_thread is None
                 loop = asyncio.new_event_loop()
-                thread = Thread(target=loop.run_forever, daemon=True,
+                pending, management_lock = deque(), Lock()
+                accepting = [True]
+
+                def drain(final=False):
+                    count = 0
+                    while final or count < 64:
+                        with management_lock:
+                            if not pending:
+                                return
+                            callback = pending.popleft()
+                        count += 1
+                        try:
+                            callback()
+                        except BaseException:
+                            log.exception("Error in management reactor dispatch")
+                    with management_lock:
+                        if pending and accepting[0]:
+                            loop.call_soon(drain)
+
+                def run():
+                    try:
+                        loop.run_forever()
+                    finally:
+                        with management_lock:
+                            accepting[0] = False
+                        drain(final=True)
+
+                thread = Thread(target=run, daemon=True,
                                 name="asyncio_thread")
                 ready = Event()
                 try:
@@ -275,13 +304,24 @@ class AsyncioConnection(Connection):
                         loop.close()
                     raise
                 cls._loop, cls._loop_thread = loop, thread
+                cls._management_state = (pending, management_lock, accepting, drain)
 
     @classmethod
     def _management_dispatch(cls, callback):
         loop = cls._loop
-        if loop is None or loop.is_closed() or not cls._loop_thread.is_alive():
+        if cls._management_state is None:
             raise RuntimeError("Asyncio reactor is unavailable")
-        loop.call_soon_threadsafe(callback)
+        pending, lock, accepting, drain = cls._management_state
+        with lock:
+            if (not accepting[0] or loop is None or loop.is_closed() or
+                    not cls._loop_thread.is_alive()):
+                raise RuntimeError("Asyncio reactor is unavailable")
+            pending.append(callback)
+            try:
+                loop.call_soon_threadsafe(drain)
+            except BaseException:
+                pending.remove(callback)
+                raise
 
     @classmethod
     def _management_in_context(cls):

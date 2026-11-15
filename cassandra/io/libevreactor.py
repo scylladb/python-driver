@@ -70,7 +70,7 @@ class LibevLoop(object):
         # re-entered by a thread that already holds it, via _is_owned():
         # private, but threading.Condition relies on it too.
         self._lock = RLock()
-        self._lock_thread = Lock()
+        self._lock_thread = RLock()
 
         self._thread = None
 
@@ -85,6 +85,7 @@ class LibevLoop(object):
         self._deferred_destroyed = []
         self._management_callbacks = deque()
         self._management_users = set()
+        self._cleanup_started = False
 
         self._preparer = libev.Prepare(self._loop, self._loop_will_run)
         # prevent _preparer from keeping the loop from returning
@@ -96,27 +97,24 @@ class LibevLoop(object):
         self._management_keeper = libev.Timer(self._loop, self._keep_management_alive)
 
     def maybe_start(self):
-        should_start = False
-        with self._lock:
-            if not self._started:
-                log.debug("Starting libev event loop")
-                self._started = True
-                should_start = True
-
-        if should_start:
-            with self._lock_thread:
-                if not self._shutdown:
+        # Serialize all admissions with startup, including its failure path.
+        with self._lock_thread:
+            with self._lock:
+                if self._shutdown:
+                    raise RuntimeError("Libev reactor is shutting down")
+                if not self._started:
+                    log.debug("Starting libev event loop")
+                    self._started = True
                     self._thread = Thread(target=self._run_loop, name="event_loop")
                     self._thread.daemon = True
                     try:
                         self._thread.start()
                     except BaseException:
-                        with self._lock:
+                        if not self._thread.is_alive():
                             self._started = False
                             self._thread = None
                         raise
-
-        self._notifier.send()
+            self._notifier.send()
 
     def _run_loop(self):
         while True:
@@ -153,10 +151,18 @@ class LibevLoop(object):
                         self._close_conns(to_stop)
                     break
         self._drain_deferred()
+        # Shutdown rejects new admissions; finish the accepted queue on this
+        # reactor thread even when cleanup has stopped the prepare watcher.
+        while self._management_callbacks:
+            self._dispatch_management()
 
     def _cleanup(self):
-        # TODO: unguarded write; self._notify() below wakes _run_loop to re-check.
-        self._shutdown = True
+        with self._lock_thread:
+            with self._lock:
+                if self._cleanup_started:
+                    return
+                self._cleanup_started = True
+                self._shutdown = True
         # Stop the prepare watcher first to prevent race conditions.
         # It was unref'd when started, so ref the loop back first: stopping it
         # unbalanced leaves libev's active count at -1, and a loop thread still
@@ -183,8 +189,9 @@ class LibevLoop(object):
         # PYTHON-752 Thread might have just been created and not started
         # Use longer timeout to allow proper cleanup
         with self._lock_thread:
-            if self._thread is not None and self._thread is not current_thread():
-                self._thread.join(timeout=5.0)
+            thread = self._thread
+        if thread is not None and thread is not current_thread():
+            thread.join(timeout=5.0)
 
         if self._thread is not None and self._thread.is_alive():
             log.warning(
@@ -192,6 +199,26 @@ class LibevLoop(object):
                 "Please call Cluster.shutdown() to avoid this.")
 
         log.debug("Event loop thread was joined")
+
+    def _cleanup_after_fork(self):
+        # Only this thread survived. Do not enter inherited Python locks,
+        # invoke connection callbacks, or join vanished parent threads.
+        self._shutdown = True
+        for conn in self._live_conns | self._new_conns | self._closed_conns:
+            try:
+                conn._socket.close()
+            except OSError:
+                pass
+            conn._read_watcher = conn._write_watcher = None
+        self._live_conns = self._new_conns = self._closed_conns = set()
+        self._deferred_destroyed = []
+        self._management_callbacks.clear()
+        self._management_users.clear()
+        # Break watcher/callback cycles and release the native loop, whose
+        # destructor closes its internal wakeup descriptors in the child.
+        self._preparer = self._loop_timer = self._management_keeper = None
+        self._notifier = None
+        self._loop = None
 
     def add_timer(self, timer):
         self._timers.add_timer(timer)
@@ -212,19 +239,20 @@ class LibevLoop(object):
         self._timers.service_timeouts()
 
     def call_soon(self, callback):
-        with self._lock:
-            if self._shutdown:
-                raise RuntimeError("Libev reactor is shutting down")
-            self._management_callbacks.append(callback)
-        try:
-            self.maybe_start()
-        except BaseException:
+        with self._lock_thread:
             with self._lock:
-                try:
-                    self._management_callbacks.remove(callback)
-                except ValueError:
-                    return  # Already claimed: the dispatch was accepted.
-            raise
+                if self._shutdown:
+                    raise RuntimeError("Libev reactor is shutting down")
+                self._management_callbacks.append(callback)
+            try:
+                self.maybe_start()
+            except BaseException:
+                with self._lock:
+                    try:
+                        self._management_callbacks.remove(callback)
+                    except ValueError:
+                        return  # Already claimed: the dispatch was accepted.
+                raise
 
     def _keep_management_alive(self):
         if self._management_users and not self._shutdown:
@@ -439,7 +467,7 @@ class LibevConnection(Connection):
         global _global_loop
         with _initialization_lock:
             if _global_loop is not None and _global_loop._pid != os.getpid():
-                # Inherited threads cannot be joined in the child.
+                _global_loop._cleanup_after_fork()
                 _global_loop = None
             if _global_loop is None:
                 candidate = LibevLoop()
