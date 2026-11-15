@@ -2,6 +2,8 @@
 
 import asyncio
 import importlib
+from collections import deque
+from contextlib import contextmanager
 from concurrent.futures import CancelledError, Future
 from threading import Event, Thread, current_thread, get_ident
 
@@ -820,13 +822,83 @@ def test_reactor_shutdown_delivers_already_accepted_callbacks(monkeypatch, react
         cleanup()
 
 
+@contextmanager
+def inherited_descriptor(module, reactor, sock):
+    from types import SimpleNamespace
+    inherited = module._global_loop
+    if reactor == 'libev':
+        class Connection:
+            _socket = sock
+            _read_watcher = _write_watcher = None
+            _write_watcher_is_active = False
+            deque = deque()
+        conn = Connection()
+        with inherited._lock:
+            inherited._live_conns = inherited._live_conns | {conn}
+        try:
+            yield conn
+        finally:
+            with inherited._lock:
+                inherited._live_conns = inherited._live_conns - {conn}
+    else:
+        descriptor = sock.fileno()
+        module._dispatcher_map[descriptor] = SimpleNamespace(socket=sock)
+        try:
+            yield
+        finally:
+            module._dispatcher_map.pop(descriptor, None)
+
+
+def test_inherited_libev_descriptor_is_safe_during_parent_prepare(monkeypatch):
+    import socket
+    module = reactor_module('libev')
+    entered, release, prepared = Event(), Event(), Event()
+    errors = []
+    original_prepare = module.LibevLoop._loop_will_run
+    def observed_prepare(loop, watcher):
+        try:
+            original_prepare(loop, watcher)
+        except BaseException as exc:
+            errors.append(exc)
+            raise
+        finally:
+            prepared.set()
+    monkeypatch.setattr(module.LibevLoop, '_loop_will_run', observed_prepare)
+    loop = module.LibevLoop()
+    monkeypatch.setattr(module, '_global_loop', loop)
+    ours, peer = socket.socketpair()
+    def hold():
+        entered.set()
+        assert release.wait(5)
+    try:
+        loop.call_soon(hold)
+        assert entered.wait(5)
+        previous = loop._live_conns
+        with inherited_descriptor(module, 'libev', ours) as conn:
+            installed = loop._live_conns
+            assert conn not in previous
+            assert conn in installed
+            release.set()
+            assert prepared.wait(5)
+            assert not errors
+        assert conn in installed
+        assert conn not in loop._live_conns
+    finally:
+        release.set()
+        try:
+            loop._cleanup_unpublished()
+            assert loop._thread is None or not loop._thread.is_alive()
+        finally:
+            ours.close()
+            peer.close()
+
+
 @pytest.mark.parametrize('reactor', ['libev', 'asyncore'])
 def test_fork_reinitialization_closes_inherited_descriptors(monkeypatch, reactor):
     import os
     import select
     import signal
     import socket
-    from types import SimpleNamespace
     if not hasattr(os, 'fork'):
         pytest.skip('fork unavailable')
     module = reactor_module(reactor)
@@ -835,49 +907,40 @@ def test_fork_reinitialization_closes_inherited_descriptors(monkeypatch, reactor
     connection.initialize_reactor()
     inherited = module._global_loop
     ours, peer = socket.socketpair()
-    if reactor == 'libev':
-        class Connection:
-            _socket = ours
-            _read_watcher = _write_watcher = None
-        conn = Connection()
-        inherited._live_conns.add(conn)
-    else:
-        module._dispatcher_map[ours.fileno()] = SimpleNamespace(socket=ours)
-    original_factory = getattr(module, {'libev': 'LibevLoop', 'asyncore': 'AsyncoreLoop'}[reactor])
-    def checked_factory():
-        assert ours.fileno() == -1
-        if reactor == 'libev':
-            assert inherited._loop is None
-            assert inherited._notifier is None
-        else:
-            assert inherited._loop_dispatcher.write_fd is None
-        return original_factory()
-    monkeypatch.setattr(module, original_factory.__name__, checked_factory)
-    read_fd, write_fd = os.pipe()
-    pid = os.fork()
-    if pid == 0:
-        try:
-            os.close(read_fd)
-            connection.initialize_reactor()
-            os.write(write_fd, b'closed')
-        finally:
-            os._exit(0)
-    os.close(write_fd)
     try:
-        ready, _, _ = select.select([read_fd], [], [], 5)
-        if not ready:
-            os.kill(pid, signal.SIGKILL)
-        assert ready
-        assert os.read(read_fd, 6) == b'closed'
-        # The child closed only its descriptor copies.
-        ours.send(b'x')
-        assert peer.recv(1) == b'x'
+        with inherited_descriptor(module, reactor, ours):
+            original_factory = getattr(module, {'libev': 'LibevLoop', 'asyncore': 'AsyncoreLoop'}[reactor])
+            def checked_factory():
+                assert ours.fileno() == -1
+                if reactor == 'libev':
+                    assert inherited._loop is None
+                    assert inherited._notifier is None
+                else:
+                    assert inherited._loop_dispatcher.write_fd is None
+                return original_factory()
+            monkeypatch.setattr(module, original_factory.__name__, checked_factory)
+            read_fd, write_fd = os.pipe()
+            pid = os.fork()
+            if pid == 0:
+                try:
+                    os.close(read_fd)
+                    connection.initialize_reactor()
+                    os.write(write_fd, b'closed')
+                finally:
+                    os._exit(0)
+            os.close(write_fd)
+            try:
+                ready, _, _ = select.select([read_fd], [], [], 5)
+                if not ready:
+                    os.kill(pid, signal.SIGKILL)
+                assert ready
+                assert os.read(read_fd, 6) == b'closed'
+                # The child closed only its descriptor copies.
+                ours.send(b'x')
+                assert peer.recv(1) == b'x'
+            finally:
+                os.close(read_fd)
+                os.waitpid(pid, 0)
     finally:
-        if reactor == 'libev':
-            inherited._live_conns.discard(conn)
-        else:
-            module._dispatcher_map.pop(ours.fileno(), None)
         ours.close()
         peer.close()
-        os.close(read_fd)
-        os.waitpid(pid, 0)
