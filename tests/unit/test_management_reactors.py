@@ -223,3 +223,239 @@ def test_reactor_startup_lock_is_reset_in_fork_child(connection_class):
         thread.join(5)
         os.close(read_fd)
         os.waitpid(pid, 0)
+
+
+@pytest.mark.parametrize('reactor', ['libev', 'asyncore'])
+def test_startup_failure_does_not_acknowledge_concurrent_dispatch(monkeypatch, reactor):
+    module = pytest.importorskip('cassandra.io.' + reactor + 'reactor')
+    if reactor == 'asyncore':
+        monkeypatch.setattr(module, '_dispatcher_map', {})
+        class Dispatcher:
+            def validate(self):
+                pass
+            def notify_loop(self):
+                pass
+            def loop(self, timeout):
+                Event().wait(0.001)
+            def close(self):
+                pass
+        monkeypatch.setattr(module.AsyncoreLoop, '_loop_dispatch_class', Dispatcher)
+    loop = getattr(module, {'libev': 'LibevLoop', 'asyncore': 'AsyncoreLoop'}[reactor])()
+    starting, fail, second_entered, accepted, delivered = [Event() for _ in range(5)]
+    original_thread = module.Thread
+    calls = []
+    class FailedStart:
+        def start(self):
+            starting.set()
+            assert fail.wait(5)
+            raise RuntimeError('thread creation failed')
+        def is_alive(self):
+            return False
+    def factory(*args, **kwargs):
+        calls.append(True)
+        return FailedStart() if len(calls) == 1 else original_thread(*args, **kwargs)
+    monkeypatch.setattr(module, 'Thread', factory)
+    errors, rejected_callbacks = [], []
+    def first():
+        try:
+            loop.call_soon(lambda: rejected_callbacks.append(True))
+        except RuntimeError as exc:
+            errors.append(str(exc))
+    def second():
+        second_entered.set()
+        loop.call_soon(delivered.set)
+        accepted.set()
+    first_thread, second_thread = Thread(target=first), Thread(target=second)
+    try:
+        first_thread.start()
+        assert starting.wait(5)
+        second_thread.start()
+        assert second_entered.wait(5)
+        assert not accepted.wait(0.05)
+        fail.set()
+        first_thread.join(5)
+        second_thread.join(5)
+        assert accepted.is_set()
+        assert delivered.wait(5)
+        assert errors == ['thread creation failed']
+        assert rejected_callbacks == []
+    finally:
+        fail.set()
+        first_thread.join(5)
+        if second_thread.ident is not None:
+            second_thread.join(5)
+        loop._cleanup()
+
+
+def test_asyncore_dispatch_accepted_during_runner_failure_is_delivered(monkeypatch):
+    module = pytest.importorskip('cassandra.io.asyncorereactor')
+    monkeypatch.setattr(module, '_dispatcher_map', {})
+    entered, fail, delivered = Event(), Event(), Event()
+    class Dispatcher:
+        def validate(self):
+            pass
+        def notify_loop(self):
+            pass
+        def loop(self, timeout):
+            entered.set()
+            assert fail.wait(5)
+            raise RuntimeError('dispatcher failed')
+        def close(self):
+            pass
+    monkeypatch.setattr(module.AsyncoreLoop, '_loop_dispatch_class', Dispatcher)
+    loop = module.AsyncoreLoop()
+    observations = []
+    try:
+        loop.maybe_start()
+        assert entered.wait(5)
+        def completion():
+            observations.append(get_ident())
+            delivered.set()
+        loop.call_soon(completion)
+        fail.set()
+        loop._thread.join(5)
+        assert delivered.is_set()
+        assert observations == [loop._thread.ident]
+        with pytest.raises(RuntimeError, match='shutting down'):
+            loop.call_soon(lambda: None)
+        assert not loop._management_callbacks
+    finally:
+        fail.set()
+        loop._cleanup()
+
+
+@pytest.mark.parametrize('reactor', ['asyncio', 'libev', 'asyncore'])
+@pytest.mark.parametrize('count', [1, 130])
+def test_reactor_shutdown_delivers_already_accepted_callbacks(monkeypatch, reactor, count):
+    module = pytest.importorskip('cassandra.io.' + {
+        'asyncio': 'asyncioreactor', 'libev': 'libevreactor',
+        'asyncore': 'asyncorereactor'}[reactor])
+    entered, release, delivered, stopping = [Event() for _ in range(4)]
+    if reactor == 'asyncore':
+        monkeypatch.setattr(module, '_dispatcher_map', {})
+    if reactor == 'asyncio':
+        connection = type('IsolatedConnection', (module.AsyncioConnection,),
+                          {'_loop': None, '_loop_thread': None})
+        connection.initialize_reactor()
+        dispatch, runner = connection._management_dispatch, connection._loop_thread
+        def stop():
+            connection._loop.call_soon_threadsafe(stopping.set)
+            connection._loop.call_soon_threadsafe(connection._loop.stop)
+        def cleanup():
+            runner.join(5)
+            connection._loop.close()
+    else:
+        loop = getattr(module, {'libev': 'LibevLoop', 'asyncore': 'AsyncoreLoop'}[reactor])()
+        dispatch = loop.call_soon
+        def stop():
+            stopping.set()
+            loop._cleanup()
+        def cleanup():
+            loop._cleanup()
+        runner = None
+    observations = []
+    def hold():
+        entered.set()
+        assert release.wait(5)
+    stopper = None
+    try:
+        dispatch(hold)
+        assert entered.wait(5)
+        def completion():
+            observations.append(get_ident())
+            if len(observations) == count:
+                delivered.set()
+        for _ in range(count):
+            dispatch(completion)
+        if reactor == 'asyncio':
+            stop()
+        else:
+            runner = loop._thread
+            stopper = Thread(target=stop)
+            stopper.start()
+            assert stopping.wait(5)
+            # Cleanup commits shutdown under the admission lock before join.
+            for _ in range(500):
+                with (loop._lock if reactor == 'libev' else loop._state_lock):
+                    if loop._shutdown:
+                        break
+                Event().wait(0.001)
+            assert loop._shutdown
+        release.set()
+        assert delivered.wait(5)
+        runner.join(5)
+        assert not runner.is_alive()
+        if stopper is not None:
+            stopper.join(5)
+            assert not stopper.is_alive()
+        assert observations == [runner.ident] * count
+        with pytest.raises(RuntimeError):
+            dispatch(lambda: None)
+    finally:
+        release.set()
+        if stopper is not None:
+            stopper.join(5)
+        cleanup()
+
+
+@pytest.mark.parametrize('reactor', ['libev', 'asyncore'])
+def test_fork_reinitialization_closes_inherited_descriptors(monkeypatch, reactor):
+    import os
+    import select
+    import signal
+    import socket
+    from types import SimpleNamespace
+    if not hasattr(os, 'fork'):
+        pytest.skip('fork unavailable')
+    module = pytest.importorskip('cassandra.io.' + reactor + 'reactor')
+    connection = getattr(module, {'libev': 'LibevConnection',
+                                  'asyncore': 'AsyncoreConnection'}[reactor])
+    connection.initialize_reactor()
+    inherited = module._global_loop
+    ours, peer = socket.socketpair()
+    if reactor == 'libev':
+        class Connection:
+            _socket = ours
+            _read_watcher = _write_watcher = None
+        conn = Connection()
+        inherited._live_conns.add(conn)
+    else:
+        module._dispatcher_map[ours.fileno()] = SimpleNamespace(socket=ours)
+    original_factory = getattr(module, {'libev': 'LibevLoop', 'asyncore': 'AsyncoreLoop'}[reactor])
+    def checked_factory():
+        assert ours.fileno() == -1
+        if reactor == 'libev':
+            assert inherited._loop is None
+            assert inherited._notifier is None
+        else:
+            assert inherited._loop_dispatcher.write_fd is None
+        return original_factory()
+    monkeypatch.setattr(module, original_factory.__name__, checked_factory)
+    read_fd, write_fd = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        try:
+            os.close(read_fd)
+            connection.initialize_reactor()
+            os.write(write_fd, b'closed')
+        finally:
+            os._exit(0)
+    os.close(write_fd)
+    try:
+        ready, _, _ = select.select([read_fd], [], [], 5)
+        if not ready:
+            os.kill(pid, signal.SIGKILL)
+        assert ready
+        assert os.read(read_fd, 6) == b'closed'
+        # The child closed only its descriptor copies.
+        ours.send(b'x')
+        assert peer.recv(1) == b'x'
+    finally:
+        if reactor == 'libev':
+            inherited._live_conns.discard(conn)
+        else:
+            module._dispatcher_map.pop(ours.fileno(), None)
+        ours.close()
+        peer.close()
+        os.close(read_fd)
+        os.waitpid(pid, 0)
