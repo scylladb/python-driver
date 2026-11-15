@@ -911,11 +911,82 @@ def inherited_descriptor(module, reactor, sock):
                 inherited._live_conns = inherited._live_conns - {conn}
     else:
         descriptor = sock.fileno()
-        module._dispatcher_map[descriptor] = SimpleNamespace(socket=sock)
+        module._dispatcher_map[descriptor] = SimpleNamespace(
+            socket=sock, readable=lambda: False, writable=lambda: False)
         try:
             yield
         finally:
             module._dispatcher_map.pop(descriptor, None)
+
+
+@pytest.mark.parametrize('dispatcher_name', [
+    '_AsyncorePipeDispatcher', '_AsyncoreUDPDispatcher', '_BusyWaitDispatcher'])
+def test_inherited_asyncore_descriptor_survives_actual_poll(dispatcher_name):
+    import subprocess
+    import sys
+    reactor_module('asyncore')
+    # A running shared runner also consults the process-global map. Keep the
+    # real polling/cleanup regression in its own process, including failures.
+    script = (
+        'import sys, pytest; '
+        'from tests.unit.test_management_reactors import '
+        '_assert_inherited_asyncore_descriptor_survives_poll as check; '
+        'patch = pytest.MonkeyPatch(); '
+        '\ntry: check(patch, sys.argv[1])'
+        '\nfinally: patch.undo()')
+    result = subprocess.run(
+        [sys.executable, '-c', script, dispatcher_name],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout
+
+
+def _assert_inherited_asyncore_descriptor_survives_poll(monkeypatch, dispatcher_name):
+    import socket
+    module = reactor_module('asyncore')
+    monkeypatch.setattr(module, '_dispatcher_map', {})
+    monkeypatch.setattr(module.AsyncoreLoop, '_loop_dispatch_class',
+                        getattr(module, dispatcher_name))
+    loop = module.AsyncoreLoop()
+    monkeypatch.setattr(module, '_global_loop', loop)
+    entered, release, polled, initial, delivered = [Event() for _ in range(5)]
+    actual_poll = loop._loop_dispatcher.loop
+    errors, snapshots = [], []
+    def observed_poll(timeout):
+        entered.set()
+        assert release.wait(5)
+        snapshots.append(set(module._dispatcher_map))
+        try:
+            actual_poll(timeout)
+        except BaseException as exc:
+            errors.append(exc)
+            raise
+        finally:
+            polled.set()
+    monkeypatch.setattr(loop._loop_dispatcher, 'loop', observed_poll)
+    ours, peer = socket.socketpair()
+    descriptor = ours.fileno()
+    try:
+        loop.call_soon(initial.set)
+        assert entered.wait(5)
+        with inherited_descriptor(module, 'asyncore', ours):
+            assert descriptor in module._dispatcher_map
+            release.set()
+            assert polled.wait(5)
+            assert descriptor in snapshots[0]
+            assert initial.wait(5)
+            assert errors == [], {
+                'errors': errors, 'management_failed': loop._management_failed}
+            assert not loop._management_failed
+            loop.call_soon(delivered.set)
+            assert delivered.wait(5)
+    finally:
+        release.set()
+        try:
+            loop._cleanup()
+            assert loop._thread is None or not loop._thread.is_alive()
+        finally:
+            ours.close()
+            peer.close()
 
 
 def test_inherited_libev_descriptor_is_safe_during_parent_prepare(monkeypatch):
