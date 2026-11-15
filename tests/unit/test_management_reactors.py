@@ -479,6 +479,75 @@ def test_reactor_startup_lock_is_reset_in_fork_child(connection_class):
         os.waitpid(pid, 0)
 
 
+def test_libev_shutdown_drain_rejects_inline_channel_borrow(monkeypatch):
+    module = reactor_module('libev')
+    loop = module.LibevLoop()
+    monkeypatch.setattr(module, '_global_loop', loop)
+    entered, release, stopped, finished = [Event() for _ in range(4)]
+    errors, rejected, observed, channels = [], [], [], []
+    native_keeper = loop._management_keeper
+    class ObservedKeeper:
+        def stop(self):
+            native_keeper.stop()
+            stopped.set()
+        def __getattr__(self, name):
+            return getattr(native_keeper, name)
+    def hold():
+        entered.set()
+        assert release.wait(5)
+    def attempt():
+        try:
+            channels.append(ReactorChannel(module.LibevConnection))
+        except RuntimeError as exc:
+            rejected.append(str(exc))
+        finally:
+            observed.append(current_thread())
+            finished.set()
+    def cleanup():
+        try:
+            loop._cleanup()
+        except BaseException as exc:
+            errors.append(exc)
+    stopper = Thread(target=cleanup)
+    try:
+        channels.append(ReactorChannel(module.LibevConnection))
+        with monkeypatch.context() as keeper_patch:
+            keeper_patch.setattr(loop, '_management_keeper', ObservedKeeper())
+            before = set(loop._management_users)
+            loop.call_soon(hold)
+            assert entered.wait(5)
+            runner = loop._thread
+            loop.call_soon(attempt)
+            stopper.start()
+            assert stopped.wait(5)
+            with loop._lock:
+                assert loop._shutdown
+            release.set()
+            assert finished.wait(5)
+            stopper.join(5)
+            runner.join(5)
+            assert not stopper.is_alive()
+            assert not runner.is_alive()
+            assert errors == []
+            assert observed == [runner]
+            assert rejected == ['Libev reactor is shutting down'], {
+                'channels': len(channels), 'tokens': len(loop._management_users),
+                'previous_tokens': len(before)}
+            assert set(loop._management_users) == before
+            assert not loop._management_callbacks
+    finally:
+        release.set()
+        if stopper.ident is not None:
+            stopper.join(5)
+        try:
+            for channel in channels:
+                detached = Event()
+                channel.close(detached.set)
+                assert detached.wait(5)
+        finally:
+            loop._cleanup_unpublished()
+
+
 def test_failed_libev_startup_releases_unpublished_native_callbacks(monkeypatch):
     import gc
     import weakref
