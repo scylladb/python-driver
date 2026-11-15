@@ -24,7 +24,9 @@ from functools import wraps
 from itertools import chain
 import logging
 import os
-from threading import Condition, Event, Lock, Thread, current_thread, local
+from threading import (
+    Condition, Event, Lock, Thread, current_thread, enumerate as active_threads,
+    local)
 import time
 
 from cassandra import DriverException
@@ -448,7 +450,14 @@ class ManagementRuntime:
                     thread = Thread(target=self._run, args=(kind, target),
                                     name='cassandra-management-' + kind,
                                     daemon=True)
-                    thread.start()
+                    try:
+                        thread.start()
+                    except BaseException:
+                        # A start interrupted after native launch still owns a
+                        # runner, even before bootstrap publishes its ident.
+                        if thread in active_threads():
+                            self._threads.append(thread)
+                        raise
                     self._threads.append(thread)
             except BaseException:
                 self._closing = True
@@ -497,6 +506,12 @@ class ManagementRuntime:
                 if not wait:
                     raise ManagementOverloaded(
                         'Management admission capacity exhausted')
+                current = getattr(_context, 'record', None)
+                if (execution_context() == 'callback' and
+                        current is not None and current.runtime is self and
+                        budget == 'ordinary'):
+                    raise ManagementContextError(
+                        'Callback admission cannot wait behind its own credit')
                 remaining = (None if deadline is None
                              else deadline - time.monotonic())
                 if remaining is not None and remaining <= 0:
@@ -613,17 +628,16 @@ class ManagementRuntime:
         returned_to_owner = Event()
         adopted = False
         received = False
+        work_started = False
+        submission_failed = False
 
         def completed(future):
             with _entered('worker', record):
-                complete(future)
-
-        def complete(future):
-            try:
-                value, error = future.result(), None
-            except BaseException as exc:
-                value, error = None, exc
-            receive(value, error)
+                try:
+                    value, error = future.result(), None
+                except BaseException as exc:
+                    value, error = None, exc
+                receive(value, error)
 
         def receive(value, error):
             nonlocal received
@@ -674,6 +688,13 @@ class ManagementRuntime:
                 returned_to_owner.set()
 
         def physical_work():
+            nonlocal work_started
+            with self._condition:
+                if submission_failed:
+                    # submit() can queue a callable before raising. Its
+                    # reservation was retired only if execution never began.
+                    return None
+                work_started = True
             with _entered('worker', record):
                 try:
                     value = function()
@@ -690,8 +711,11 @@ class ManagementRuntime:
         try:
             physical = executor.submit(physical_work)
         except BaseException as exc:
-            self._finish(record, error=exc)
-            receive(None, exc)
+            with self._condition:
+                submission_failed = True
+                self._finish(record, error=exc)
+                if not work_started:
+                    receive(None, exc)
             return _PENDING
         try:
             physical.add_done_callback(completed)
@@ -1302,9 +1326,14 @@ def compatibility_work(runtime):
                             budget=budget, reserve=1)
     record = future._record
     attached = False
+    completed = False
 
     def complete(work):
+        nonlocal completed
         with runtime._condition:
+            if completed:
+                return
+            completed = True
             runtime._finish(record)
             record.physical -= 1
             runtime._release_locked(record)
@@ -1313,8 +1342,21 @@ def compatibility_work(runtime):
         nonlocal attached
         if (work is not None and
                 callable(getattr(work, 'add_done_callback', None))):
-            attached = True
-            work.add_done_callback(complete)
+            try:
+                attached = True
+                work.add_done_callback(complete)
+            except BaseException:
+                # Registration may have been interrupted before or after
+                # installation. Keep this synchronous caller responsible for
+                # the physical work until it actually settles; the callback
+                # and this fallback share the same once-only retirement.
+                while not work.done():
+                    try:
+                        work.result()
+                    except BaseException:
+                        pass
+                complete(work)
+                raise
     try:
         record.started.wait()
         if future.done():

@@ -28,6 +28,24 @@ class Dispatcher:
             callback()
 
 
+def complete_physical(manager, future, value):
+    """Bound a controlled Future's synchronous owner-handoff callback."""
+    errors = []
+    def complete():
+        try:
+            future.set_result(value)
+        except BaseException as exc:
+            errors.append(exc)
+    thread = Thread(target=complete, daemon=True)
+    thread.start()
+    thread.join(5)
+    if thread.is_alive():
+        manager.close()
+        thread.join(5)
+    assert not thread.is_alive(), 'physical result handoff did not finish'
+    assert not errors
+
+
 @pytest.fixture
 def runtime():
     dispatch = Dispatcher()
@@ -217,7 +235,83 @@ def test_executor_rejection_releases_reservation(runtime):
         manager.submit(
             lambda r: manager.work(r, Rejected(), lambda: None)).result(5)
     with manager._condition:
-        assert manager._credits == 0
+        assert manager._condition.wait_for(lambda: manager._credits == 0, 5)
+
+
+@pytest.mark.parametrize('already_running', [False, True])
+def test_executor_failure_after_queueing_preserves_physical_ownership(
+        runtime, already_running):
+    manager, dispatch = runtime
+    entered, release = Event(), Event()
+    calls, disposed, queued, errors = [], [], [], []
+    resource = object()
+    def physical():
+        calls.append(get_ident())
+        entered.set()
+        assert release.wait(5)
+        return resource
+    def run(function):
+        try:
+            function()
+        except BaseException as exc:
+            errors.append(exc)
+    class QueuedThenFailed:
+        def submit(self, function):
+            queued.append(Thread(target=run, args=(function,), daemon=True))
+            if already_running:
+                queued[0].start()
+                assert entered.wait(5)
+            raise RuntimeError('failed after queueing')
+    future = manager.submit(lambda record: manager.work(
+        record, QueuedThenFailed(), physical,
+        dispose=lambda value: disposed.append(value)))
+    try:
+        with pytest.raises(RuntimeError, match='after queueing'):
+            future.result(5)
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: future._record.physical == int(already_running), 5)
+        if already_running:
+            manager.close()
+            assert not manager.finalized.is_set()
+        else:
+            queued[0].start()
+    finally:
+        release.set()
+        for thread in queued:
+            if thread.ident is not None:
+                thread.join(5)
+                assert not thread.is_alive()
+    assert not errors
+    assert bool(calls) == already_running
+    assert disposed == ([resource] if already_running else [])
+    with manager._condition:
+        assert manager._condition.wait_for(lambda: not manager._records, 5)
+
+
+@pytest.mark.parametrize('notification', [False, True])
+def test_callback_rejects_saturated_ordinary_admission(notification):
+    manager = ManagementRuntime(Dispatcher(), limit=1)
+    finished = Event()
+    errors = []
+    def callback():
+        try:
+            if notification:
+                manager.notify(lambda: None, wait=True)
+            else:
+                manager.submit(lambda record: None, wait=True)
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            finished.set()
+    try:
+        manager.notify(callback)
+        assert finished.wait(1), 'callback waited behind its own credit'
+        assert len(errors) == 1
+        assert isinstance(errors[0], ManagementContextError)
+    finally:
+        manager.close()
+        manager.join(5)
 
 
 def test_health_and_close_bypass_full_delivery_and_io_capacity(runtime):
@@ -456,21 +550,22 @@ def test_interrupted_physical_callback_registration_releases_once(
 
 
 @pytest.mark.parametrize('failed_phase', [1, 2, 3, 4])
+@pytest.mark.parametrize('startup_error', [RuntimeError, KeyboardInterrupt])
 def test_start_failure_and_repeated_close_leave_no_threads(
-        monkeypatch, failed_phase):
+        monkeypatch, failed_phase, startup_error):
     real_start = Thread.start
     starts = []
     def start(thread):
         starts.append(thread)
         if len(starts) == failed_phase:
-            raise RuntimeError('thread startup failed')
+            raise startup_error('thread startup failed')
         return real_start(thread)
     dispatch = Dispatcher()
     manager = ManagementRuntime(dispatch)
     try:
         with monkeypatch.context() as patcher:
             patcher.setattr(Thread, 'start', start)
-            with pytest.raises(RuntimeError, match='thread startup failed'):
+            with pytest.raises(startup_error, match='thread startup failed'):
                 manager.start()
     finally:
         manager.close()
@@ -488,6 +583,55 @@ def test_start_failure_and_repeated_close_leave_no_threads(
             manager.join(5)
         assert not manager._records
         assert all(not thread.is_alive() for thread in manager._threads)
+
+
+@pytest.mark.parametrize('bootstrap_pending', [False, True])
+def test_start_interruption_after_launch_tracks_the_runner(
+        monkeypatch, bootstrap_pending):
+    manager = ManagementRuntime(Dispatcher())
+    launched, release = Event(), Event()
+    threads = []
+    real_start = Thread.start
+    real_bootstrap = Thread._bootstrap_inner
+    def bootstrap(thread):
+        if bootstrap_pending:
+            launched.set()
+            assert release.wait(5)
+        real_bootstrap(thread)
+    def start(thread):
+        threads.append(thread)
+        if not bootstrap_pending:
+            real_start(thread)
+            raise KeyboardInterrupt('interrupted after launch')
+        original_wait = thread._started.wait
+        def interrupted_wait(*args, **kwargs):
+            assert launched.wait(5)
+            assert thread.ident is None
+            raise KeyboardInterrupt('interrupted before bootstrap')
+        thread._started.wait = interrupted_wait
+        try:
+            real_start(thread)
+        finally:
+            thread._started.wait = original_wait
+    try:
+        with monkeypatch.context() as patcher:
+            patcher.setattr(Thread, '_bootstrap_inner', bootstrap)
+            patcher.setattr(Thread, 'start', start)
+            with pytest.raises(KeyboardInterrupt):
+                manager.start()
+            manager.close()
+            if bootstrap_pending:
+                assert not manager.finalized.is_set()
+            assert manager._threads == threads
+    finally:
+        release.set()
+        for thread in threads:
+            assert thread._started.wait(5)
+            thread.join(5)
+            assert not thread.is_alive()
+        manager.close()
+        manager.join(5)
+    assert manager._exited == len(threads) == 1
 
 
 def test_post_terminal_owner_callbacks_use_current_charged_batch(runtime):
@@ -581,7 +725,7 @@ def test_post_terminal_registration_is_serial_across_threads(runtime):
 def test_concurrent_producers_have_one_fifo_owner(monkeypatch):
     dispatch = Dispatcher()
     manager = ManagementRuntime(dispatch, limit=64)
-    admitted, handled, owners = [], [], set()
+    admitted, handled, owners, errors = [], [], set(), []
     producer_lock = Lock()
     start = Event()
     admission = Barrier(8)
@@ -593,12 +737,16 @@ def test_concurrent_producers_have_one_fifo_owner(monkeypatch):
         original_start()
     monkeypatch.setattr(manager, 'start', synchronized_start)
     def producer():
-        assert start.wait(5)
-        for _ in range(8):
-            future = manager.submit(lambda r: (
-                handled.append(r.envelope.operation), owners.add(get_ident())))
+        try:
+            assert start.wait(5)
+            for _ in range(8):
+                future = manager.submit(lambda r: (
+                    handled.append(r.envelope.operation), owners.add(get_ident())))
+                with producer_lock:
+                    admitted.append((future._record.envelope.operation, future))
+        except BaseException as exc:
             with producer_lock:
-                admitted.append((future._record.envelope.operation, future))
+                errors.append(exc)
     threads = [Thread(target=producer) for _ in range(8)]
     try:
         for thread in threads:
@@ -607,9 +755,12 @@ def test_concurrent_producers_have_one_fifo_owner(monkeypatch):
         for thread in threads:
             thread.join(5)
             assert not thread.is_alive()
+        assert not errors
+        assert len(admitted) == 64
         for _, future in admitted:
             future.result(5)
         assert handled == sorted(number for number, _ in admitted)
+        assert len(handled) == 64
         assert len(owners) == 1
     finally:
         start.set()
@@ -636,7 +787,7 @@ def test_result_reserved_before_close_is_still_disposed(runtime, pool):
                             dispose=dispose)
     manager.pool_limit = 3
     future = manager.submit(initial, pool=pool)
-    completion = Thread(target=lambda: worker.set_result(object()))
+    completion = Thread(target=lambda: worker.set_result(object()), daemon=True)
     try:
         assert started.wait(5)
         blocker = manager.submit(
@@ -665,9 +816,14 @@ def test_result_reserved_before_close_is_still_disposed(runtime, pool):
         assert not disposed.is_set()
     finally:
         release.set()
-        if completion.ident is not None:
+        if completion.ident is None:
+            manager.close()
+            completion.start()
+        completion.join(5)
+        if completion.is_alive():
+            manager.close()
             completion.join(5)
-            assert not completion.is_alive()
+        assert not completion.is_alive()
     assert disposed.wait(5)
     assert disposal_context == [('worker', completion.ident)]
     assert completion.ident not in {thread.ident for thread in manager._threads}
@@ -847,7 +1003,7 @@ def test_one_physical_result_per_current_admitted_record(runtime):
             future.result(5)
         assert len(submissions) == 1
     finally:
-        physical.set_result(object())
+        complete_physical(manager, physical, object())
     assert disposed.wait(5)
     old = future._record
     def reuse(record):
@@ -1119,7 +1275,7 @@ def test_coalesced_waiters_keep_independent_budget_and_delivery_charges(
                 operation, key='shared-budget', pool=pool)
         assert private[0]._record is ordinary._record
         ordinary.add_done_callback(lambda f: None)
-        physical.set_result(23)
+        complete_physical(manager, physical, 23)
         assert ordinary.result(5) == 23
         notification.result(5)
         with manager._condition:
@@ -1137,7 +1293,7 @@ def test_coalesced_waiters_keep_independent_budget_and_delivery_charges(
     finally:
         allow_join.set()
         if not physical.done():
-            physical.set_result(23)
+            complete_physical(manager, physical, 23)
 
 
 def test_foreign_callback_uses_ordinary_admission(runtime):
@@ -1441,6 +1597,64 @@ def test_interrupted_initial_compatibility_admission_discharges_reservation(
                     future._record.physical -= 1
                     manager._release_locked(future._record)
         manager.join(5)
+
+
+@pytest.mark.parametrize('installed', [False, True])
+@pytest.mark.parametrize('outcome', ['result', 'exception'])
+def test_interrupted_compatibility_attachment_retains_work_until_completion(
+        runtime, installed, outcome):
+    from cassandra._management import compatibility_work
+    manager, dispatch = runtime
+    physical = Future()
+    assert physical.set_running_or_notify_cancel()
+    register = physical.add_done_callback
+    attaching, finished = Event(), Event()
+    errors, records = [], []
+    def interrupted(callback):
+        if installed:
+            register(callback)
+        attaching.set()
+        raise KeyboardInterrupt('compatibility attachment interrupted')
+    physical.add_done_callback = interrupted
+    def caller():
+        try:
+            with compatibility_work(manager) as attach:
+                with manager._condition:
+                    records.extend(manager._records)
+                attach(physical)
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            finished.set()
+    thread = Thread(target=caller, daemon=True)
+    thread.start()
+    try:
+        assert attaching.wait(5)
+        with manager._condition:
+            assert len(records) == 1
+            assert records[0].physical == 1
+        assert not finished.wait(0.05)
+    finally:
+        if outcome == 'result':
+            physical.set_result(23)
+        else:
+            physical.set_exception(ValueError('physical work failed'))
+        thread.join(5)
+        assert not thread.is_alive()
+        # Keep the original-source failure bounded without masking the defect.
+        with manager._condition:
+            debt_after_completion = sum(record.physical for record in records)
+            credits_after_completion = manager.counts()['ordinary']
+            for record in records:
+                if record.physical:
+                    manager._finish(record)
+                    record.physical -= 1
+                    manager._release_locked(record)
+    assert len(errors) == 1
+    assert isinstance(errors[0], KeyboardInterrupt)
+    assert debt_after_completion == credits_after_completion == 0
+    assert records[0].physical == 0
+    assert manager.counts()['ordinary'] == 0
 
 
 @pytest.mark.parametrize('pool', [None, 'logical-pool'])
