@@ -12,6 +12,31 @@ from cassandra._management import (
     ManagementRuntime, ReactorChannel, execution_context)
 
 
+def reactor_module(reactor):
+    try:
+        return importlib.import_module('cassandra.io.' + reactor + 'reactor')
+    except (ImportError, DependencyException) as exc:
+        pytest.skip(str(exc))
+
+
+@pytest.mark.parametrize('failure', [ImportError, DependencyException])
+def test_unavailable_reactor_import_is_skipped(monkeypatch, failure):
+    def unavailable(name):
+        raise failure('reactor dependency unavailable')
+    monkeypatch.setattr(importlib, 'import_module', unavailable)
+    with pytest.raises(pytest.skip.Exception, match='reactor dependency unavailable'):
+        reactor_module('libev')
+
+
+@pytest.mark.parametrize('failure', [RuntimeError, AssertionError])
+def test_reactor_import_errors_are_not_hidden(monkeypatch, failure):
+    def broken(name):
+        raise failure('supported reactor is broken')
+    monkeypatch.setattr(importlib, 'import_module', broken)
+    with pytest.raises(failure, match='supported reactor is broken'):
+        reactor_module('asyncore')
+
+
 @pytest.fixture(autouse=True)
 def close_borrowed_channels(monkeypatch):
     channels = []
@@ -29,12 +54,7 @@ def close_borrowed_channels(monkeypatch):
 
 @pytest.fixture(params=['asyncio', 'libev', 'asyncore'])
 def connection_class(request):
-    try:
-        module = importlib.import_module('cassandra.io.' + {
-            'asyncio': 'asyncioreactor', 'libev': 'libevreactor',
-            'asyncore': 'asyncorereactor'}[request.param])
-    except (ImportError, DependencyException) as exc:
-        pytest.skip(str(exc))
+    module = reactor_module(request.param)
     return getattr(module, {'asyncio': 'AsyncioConnection',
                             'libev': 'LibevConnection',
                             'asyncore': 'AsyncoreConnection'}[request.param])
@@ -155,10 +175,7 @@ def test_asyncio_chaining_progresses_while_listener_waits(connection_class, term
 
 
 def test_libev_dispatch_enqueued_during_idle_exit_is_not_lost():
-    try:
-        module = importlib.import_module('cassandra.io.libevreactor')
-    except (ImportError, DependencyException) as exc:
-        pytest.skip(str(exc))
+    module = reactor_module('libev')
     loop = module.LibevLoop()
     native = loop._loop
     returned, release, first, second = Event(), Event(), Event(), Event()
@@ -188,7 +205,7 @@ def test_libev_dispatch_enqueued_during_idle_exit_is_not_lost():
 
 
 def test_libev_retired_runner_does_not_claim_replacement_work(monkeypatch):
-    module = pytest.importorskip('cassandra.io.libevreactor')
+    module = reactor_module('libev')
     loop = module.LibevLoop()
     native, drain = loop._loop, loop._drain_deferred
     retired, release_old, replacement, release_new, delivered = [Event() for _ in range(5)]
@@ -238,7 +255,7 @@ def test_libev_retired_runner_does_not_claim_replacement_work(monkeypatch):
 
 @pytest.mark.parametrize('arming_path', ['acquire', 'keepalive'])
 def test_libev_keeper_arming_cannot_outlive_cleanup(monkeypatch, arming_path):
-    module = pytest.importorskip('cassandra.io.libevreactor')
+    module = reactor_module('libev')
     loop = module.LibevLoop()
     native = loop._management_keeper
     arming, resume, stopped, armed = [Event() for _ in range(4)]
@@ -379,7 +396,7 @@ def test_reactor_startup_lock_is_reset_in_fork_child(connection_class):
 
 @pytest.mark.parametrize('reactor', ['libev', 'asyncore'])
 def test_startup_failure_does_not_acknowledge_concurrent_dispatch(monkeypatch, reactor):
-    module = pytest.importorskip('cassandra.io.' + reactor + 'reactor')
+    module = reactor_module(reactor)
     if reactor == 'asyncore':
         monkeypatch.setattr(module, '_dispatcher_map', {})
         class Dispatcher:
@@ -459,7 +476,7 @@ def test_startup_failure_does_not_acknowledge_concurrent_dispatch(monkeypatch, r
 
 
 def test_asyncore_dispatch_accepted_during_runner_failure_is_delivered(monkeypatch):
-    module = pytest.importorskip('cassandra.io.asyncorereactor')
+    module = reactor_module('asyncore')
     monkeypatch.setattr(module, '_dispatcher_map', {})
     entered, fail, delivered = Event(), Event(), Event()
     class Dispatcher:
@@ -497,7 +514,7 @@ def test_asyncore_dispatch_accepted_during_runner_failure_is_delivered(monkeypat
 
 def test_asyncore_ordinary_connection_recovers_without_reviving_management(monkeypatch):
     import socket
-    module = pytest.importorskip('cassandra.io.asyncorereactor')
+    module = reactor_module('asyncore')
     monkeypatch.setattr(module, '_dispatcher_map', {})
     entered, fail, finish_failure, recovered = [Event() for _ in range(4)]
     class Dispatcher:
@@ -566,9 +583,7 @@ def test_asyncore_ordinary_connection_recovers_without_reviving_management(monke
 @pytest.mark.parametrize('reactor', ['asyncio', 'libev', 'asyncore'])
 @pytest.mark.parametrize('count', [1, 130])
 def test_reactor_shutdown_delivers_already_accepted_callbacks(monkeypatch, reactor, count):
-    module = pytest.importorskip('cassandra.io.' + {
-        'asyncio': 'asyncioreactor', 'libev': 'libevreactor',
-        'asyncore': 'asyncorereactor'}[reactor])
+    module = reactor_module(reactor)
     entered, release, delivered, stopping = [Event() for _ in range(4)]
     if reactor == 'asyncore':
         monkeypatch.setattr(module, '_dispatcher_map', {})
@@ -655,7 +670,7 @@ def test_fork_reinitialization_closes_inherited_descriptors(monkeypatch, reactor
     from types import SimpleNamespace
     if not hasattr(os, 'fork'):
         pytest.skip('fork unavailable')
-    module = pytest.importorskip('cassandra.io.' + reactor + 'reactor')
+    module = reactor_module(reactor)
     connection = getattr(module, {'libev': 'LibevConnection',
                                   'asyncore': 'AsyncoreConnection'}[reactor])
     connection.initialize_reactor()
