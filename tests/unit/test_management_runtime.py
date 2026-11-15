@@ -700,7 +700,12 @@ def test_completed_executor_future_does_not_dispose_on_registering_owner(
     manager, dispatch = runtime
     resource = object()
     disposal_threads = []
+    disposal_contexts = []
     completed = Event()
+
+    def dispose(value):
+        disposal_threads.append(current_thread())
+        disposal_contexts.append(execution_context())
     with ThreadPoolExecutor(1) as executor:
         class ClosingExecutor:
             def submit(self, function):
@@ -714,7 +719,7 @@ def test_completed_executor_future_does_not_dispose_on_registering_owner(
                 return physical
         future = manager.submit(lambda record: manager.work(
             record, ClosingExecutor(), lambda: resource,
-            dispose=lambda value: disposal_threads.append(current_thread())))
+            dispose=dispose))
         with pytest.raises(ManagementClosed):
             future.result(5)
         # Shutdown publishes the native Future before executor submission has
@@ -722,7 +727,9 @@ def test_completed_executor_future_does_not_dispose_on_registering_owner(
         assert completed.wait(5)
     manager.join(5)
     assert len(disposal_threads) == 1
-    assert disposal_threads[0] not in manager._threads
+    # Native thread IDs may be reused; compare actual Thread objects.
+    assert all(disposal_threads[0] is not thread for thread in manager._threads)
+    assert disposal_contexts == ['worker']
     assert manager.counts()['ordinary'] == 0
 
 
