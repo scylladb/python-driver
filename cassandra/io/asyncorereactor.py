@@ -219,8 +219,8 @@ class AsyncoreLoop(object):
         self._pid = os.getpid()
         self._loop_lock = Lock()
         self._state_lock = RLock()
-        self._management_lock = self._state_lock
         self._management_callbacks = deque()
+        self._management_failed = False
         self._started = False
         self._shutdown = False
         self._cleanup_started = False
@@ -255,8 +255,8 @@ class AsyncoreLoop(object):
                 raise
 
     def call_soon(self, callback):
-        with self._management_lock:
-            if self._shutdown:
+        with self._state_lock:
+            if self._shutdown or self._management_failed:
                 raise RuntimeError("Asyncore reactor is shutting down")
             self._management_callbacks.append(callback)
             try:
@@ -271,7 +271,7 @@ class AsyncoreLoop(object):
 
     def _dispatch_management(self):
         for _ in range(64):
-            with self._management_lock:
+            with self._state_lock:
                 if not self._management_callbacks:
                     return
                 callback = self._management_callbacks.popleft()
@@ -295,11 +295,11 @@ class AsyncoreLoop(object):
             except BaseException as exc:
                 self._maybe_log_debug("Asyncore event loop stopped unexpectedly", exc_info=exc)
             finally:
-                # Commit service loss atomically with admission. Accepted
-                # callbacks still run on this runner before it relinquishes
-                # ownership; later submissions receive an explicit rejection.
+                # Management service loss is permanent for existing channels.
+                # Ordinary I/O can restart after this runner drains accepted
+                # completions and relinquishes ownership.
                 with self._state_lock:
-                    self._shutdown = True
+                    self._management_failed = True
                 while self._management_callbacks:
                     self._dispatch_management()
                 with self._state_lock:
