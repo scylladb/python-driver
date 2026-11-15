@@ -137,6 +137,7 @@ class LibevLoop(object):
                 else:
                     # all Connections have been closed, no active watchers
                     log.debug("All Connections currently closed, event loop ended")
+                    shutdown = self._shutdown
                     self._started = False
                     # A connection may have been closed after the last
                     # _loop_will_run() pass, which is where closed
@@ -151,10 +152,11 @@ class LibevLoop(object):
                         self._close_conns(to_stop)
                     break
         self._drain_deferred()
-        # Shutdown rejects new admissions; finish the accepted queue on this
-        # reactor thread even when cleanup has stopped the prepare watcher.
-        while self._management_callbacks:
-            self._dispatch_management()
+        # Only the shutdown owner may drain after publishing stopped state.
+        # Ordinary idle exit allows a replacement runner to claim new work.
+        if shutdown:
+            while self._management_callbacks:
+                self._dispatch_management()
 
     def _cleanup(self):
         with self._lock_thread:
@@ -257,6 +259,9 @@ class LibevLoop(object):
     def _keep_management_alive(self):
         if self._management_users and not self._shutdown:
             self._management_keeper.start(3600)
+        # Cleanup or release can stop the timer while start() is in flight.
+        if self._shutdown or not self._management_users:
+            self._management_keeper.stop()
 
     def borrow_management(self):
         token = object()
@@ -266,7 +271,7 @@ class LibevLoop(object):
             if abandoned.is_set():
                 return
             self._management_users.add(token)
-            self._management_keeper.start(3600)
+            self._keep_management_alive()
             if abandoned.is_set():
                 release(lambda: None)
             else:
@@ -281,7 +286,8 @@ class LibevLoop(object):
             if current_thread() is self._thread:
                 detach()
             elif self._shutdown or self._thread is None or not self._thread.is_alive():
-                # Catastrophic service loss: no native runner can touch watchers.
+                # Shutdown closes admission before the runner finishes draining.
+                # Release remains idempotent while that runner unwinds.
                 with self._lock:
                     detach()
             else:

@@ -3,7 +3,7 @@
 import asyncio
 import importlib
 from concurrent.futures import CancelledError, Future
-from threading import Event, Thread, get_ident
+from threading import Event, Thread, current_thread, get_ident
 
 import pytest
 
@@ -144,11 +144,14 @@ def test_asyncio_chaining_progresses_while_listener_waits(connection_class, term
         assert outcomes == [{'result': 12, 'error': ValueError, 'cancel': CancelledError}[terminal]]
     finally:
         release_handler.set()
-        manager.close()
-        manager.join(5)
-        application_loop.call_soon_threadsafe(application_loop.stop)
-        app_thread.join(5)
-        application_loop.close()
+        try:
+            manager.close()
+            manager.join(5)
+        finally:
+            application_loop.call_soon_threadsafe(application_loop.stop)
+            app_thread.join(5)
+            assert not app_thread.is_alive()
+            application_loop.close()
 
 
 def test_libev_dispatch_enqueued_during_idle_exit_is_not_lost():
@@ -182,6 +185,155 @@ def test_libev_dispatch_enqueued_during_idle_exit_is_not_lost():
     finally:
         release.set()
         loop._cleanup()
+
+
+def test_libev_retired_runner_does_not_claim_replacement_work(monkeypatch):
+    module = pytest.importorskip('cassandra.io.libevreactor')
+    loop = module.LibevLoop()
+    native, drain = loop._loop, loop._drain_deferred
+    retired, release_old, replacement, release_new, delivered = [Event() for _ in range(5)]
+    old_threads, observations = [], []
+    def pause_retired():
+        drain()
+        if not loop._started and not retired.is_set():
+            old_threads.append(current_thread())
+            retired.set()
+            assert release_old.wait(5)
+    class PausedReplacement:
+        def start(self):
+            if retired.is_set() and current_thread() is not old_threads[0]:
+                replacement.set()
+                assert release_new.wait(5)
+            native.start()
+        def __getattr__(self, name):
+            return getattr(native, name)
+    monkeypatch.setattr(loop, '_drain_deferred', pause_retired)
+    loop._loop = PausedReplacement()
+    def completion():
+        observations.append((get_ident(), current_thread() is loop._thread))
+        delivered.set()
+    try:
+        loop.call_soon(lambda: None)
+        assert retired.wait(5), 'runner did not publish its idle exit'
+        loop.call_soon(completion)
+        assert replacement.wait(5)
+        new_thread = loop._thread
+        assert new_thread is not old_threads[0]
+        release_old.set()
+        old_threads[0].join(5)
+        assert not old_threads[0].is_alive()
+        assert observations == [], 'retired runner consumed new-generation work'
+        release_new.set()
+        assert delivered.wait(5)
+        new_thread.join(5)
+        assert observations == [(new_thread.ident, True)]
+        assert not new_thread.is_alive()
+    finally:
+        release_old.set()
+        release_new.set()
+        loop._cleanup()
+        for thread in old_threads:
+            thread.join(5)
+
+
+@pytest.mark.parametrize('arming_path', ['acquire', 'keepalive'])
+def test_libev_keeper_arming_cannot_outlive_cleanup(monkeypatch, arming_path):
+    module = pytest.importorskip('cassandra.io.libevreactor')
+    loop = module.LibevLoop()
+    native = loop._management_keeper
+    arming, resume, stopped, armed = [Event() for _ in range(4)]
+    releases, errors = [], []
+    class PausedKeeper:
+        active = False
+        def start(self, timeout):
+            arming.set()
+            assert resume.wait(5)
+            native.start(timeout)
+            self.active = True
+            armed.set()
+        def stop(self):
+            native.stop()
+            self.active = False
+            stopped.set()
+    keeper = PausedKeeper()
+    monkeypatch.setattr(loop, '_management_keeper', keeper)
+    def borrow():
+        try:
+            releases.append(loop.borrow_management())
+        except BaseException as exc:
+            errors.append(exc)
+    borrower = Thread(target=borrow) if arming_path == 'acquire' else None
+    stopper = None
+    try:
+        if borrower is not None:
+            borrower.start()
+        else:
+            loop._management_users.add(object())
+            loop.call_soon(loop._keep_management_alive)
+        assert arming.wait(5)
+        runner = loop._thread
+        stopper = Thread(target=loop._cleanup)
+        stopper.start()
+        assert stopped.wait(5), 'cleanup did not stop the in-flight keeper'
+        assert loop._shutdown
+        resume.set()
+        assert armed.wait(5)
+        runner.join(5)
+        assert not runner.is_alive(), 'keeper was resurrected after cleanup'
+        assert not keeper.active
+        stopper.join(5)
+        assert not stopper.is_alive()
+        if borrower is not None:
+            borrower.join(5)
+            assert not borrower.is_alive()
+            assert errors == []
+            assert len(releases) == 1
+    finally:
+        resume.set()
+        keeper.stop()
+        loop.notify()
+        if borrower is not None:
+            borrower.join(5)
+        for release in releases:
+            release(lambda: None)
+        if stopper is not None:
+            stopper.join(5)
+        loop._cleanup()
+
+
+def test_chaining_application_loop_closes_when_management_join_raises(monkeypatch, connection_class):
+    # Exercise the actual chaining test's failure cleanup, then supply our own
+    # fallback cleanup so a negative control cannot leak a non-daemon thread.
+    ReactorChannel(connection_class)
+    app_threads, app_loops = [], []
+    make_loop, thread_class, join = asyncio.new_event_loop, Thread, ManagementRuntime.join
+    def new_loop():
+        loop = make_loop()
+        app_loops.append(loop)
+        return loop
+    def new_thread(*args, **kwargs):
+        thread = thread_class(*args, **kwargs)
+        app_threads.append(thread)
+        return thread
+    def failed_join(manager, timeout):
+        join(manager, timeout)
+        raise RuntimeError('forced finalization failure')
+    monkeypatch.setattr(asyncio, 'new_event_loop', new_loop)
+    monkeypatch.setattr(__name__ + '.Thread', new_thread)
+    monkeypatch.setattr(ManagementRuntime, 'join', failed_join)
+    try:
+        with pytest.raises(RuntimeError, match='forced finalization failure'):
+            test_asyncio_chaining_progresses_while_listener_waits(connection_class, 'result', 'before')
+        assert len(app_threads) == len(app_loops) == 1
+        assert not app_threads[0].is_alive()
+        assert app_loops[0].is_closed()
+    finally:
+        for loop, thread in zip(app_loops, app_threads):
+            if thread.is_alive():
+                loop.call_soon_threadsafe(loop.stop)
+                thread.join(5)
+            if not thread.is_alive() and not loop.is_closed():
+                loop.close()
 
 
 def test_reactor_startup_lock_is_reset_in_fork_child(connection_class):
@@ -242,6 +394,7 @@ def test_startup_failure_does_not_acknowledge_concurrent_dispatch(monkeypatch, r
         monkeypatch.setattr(module.AsyncoreLoop, '_loop_dispatch_class', Dispatcher)
     loop = getattr(module, {'libev': 'LibevLoop', 'asyncore': 'AsyncoreLoop'}[reactor])()
     starting, fail, second_entered, accepted, delivered = [Event() for _ in range(5)]
+    admission_attempted = Event()
     original_thread = module.Thread
     calls = []
     class FailedStart:
@@ -266,11 +419,29 @@ def test_startup_failure_does_not_acknowledge_concurrent_dispatch(monkeypatch, r
         loop.call_soon(delivered.set)
         accepted.set()
     first_thread, second_thread = Thread(target=first), Thread(target=second)
+    lock_name = '_lock_thread' if reactor == 'libev' else '_state_lock'
+    admission_lock = getattr(loop, lock_name)
+    blocked = []
+    class ObservedLock:
+        def __enter__(self):
+            if get_ident() == second_thread.ident:
+                acquired = admission_lock.acquire(False)
+                blocked.append(not acquired)
+                admission_attempted.set()
+                if acquired:
+                    return self
+            admission_lock.acquire()
+            return self
+        def __exit__(self, *args):
+            admission_lock.release()
+    setattr(loop, lock_name, ObservedLock())
     try:
         first_thread.start()
         assert starting.wait(5)
         second_thread.start()
         assert second_entered.wait(5)
+        assert admission_attempted.wait(5)
+        assert blocked == [True], 'second admission did not block on provisional startup'
         assert not accepted.wait(0.05)
         fail.set()
         first_thread.join(5)
@@ -324,6 +495,74 @@ def test_asyncore_dispatch_accepted_during_runner_failure_is_delivered(monkeypat
         loop._cleanup()
 
 
+def test_asyncore_ordinary_connection_recovers_without_reviving_management(monkeypatch):
+    import socket
+    module = pytest.importorskip('cassandra.io.asyncorereactor')
+    monkeypatch.setattr(module, '_dispatcher_map', {})
+    entered, fail, finish_failure, recovered = [Event() for _ in range(4)]
+    class Dispatcher:
+        failed = False
+        def validate(self):
+            pass
+        def notify_loop(self):
+            pass
+        def loop(self, timeout):
+            if fail.is_set() and not self.failed:
+                entered.set()
+                assert finish_failure.wait(5)
+                self.failed = True
+                raise OSError('transient poll failure')
+            if self.failed:
+                recovered.set()
+            Event().wait(0.001)
+        def close(self):
+            pass
+    monkeypatch.setattr(module.AsyncoreLoop, '_loop_dispatch_class', Dispatcher)
+    loop = module.AsyncoreLoop()
+    monkeypatch.setattr(module, '_global_loop', loop)
+    # This channel predates service loss and must never become usable again.
+    channel = None
+    ours, peer = socket.socketpair()
+    connection = None
+    try:
+        channel = ReactorChannel(module.AsyncoreConnection)
+        old_runner = loop._thread
+        fail.set()
+        assert entered.wait(5)
+        delivered = Event()
+        channel.dispatch(delivered.set)
+        finish_failure.set()
+        old_runner.join(5)
+        assert not old_runner.is_alive()
+        assert delivered.is_set()
+        with pytest.raises(RuntimeError):
+            channel.dispatch(lambda: None)
+        monkeypatch.setattr(module.AsyncoreConnection, '_connect_socket',
+                            lambda self: setattr(self, '_socket', ours))
+        monkeypatch.setattr(module.AsyncoreConnection, '_send_options_message', lambda self: None)
+        connection = module.AsyncoreConnection(connect_timeout=1)
+        assert recovered.wait(5)
+        assert loop._thread is not old_runner
+        assert loop._thread.is_alive()
+        assert module._dispatcher_map[ours.fileno()] is connection
+        assert connection.socket is ours
+        with pytest.raises(RuntimeError):
+            channel.dispatch(lambda: None)
+        with pytest.raises(RuntimeError):
+            ReactorChannel(module.AsyncoreConnection)
+        assert not loop._management_callbacks
+    finally:
+        fail.set()
+        finish_failure.set()
+        if channel is not None:
+            channel.close()
+        if connection is not None:
+            connection.close()
+        loop._cleanup()
+        ours.close()
+        peer.close()
+
+
 @pytest.mark.parametrize('reactor', ['asyncio', 'libev', 'asyncore'])
 @pytest.mark.parametrize('count', [1, 130])
 def test_reactor_shutdown_delivers_already_accepted_callbacks(monkeypatch, reactor, count):
@@ -339,10 +578,12 @@ def test_reactor_shutdown_delivers_already_accepted_callbacks(monkeypatch, react
         connection.initialize_reactor()
         dispatch, runner = connection._management_dispatch, connection._loop_thread
         def stop():
-            connection._loop.call_soon_threadsafe(stopping.set)
-            connection._loop.call_soon_threadsafe(connection._loop.stop)
+            stopping.set()
         def cleanup():
+            if runner.is_alive():
+                connection._loop.call_soon_threadsafe(connection._loop.stop)
             runner.join(5)
+            assert not runner.is_alive()
             connection._loop.close()
     else:
         loop = getattr(module, {'libev': 'LibevLoop', 'asyncore': 'AsyncoreLoop'}[reactor])()
@@ -357,9 +598,16 @@ def test_reactor_shutdown_delivers_already_accepted_callbacks(monkeypatch, react
     def hold():
         entered.set()
         assert release.wait(5)
+        if reactor == 'asyncio':
+            # Stop in the current ready-queue turn, before any of the drain
+            # handles queued while this ordinary loop callback was held.
+            connection._loop.stop()
     stopper = None
     try:
-        dispatch(hold)
+        if reactor == 'asyncio':
+            connection._loop.call_soon_threadsafe(hold)
+        else:
+            dispatch(hold)
         assert entered.wait(5)
         def completion():
             observations.append(get_ident())
