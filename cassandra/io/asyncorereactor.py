@@ -18,7 +18,7 @@ import logging
 import os
 import socket
 import sys
-from threading import Lock, Thread, Event, current_thread
+from threading import Lock, RLock, Thread, Event, current_thread
 import time
 import sys
 import ssl
@@ -137,6 +137,14 @@ class _AsyncorePipeDispatcher(_AsyncoreDispatcher):
             self._notified = True
             os.write(self.write_fd, b'x')
 
+    def close(self):
+        try:
+            asyncore.dispatcher.close(self)
+        finally:
+            if self.write_fd is not None:
+                os.close(self.write_fd)
+                self.write_fd = None
+
 
 class _AsyncoreUDPDispatcher(_AsyncoreDispatcher):
     """
@@ -210,11 +218,12 @@ class AsyncoreLoop(object):
     def __init__(self):
         self._pid = os.getpid()
         self._loop_lock = Lock()
-        self._state_lock = Lock()
-        self._management_lock = Lock()
+        self._state_lock = RLock()
+        self._management_lock = self._state_lock
         self._management_callbacks = deque()
         self._started = False
         self._shutdown = False
+        self._cleanup_started = False
 
         self._thread = None
 
@@ -240,8 +249,9 @@ class AsyncoreLoop(object):
             try:
                 self._thread.start()
             except BaseException:
-                self._started = False
-                self._thread = None
+                if not self._thread.is_alive():
+                    self._started = False
+                    self._thread = None
                 raise
 
     def call_soon(self, callback):
@@ -249,8 +259,15 @@ class AsyncoreLoop(object):
             if self._shutdown:
                 raise RuntimeError("Asyncore reactor is shutting down")
             self._management_callbacks.append(callback)
-        self.maybe_start()
-        self.wake_loop()
+            try:
+                self.maybe_start()
+                self.wake_loop()
+            except BaseException:
+                try:
+                    self._management_callbacks.remove(callback)
+                except ValueError:
+                    return
+                raise
 
     def _dispatch_management(self):
         for _ in range(64):
@@ -270,16 +287,23 @@ class AsyncoreLoop(object):
     def _run_loop(self):
         log.debug("Starting asyncore event loop")
         with self._loop_lock:
-            while not self._shutdown:
-                try:
+            try:
+                while not self._shutdown:
                     self._loop_dispatcher.loop(self.timer_resolution)
                     self._timers.service_timeouts()
                     self._dispatch_management()
-                except Exception as exc:
-                    self._maybe_log_debug("Asyncore event loop stopped unexpectedly", exc_info=exc)
-                    break
-            with self._state_lock:
-                self._started = False
+            except BaseException as exc:
+                self._maybe_log_debug("Asyncore event loop stopped unexpectedly", exc_info=exc)
+            finally:
+                # Commit service loss atomically with admission. Accepted
+                # callbacks still run on this runner before it relinquishes
+                # ownership; later submissions receive an explicit rejection.
+                with self._state_lock:
+                    self._shutdown = True
+                while self._management_callbacks:
+                    self._dispatch_management()
+                with self._state_lock:
+                    self._started = False
 
         self._maybe_log_debug("Asyncore event loop ended")
 
@@ -304,6 +328,9 @@ class AsyncoreLoop(object):
         global _dispatcher_map
 
         with self._state_lock:
+            if self._cleanup_started:
+                return
+            self._cleanup_started = True
             self._shutdown = True
         self.wake_loop()
 
@@ -347,6 +374,16 @@ class AsyncoreConnection(Connection, asyncore.dispatcher):
         global _global_loop, _dispatcher_map
         with _initialization_lock:
             if _global_loop is not None and _global_loop._pid != os.getpid():
+                # Close descriptors directly: Connection.close() can acquire
+                # parent-owned locks or schedule timers on a vanished runner.
+                for dispatcher in tuple(_dispatcher_map.values()):
+                    try:
+                        if dispatcher is _global_loop._loop_dispatcher:
+                            dispatcher.close()
+                        else:
+                            dispatcher.socket.close()
+                    except OSError:
+                        pass
                 _dispatcher_map = {}
                 _global_loop = None
             if _global_loop is None:
