@@ -318,6 +318,89 @@ def test_libev_keeper_arming_cannot_outlive_cleanup(monkeypatch, arming_path):
         loop._cleanup()
 
 
+@pytest.mark.parametrize('cleanup_order', ['during-release', 'before-release'])
+def test_libev_borrow_release_completes_during_cleanup(monkeypatch, cleanup_order):
+    module = reactor_module('libev')
+    loop = module.LibevLoop()
+    release_borrow = loop.borrow_management()
+    entered, finish, admission_attempted, stopped, completed = [Event() for _ in range(5)]
+    errors, observations, blocked = [], [], []
+    admission_lock, keeper = loop._lock_thread, loop._management_keeper
+    dispatch = loop.call_soon
+    def hold():
+        entered.set()
+        assert finish.wait(5)
+    def cleanup():
+        try:
+            loop._cleanup()
+        except BaseException as exc:
+            errors.append(exc)
+    stopper = Thread(target=cleanup)
+    class ObservedLock:
+        def __enter__(self):
+            if current_thread() is stopper:
+                acquired = admission_lock.acquire(False)
+                blocked.append(not acquired)
+                admission_attempted.set()
+                if acquired:
+                    return self
+            admission_lock.acquire()
+            return self
+        def __exit__(self, *args):
+            admission_lock.release()
+    class ObservedKeeper:
+        def stop(self):
+            keeper.stop()
+            stopped.set()
+        def __getattr__(self, name):
+            return getattr(keeper, name)
+    def racing_dispatch(callback):
+        stopper.start()
+        assert admission_attempted.wait(5)
+        if not blocked[0]:
+            # The unprotected release allows cleanup to commit shutdown here.
+            assert stopped.wait(5)
+        dispatch(callback)
+    def detached():
+        observations.append(current_thread())
+        completed.set()
+    try:
+        dispatch(hold)
+        assert entered.wait(5)
+        runner = loop._thread
+        monkeypatch.setattr(loop, '_lock_thread', ObservedLock())
+        monkeypatch.setattr(loop, '_management_keeper', ObservedKeeper())
+        if cleanup_order == 'during-release':
+            monkeypatch.setattr(loop, 'call_soon', racing_dispatch)
+        else:
+            stopper.start()
+            assert stopped.wait(5)
+            assert loop._shutdown
+        release_borrow(detached)
+        assert stopped.wait(5)
+        finish.set()
+        assert completed.wait(5)
+        stopper.join(5)
+        runner.join(5)
+        assert not stopper.is_alive()
+        assert not runner.is_alive()
+        assert errors == []
+        assert not loop._management_users
+        assert not loop._management_callbacks
+        assert len(observations) == 1
+        if cleanup_order == 'during-release':
+            assert blocked[0], 'cleanup passed the release admission boundary'
+            assert observations == [runner]
+        else:
+            assert observations == [current_thread()]
+    finally:
+        finish.set()
+        if stopper.ident is not None:
+            stopper.join(5)
+        loop._cleanup()
+        release_borrow(lambda: None)
+
+
 def test_chaining_application_loop_closes_when_management_join_raises(monkeypatch, connection_class):
     # Exercise the actual chaining test's failure cleanup, then supply our own
     # fallback cleanup so a negative control cannot leak a non-daemon thread.
