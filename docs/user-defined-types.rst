@@ -107,7 +107,7 @@ for the UDT:
     address = first_row.location
     print(address)  # prints "Address(street='123 Main St.', zipcode=78723)"
     street = address.street
-    zipcode = address.street
+    zipcode = address.zipcode
 
 As shown in the code example, inserting data for UDT columns without registering
 a class works fine for prepared statements.  However, **you must register a
