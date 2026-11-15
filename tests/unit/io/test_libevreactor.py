@@ -96,37 +96,28 @@ class LibevConnectionTest(ReactorTestMixin, unittest.TestCase):
 
         @test_category connection
         """
-        from cassandra.io.libevreactor import _global_loop
-        reactor_needs_restore = False
+        from cassandra.io import libevreactor
+        shared_loop = libevreactor._global_loop
+        shared_state = shared_loop._shutdown, shared_loop._cleanup_started
+        private_loop = LibevLoop()
         try:
-            with patch.object(_global_loop, "_thread"),\
-                 patch.object(_global_loop, "notify"):
-
+            with patch.object(libevreactor, "_global_loop", private_loop),\
+                 patch.object(private_loop, "_thread"),\
+                 patch.object(private_loop, "notify"):
                 self.make_connection()
 
-                # We have to make a copy because the connections shouldn't
-                # be alive when we verify them
-                live_connections = set(_global_loop._live_conns)
-
-                # This simulates the process ending without cluster.shutdown()
-                # being called, then with atexit _cleanup for libevreactor would
-                # be called
-                reactor_needs_restore = True
-                libev__cleanup(_global_loop)
+                # Keep the watchers alive while simulating atexit cleanup.
+                live_connections = set(private_loop._live_conns)
+                libev__cleanup(private_loop)
                 for conn in live_connections:
                     assert conn._write_watcher.stop.mock_calls
                     assert conn._read_watcher.stop.mock_calls
-
         finally:
-            if reactor_needs_restore:
-                _global_loop._shutdown = False
-                # _cleanup stopped the prepare watcher; restart it so the shared
-                # singleton loop is left in a working state for subsequent tests
-                # (otherwise timers would never be scheduled and tests would hang).
-                _global_loop._preparer.start()
-                # _cleanup took the preparer's loop reference back; drop it
-                # again as in LibevLoop.__init__, or the loop never returns
-                _global_loop._loop.unref()
+            private_loop._cleanup_unpublished()
+
+        self.assertIs(libevreactor._global_loop, shared_loop)
+        self.assertEqual(
+            (shared_loop._shutdown, shared_loop._cleanup_started), shared_state)
 
 
 class _InstrumentedLock(object):
