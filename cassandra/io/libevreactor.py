@@ -86,6 +86,8 @@ class LibevLoop(object):
         self._management_callbacks = deque()
         self._management_users = set()
         self._cleanup_started = False
+        self._dispose_on_exit = False
+        self._runner_exited = True
 
         self._preparer = libev.Prepare(self._loop, self._loop_will_run)
         # prevent _preparer from keeping the loop from returning
@@ -105,6 +107,7 @@ class LibevLoop(object):
                 if not self._started:
                     log.debug("Starting libev event loop")
                     self._started = True
+                    self._runner_exited = False
                     self._thread = Thread(target=self._run_loop, name="event_loop")
                     self._thread.daemon = True
                     try:
@@ -157,6 +160,28 @@ class LibevLoop(object):
         if shutdown:
             while self._management_callbacks:
                 self._dispatch_management()
+        with self._lock:
+            self._runner_exited = True
+            if self._dispose_on_exit:
+                self._release_loop()
+
+    def _cleanup_unpublished(self):
+        # An unpublished candidate has no future owner. If bounded cleanup
+        # cannot join its runner, that runner releases the native callbacks
+        # after returning from libev and draining accepted work.
+        self._cleanup()
+        with self._lock:
+            self._dispose_on_exit = True
+            if (self._thread is None or not self._thread.is_alive()
+                    or self._runner_exited):
+                self._release_loop()
+
+    def _release_loop(self):
+        # Native watchers retain bound callbacks without GC traversal support.
+        # Stop/join must precede this outside the single surviving fork thread.
+        self._preparer = self._loop_timer = self._management_keeper = None
+        self._notifier = None
+        self._loop = None
 
     def _cleanup(self):
         with self._lock_thread:
@@ -218,9 +243,7 @@ class LibevLoop(object):
         self._management_users.clear()
         # Break watcher/callback cycles and release the native loop, whose
         # destructor closes its internal wakeup descriptors in the child.
-        self._preparer = self._loop_timer = self._management_keeper = None
-        self._notifier = None
-        self._loop = None
+        self._release_loop()
 
     def add_timer(self, timer):
         self._timers.add_timer(timer)
@@ -485,7 +508,7 @@ class LibevConnection(Connection):
                     if not ready.wait(5):
                         raise RuntimeError("Libev reactor startup did not complete")
                 except BaseException:
-                    candidate._cleanup()
+                    candidate._cleanup_unpublished()
                     raise
                 _global_loop = candidate
 

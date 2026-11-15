@@ -477,6 +477,82 @@ def test_reactor_startup_lock_is_reset_in_fork_child(connection_class):
         os.waitpid(pid, 0)
 
 
+def test_failed_libev_startup_releases_unpublished_native_callbacks(monkeypatch):
+    import gc
+    import weakref
+    module = reactor_module('libev')
+    original_factory = module.LibevLoop
+    candidates = []
+    def candidate():
+        loop = original_factory()
+        candidates.append(weakref.ref(loop))
+        return loop
+    class FailedStart:
+        def start(self):
+            raise RuntimeError('native runner was not started')
+        def is_alive(self):
+            return False
+    monkeypatch.setattr(module, '_global_loop', None)
+    monkeypatch.setattr(module, 'LibevLoop', candidate)
+    monkeypatch.setattr(module, 'Thread', lambda **kwargs: FailedStart())
+    for _ in range(3):
+        with pytest.raises(RuntimeError, match='native runner was not started'):
+            module.LibevConnection.initialize_reactor()
+        assert module._global_loop is None
+    gc.collect()
+    assert len(candidates) == 3
+    assert all(candidate() is None for candidate in candidates)
+
+
+def test_unpublished_libev_disposal_waits_for_actual_native_exit(monkeypatch):
+    module = reactor_module('libev')
+    original_factory = module.LibevLoop
+    entered, release = Event(), Event()
+    candidates = []
+    class PausedNativeLoop:
+        def __init__(self, native):
+            self.native = native
+        def __getattr__(self, name):
+            return getattr(self.native, name)
+        def start(self):
+            entered.set()
+            assert release.wait(15)
+            self.native.start()
+    def candidate():
+        loop = original_factory()
+        loop._loop = PausedNativeLoop(loop._loop)
+        candidates.append(loop)
+        return loop
+    class ReadyTimeout(Event):
+        def wait(self, timeout=None):
+            assert entered.wait(5)
+            return False
+    monkeypatch.setattr(module, '_global_loop', None)
+    monkeypatch.setattr(module, 'LibevLoop', candidate)
+    monkeypatch.setattr(module, 'Event', ReadyTimeout)
+    try:
+        with pytest.raises(RuntimeError, match='startup did not complete'):
+            module.LibevConnection.initialize_reactor()
+        loop = candidates[0]
+        assert loop._thread.is_alive()
+        assert loop._loop is not None
+        assert loop._preparer is not None
+        # A repeated request must also retain native state until actual exit.
+        loop._cleanup_unpublished()
+        assert loop._loop is not None
+    finally:
+        release.set()
+        for loop in candidates:
+            loop._thread.join(5)
+            assert not loop._thread.is_alive()
+    assert module._global_loop is None
+    assert loop._loop is None
+    assert loop._preparer is None
+    assert loop._loop_timer is None
+    assert loop._management_keeper is None
+    assert loop._notifier is None
+
+
 @pytest.mark.parametrize('reactor', ['libev', 'asyncore'])
 def test_startup_failure_does_not_acknowledge_concurrent_dispatch(monkeypatch, reactor):
     module = reactor_module(reactor)
