@@ -944,8 +944,19 @@ def _assert_inherited_asyncore_descriptor_survives_poll(monkeypatch, dispatcher_
     import socket
     module = reactor_module('asyncore')
     monkeypatch.setattr(module, '_dispatcher_map', {})
+    dispatcher_class = getattr(module, dispatcher_name)
+    if dispatcher_name == '_AsyncoreUDPDispatcher':
+        class LocalUDPDispatcher(dispatcher_class):
+            bind_address = ('127.0.0.1', 0)
+
+            def __init__(self):
+                super().__init__()
+                # validate() wakes this socket after construction, so keep
+                # its actual OS-assigned endpoint as the notify destination.
+                self.bind_address = self._socket.getsockname()
+        dispatcher_class = LocalUDPDispatcher
     monkeypatch.setattr(module.AsyncoreLoop, '_loop_dispatch_class',
-                        getattr(module, dispatcher_name))
+                        dispatcher_class)
     loop = module.AsyncoreLoop()
     monkeypatch.setattr(module, '_global_loop', loop)
     entered, release, polled, initial, delivered = [Event() for _ in range(5)]
@@ -966,6 +977,7 @@ def _assert_inherited_asyncore_descriptor_survives_poll(monkeypatch, dispatcher_
     ours, peer = socket.socketpair()
     descriptor = ours.fileno()
     try:
+        assert isinstance(loop._loop_dispatcher, dispatcher_class)
         loop.call_soon(initial.set)
         assert entered.wait(5)
         with inherited_descriptor(module, 'asyncore', ours):
