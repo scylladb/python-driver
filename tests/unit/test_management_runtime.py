@@ -501,6 +501,7 @@ def test_completed_executor_future_does_not_dispose_on_registering_owner(
         runtime):
     manager, dispatch = runtime
     resource = object()
+    physical_completed = Event()
     disposal_threads = []
     disposal_contexts = []
     def dispose(value):
@@ -515,12 +516,17 @@ def test_completed_executor_future_does_not_dispose_on_registering_owner(
                 # invoke that callback on this owner. Cleanup must already
                 # have happened on the physical worker, exactly once.
                 assert physical.result(5) is resource
+                physical_completed.set()
                 return physical
         future = manager.submit(lambda record: manager.work(
             record, ClosingExecutor(), lambda: resource,
             dispose=dispose))
         with pytest.raises(ManagementClosed):
             future.result(5)
+        # close() settles the logical operation before the owner necessarily
+        # reaches executor.submit(). Keep the real executor open until the
+        # physical result required by this regression has actually arrived.
+        assert physical_completed.wait(5)
     manager.join(5)
     assert len(disposal_threads) == 1
     # Native thread IDs may be reused after close retires an owner. Keep the
