@@ -4742,8 +4742,12 @@ class Session(object):
         these retries without disturbing another session's healthy pool.
         Failed creation, including authentication failure, remains retryable
         here while this session still owns the retired pool.
+
+        Timers and completion callbacks join the lifecycle FIFO before
+        reconciling pools or advancing the retry schedule.
         """
         session_ref = weakref.ref(self)
+        lifecycle = self.cluster._lifecycle
         host = failed_pool.host
         schedule = iter(self.cluster.reconnection_policy.new_schedule())
 
@@ -4779,7 +4783,8 @@ class Session(object):
                 log.warning(
                     "Session pool recovery schedule exhausted for %s", host)
                 return
-            session.cluster.scheduler.schedule(delay, recover)
+            session.cluster.scheduler.schedule(
+                delay, partial(lifecycle.submit, recover))
 
         def recover():
             """Reconcile this host without adopting a newer pool lifecycle."""
@@ -4796,11 +4801,13 @@ class Session(object):
             if futures:
                 # Reconciliation of this single host has one completion.
                 for future in futures:
-                    future.add_done_callback(retry)
+                    future.add_done_callback(partial(lifecycle.submit, retry))
             else:
                 retry()
 
-        retry()
+        # Connection return may run on a reactor or heartbeat thread. Admit
+        # recovery without making that caller deliver lifecycle callbacks.
+        lifecycle.submit_async(self.cluster.executor, retry)
 
     def _shutdown_detached_pool(self, pool, on_shutdown_error=None):
         """Close an unindexed pool even when asynchronous cleanup is rejected.
