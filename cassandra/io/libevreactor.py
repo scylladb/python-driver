@@ -285,13 +285,15 @@ class LibevLoop(object):
                 completed()
             if current_thread() is self._thread:
                 detach()
-            elif self._shutdown or self._thread is None or not self._thread.is_alive():
-                # Shutdown closes admission before the runner finishes draining.
-                # Release remains idempotent while that runner unwinds.
-                with self._lock:
-                    detach()
             else:
-                self.call_soon(detach)
+                # Cleanup closes admission under this same lock. Either queue
+                # the release before shutdown or detach after it has begun.
+                with self._lock_thread:
+                    if self._shutdown or self._thread is None or not self._thread.is_alive():
+                        with self._lock:
+                            detach()
+                    else:
+                        self.call_soon(detach)
 
         if current_thread() is self._thread:
             acquire()
