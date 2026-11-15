@@ -1,7 +1,7 @@
 from collections import deque
 from concurrent.futures import (
     Future, ThreadPoolExecutor, as_completed, wait, TimeoutError)
-from threading import Barrier, Event, Lock, Thread, get_ident
+from threading import Barrier, Event, Lock, Thread, current_thread, get_ident
 
 import pytest
 
@@ -502,6 +502,10 @@ def test_completed_executor_future_does_not_dispose_on_registering_owner(
     manager, dispatch = runtime
     resource = object()
     disposal_threads = []
+    disposal_contexts = []
+    def dispose(value):
+        disposal_threads.append(current_thread())
+        disposal_contexts.append(execution_context())
     with ThreadPoolExecutor(1) as executor:
         class ClosingExecutor:
             def submit(self, function):
@@ -514,13 +518,15 @@ def test_completed_executor_future_does_not_dispose_on_registering_owner(
                 return physical
         future = manager.submit(lambda record: manager.work(
             record, ClosingExecutor(), lambda: resource,
-            dispose=lambda value: disposal_threads.append(get_ident())))
+            dispose=dispose))
         with pytest.raises(ManagementClosed):
             future.result(5)
     manager.join(5)
     assert len(disposal_threads) == 1
-    assert disposal_threads[0] not in {
-        thread.ident for thread in manager._threads}
+    # Native thread IDs may be reused after close retires an owner. Keep the
+    # actual Thread objects to distinguish that owner from a later worker.
+    assert all(disposal_threads[0] is not thread for thread in manager._threads)
+    assert disposal_contexts == ['worker']
     assert manager.counts()['ordinary'] == 0
 
 
