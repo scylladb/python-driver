@@ -319,7 +319,10 @@ class LibevLoop(object):
                         self.call_soon(detach)
 
         if current_thread() is self._thread:
-            acquire()
+            with self._lock:
+                if self._shutdown:
+                    raise RuntimeError("Libev reactor is shutting down")
+                acquire()
         else:
             self.call_soon(acquire)
             if not ready.wait(5):
