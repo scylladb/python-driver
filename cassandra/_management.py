@@ -98,7 +98,8 @@ class _FutureCondition(Condition):
 
     def _checked_release(self):
         if self._runtime._pid == os.getpid():
-            return self._release()
+            self._release()
+        return None
 
     def __enter__(self):
         self._runtime._check_pid()
@@ -149,7 +150,7 @@ class OperationFuture(Future):
             # Bulk waits read state after acquiring ALL future conditions.
             # Reject before waiter installation, where their context unwinds
             # every lock. Own nonblocking methods use scoped access above.
-            assert_can_wait()
+            self._assert_can_wait()
         return state
 
     @_state.setter
@@ -179,15 +180,24 @@ class OperationFuture(Future):
     def result(self, timeout=None):
         self._record.runtime._check_pid()
         if not self.done():
-            assert_can_wait()
+            self._assert_can_wait()
         return super().result(timeout)
 
     @_future_access
     def exception(self, timeout=None):
         self._record.runtime._check_pid()
         if not self.done():
-            assert_can_wait()
+            self._assert_can_wait()
         return super().exception(timeout)
+
+    def _assert_can_wait(self):
+        assert_can_wait()
+        current = getattr(_context, 'record', None)
+        if (execution_context() == 'callback' and current is not None and
+                current.runtime is self._record.runtime and
+                self._record.envelope.kind == 'notification'):
+            raise ManagementContextError(
+                'Notification wait would block its own callback lane')
 
     @_future_access
     def cancel(self):
@@ -234,6 +244,10 @@ class OperationFuture(Future):
             with target.runtime._condition:
                 with self._condition:
                     if record is not self._delivery_record:
+                        continue
+                    if owner and record.released and target is record:
+                        # Retirement can happen after target selection but
+                        # before acquiring the runtime condition.
                         continue
                     if self._delivery_error is not None:
                         raise self._delivery_error
@@ -580,7 +594,13 @@ class ManagementRuntime:
 
     def work(self, record, executor, function, *, accept=lambda value: value,
              dispose=lambda value: None):
-        """Reserve result delivery before physical work, on C/P only."""
+        """Reserve result delivery before physical work, on C/P only.
+
+        The executor runs work outside C/P. Its completion retains the worker
+        until the owner accepts or rejects the value, then disposes a rejected
+        value there. ``accept`` is a short native state transition, serialized
+        with shutdown and supersession; it must not block or run user code.
+        """
         self.assert_owner(record.pool)
         with self._condition:
             if (getattr(_context, 'record', None) is not record or
@@ -590,17 +610,9 @@ class ManagementRuntime:
                     'result reservation')
             record.physical = 1
             self._condition.notify_all()
-        def physical_work():
-            with _entered('worker', record):
-                return function()
-
-        try:
-            physical = executor.submit(physical_work)
-        except BaseException as exc:
-            with self._condition:
-                record.physical -= 1
-            self._finish(record, error=exc)
-            return _PENDING
+        returned_to_owner = Event()
+        adopted = False
+        received = False
 
         def completed(future):
             with _entered('worker', record):
@@ -611,14 +623,29 @@ class ManagementRuntime:
                 value, error = future.result(), None
             except BaseException as exc:
                 value, error = None, exc
+            receive(value, error)
+
+        def receive(value, error):
+            nonlocal received
             with self._condition:
+                if received:
+                    return
+                received = True
                 if not self._closing:
                     self._enqueue_locked(
                         record, lambda: returned(value, error), reserved=True)
-                    return
-            # Close retains this obligation without owner readmission.
+                    queued = True
+                else:
+                    queued = False
+            if queued and error is None:
+                # Only the short native result transition is awaited. Neither
+                # application callback delivery nor notification progress is
+                # part of this handoff.
+                returned_to_owner.wait()
+            # Keep physical ownership until adoption or disposal completes,
+            # including results rejected by a closed owner mailbox.
             try:
-                if error is None:
+                if error is None and not adopted:
                     dispose(value)
             except BaseException:
                 log.exception('Error disposing late management result')
@@ -628,28 +655,53 @@ class ManagementRuntime:
                     self._release_locked(record)
 
         def returned(value, error):
+            nonlocal adopted
             try:
-                if self._closing or record.handler_done:
-                    if error is None:
-                        dispose(value)
-                    return
-                if error is not None:
-                    self._finish(record, error=error)
-                else:
-                    try:
-                        accepted = accept(value)
-                    except BaseException as exc:
-                        try:
-                            dispose(value)
-                        finally:
-                            self._finish(record, error=exc)
-                    else:
-                        self._finish(record, accepted)
-            finally:
                 with self._condition:
-                    record.physical -= 1
-                    self._release_locked(record)
-        physical.add_done_callback(completed)
+                    if self._closing or record.handler_done:
+                        return
+                    if error is not None:
+                        self._finish(record, error=error)
+                    else:
+                        try:
+                            accepted = accept(value)
+                        except BaseException as exc:
+                            self._finish(record, error=exc)
+                        else:
+                            adopted = True
+                            self._finish(record, accepted)
+            finally:
+                returned_to_owner.set()
+
+        def physical_work():
+            with _entered('worker', record):
+                try:
+                    value = function()
+                except BaseException as exc:
+                    receive(None, exc)
+                    raise
+                else:
+                    # Hand off before completing the executor Future. A late
+                    # callback registration can run inline on C/P, but by then
+                    # this worker already owns adoption/disposal responsibility.
+                    receive(value, None)
+                    return value
+
+        try:
+            physical = executor.submit(physical_work)
+        except BaseException as exc:
+            self._finish(record, error=exc)
+            receive(None, exc)
+            return _PENDING
+        try:
+            physical.add_done_callback(completed)
+        except BaseException as exc:
+            self._finish(record, error=exc)
+            if physical.cancel():
+                # No worker will discharge a cancellation before execution.
+                # A callback installed before an interrupted registration may
+                # also deliver it; receive claims the obligation exactly once.
+                receive(None, exc)
         return _PENDING
 
     def notify(self, callback, *, wait=False, timeout=None, budget='ordinary'):
