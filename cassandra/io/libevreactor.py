@@ -108,7 +108,7 @@ class LibevLoop(object):
                     log.debug("Starting libev event loop")
                     self._started = True
                     self._runner_exited = False
-                    self._thread = Thread(target=self._run_loop, name="event_loop")
+                    self._thread = Thread(target=self._run_loop_if_current, name="event_loop")
                     self._thread.daemon = True
                     try:
                         self._thread.start()
@@ -118,6 +118,16 @@ class LibevLoop(object):
                             self._thread = None
                         raise
             self._notifier.send()
+
+    def _run_loop_if_current(self):
+        # start() can be interrupted after native launch but before bootstrap.
+        # Rollback and replacement use these locks too; an invalidated target
+        # must retire without entering native code or publishing owner state.
+        with self._lock_thread:
+            with self._lock:
+                if current_thread() is not self._thread:
+                    return
+        self._run_loop()
 
     def _run_loop(self):
         while True:
