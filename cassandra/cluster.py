@@ -8295,8 +8295,9 @@ class ResponseFuture(object):
         self._start_timer()
         self.send_request()
 
-    def _reprepare(self, prepare_message, host, connection, pool):
-        cb = partial(self.session.submit, self._execute_after_prepare, host, connection, pool)
+    def _reprepare(self, prepare_message, host, connection, pool, query_id=None):
+        cb = partial(self.session.submit, self._execute_after_prepare, host, connection, pool,
+                     expected_query_id=query_id)
         if pool is None and connection is not None and connection.is_control_connection:
             request_id = self._query_control_connection(prepare_message, cb=cb,
                                                         connection=connection, host=host)
@@ -8501,7 +8502,8 @@ class ResponseFuture(object):
                                                      keyspace=prepared_keyspace)
                     # since this might block, run on the executor to avoid hanging
                     # the event loop thread
-                    self.session.submit(self._reprepare, prepare_message, host, connection, pool)
+                    self.session.submit(self._reprepare, prepare_message, host, connection, pool,
+                                        query_id=query_id)
                     return
                 else:
                     if hasattr(response, 'to_exception'):
@@ -8552,7 +8554,7 @@ class ResponseFuture(object):
             self._set_final_exception(ConnectionException(
                 "Failed to set keyspace on all hosts: %s" % (errors,)))
 
-    def _execute_after_prepare(self, host, connection, pool, response):
+    def _execute_after_prepare(self, host, connection, pool, response, expected_query_id=None):
         """
         Handle the response to our attempt to prepare a statement.
         If it succeeded, run the original query again against the same host.
@@ -8566,16 +8568,18 @@ class ResponseFuture(object):
         if isinstance(response, ResultMessage):
             if response.kind == RESULT_KIND_PREPARED:
                 if self.prepared_statement:
-                    if self.prepared_statement.query_id != response.query_id:
-                        self._set_final_exception(DriverException(
-                            "ID mismatch while trying to reprepare (expected {expected}, got {got}). "
-                            "This prepared statement won't work anymore. "
-                            "This usually happens when you run a 'USE...' "
-                            "query after the statement was prepared.".format(
-                                expected=hexlify(self.prepared_statement.query_id), got=hexlify(response.query_id)
-                            )
-                        ))
-                        return
+                    expected_query_id = self.prepared_statement.query_id
+                if expected_query_id is not None and expected_query_id != response.query_id:
+                    self._set_final_exception(DriverException(
+                        "ID mismatch while trying to reprepare (expected {expected}, got {got}). "
+                        "This prepared statement won't work anymore. "
+                        "This usually happens when you run a 'USE...' "
+                        "query after the statement was prepared.".format(
+                            expected=hexlify(expected_query_id), got=hexlify(response.query_id)
+                        )
+                    ))
+                    return
+                if self.prepared_statement:
                     # Replace all bind metadata for subsequent binds, including
                     # names and types. Keep the original routing indexes and this
                     # request's serialized values; type/layout changes require a

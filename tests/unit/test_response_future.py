@@ -21,7 +21,8 @@ from io import BytesIO
 from threading import Barrier, Event, RLock, Thread, current_thread
 from unittest.mock import Mock, MagicMock, ANY, patch
 
-from cassandra import ConsistencyLevel, InvalidRequest, Unavailable, SchemaTargetType, SchemaChangeType, OperationTimedOut
+from cassandra import (ConsistencyLevel, DriverException, InvalidRequest, Unavailable,
+                       SchemaTargetType, SchemaChangeType, OperationTimedOut)
 from cassandra._lifecycle import LifecycleCoordinator
 from cassandra.metadata import Metadata
 from cassandra.cqltypes import Int32Type, ListType
@@ -2828,7 +2829,8 @@ class ResponseFutureTests(unittest.TestCase):
         prepared_response = Mock(spec=ResultMessage, kind=RESULT_KIND_PREPARED)
         connection.send_msg.call_args_list[1][1]['cb'](prepared_response)
         session.submit.assert_called_once_with(
-            rf._execute_after_prepare, host, connection, None, prepared_response)
+            rf._execute_after_prepare, host, connection, None, prepared_response,
+            expected_query_id=None)
 
     def test_control_connection_fallback_not_used_when_pool_can_serve(self):
         session = self.make_basic_session()
@@ -3284,8 +3286,14 @@ class ResponseFutureTests(unittest.TestCase):
                 self.check_unprepared_bind_metadata(batch, False, 'IN(ck)', 'in(ck)',
                                                     separate_cached=True)
 
+    def test_unprepared_mismatch_rejects_before_metadata_update_or_replay(self):
+        for batch in (False, True):
+            with self.subTest(batch=batch):
+                self.check_unprepared_bind_metadata(batch, False, 'IN(ck)', 'in(ck)',
+                                                    mismatched=True)
+
     def check_unprepared_bind_metadata(self, batch, named, old_name, new_name,
-                                       separate_cached=False):
+                                       mismatched=False, separate_cached=False):
         session = self.make_basic_session()
         session.cluster.allow_control_connection_query_fallback = ControlConnectionQueryFallback.Fallback
         session.cluster.protocol_version = ProtocolVersion.V4
@@ -3313,9 +3321,11 @@ class ResponseFutureTests(unittest.TestCase):
         else:
             query = bound
             message = ExecuteMessage(query_id, bound.values, ConsistencyLevel.ONE)
+        other = PreparedStatement(metadata, b'other-query', [0], marker_query,
+                                  'ks', 4, [], None)
         cached = (PreparedStatement(metadata, query_id, [0], marker_query,
                                     'ks', 4, [], None) if separate_cached else prepared)
-        session.cluster._prepared_statements = {query_id: cached}
+        session.cluster._prepared_statements = {query_id: cached, other.query_id: other}
         original_body = BytesIO()
         message.send_body(original_body, 4)
 
@@ -3334,13 +3344,27 @@ class ResponseFutureTests(unittest.TestCase):
         assert isinstance(connection.send_msg.call_args_list[1][0][0], PrepareMessage)
 
         response = ResultMessage(RESULT_KIND_PREPARED)
-        response.query_id = query_id
+        response.query_id = other.query_id if mismatched else query_id
         response.bind_metadata = [metadata[0], ColumnMetadata(
             'ks', 'tbl', 'ids' if named else new_name, list_type)]
         response.pk_indexes = [0]
         response.column_metadata = []
         response.result_metadata_id = None
         connection.send_msg.call_args_list[1][1]['cb'](response)
+
+        if mismatched:
+            assert connection.send_msg.call_count == 2
+            assert future._event.is_set()
+            with pytest.raises(DriverException, match='ID mismatch'):
+                future.result()
+            assert prepared.column_metadata is metadata
+            assert other.column_metadata is metadata
+            assert bound.values == serialized
+            assert bound.routing_key == routing_key
+            failed_body = BytesIO()
+            message.send_body(failed_body, 4)
+            assert failed_body.getvalue() == original_body.getvalue()
+            return
 
         assert connection.send_msg.call_count == 3
         assert connection.send_msg.call_args_list[2][0][0] is message
@@ -3361,6 +3385,7 @@ class ResponseFutureTests(unittest.TestCase):
         assert rebound.routing_key == routing_key
         connection.send_msg.call_args_list[2][1]['cb'](
             self.make_mock_response([], []))
+        assert future._event.is_set()
         future.result()
 
     def test_reprepare_id_mismatch_does_not_update_or_retry(self):
