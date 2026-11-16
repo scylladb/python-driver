@@ -17,12 +17,14 @@ import unittest
 import uuid
 
 from collections import deque
+from io import BytesIO
 from threading import Barrier, Event, RLock, Thread, current_thread
 from unittest.mock import Mock, MagicMock, ANY, patch
 
 from cassandra import ConsistencyLevel, InvalidRequest, Unavailable, SchemaTargetType, SchemaChangeType, OperationTimedOut
 from cassandra._lifecycle import LifecycleCoordinator
 from cassandra.metadata import Metadata
+from cassandra.cqltypes import Int32Type, ListType
 from cassandra.cluster import (Cluster, Session, ResponseFuture, NoHostAvailable, ProtocolVersion,
                                ControlConnection, ControlConnectionQueryFallback, _NOT_SET)
 from cassandra.connection import (Connection, ConnectionBusy, ConnectionException,
@@ -30,7 +32,7 @@ from cassandra.connection import (Connection, ConnectionBusy, ConnectionExceptio
                                   DefaultEndPoint)
 from cassandra.protocol import (ReadTimeoutErrorMessage, WriteTimeoutErrorMessage,
                                 UnavailableErrorMessage, ResultMessage, QueryMessage,
-                                ExecuteMessage,
+                                ExecuteMessage, BatchMessage, ColumnMetadata,
                                 OverloadedErrorMessage, IsBootstrappingErrorMessage,
                                 PreparedQueryNotFound, PrepareMessage, ServerError,
                                 InvalidRequestException,
@@ -39,7 +41,8 @@ from cassandra.protocol import (ReadTimeoutErrorMessage, WriteTimeoutErrorMessag
                                 ProtocolHandler)
 from cassandra.policies import RetryPolicy, ExponentialBackoffRetryPolicy, SimpleConvictionPolicy
 from cassandra.pool import Host, NoConnectionsAvailable
-from cassandra.query import SimpleStatement, PreparedStatement, BoundStatement
+from cassandra.query import (SimpleStatement, PreparedStatement, BoundStatement,
+                             BatchStatement)
 from tests.unit.utils import move_host
 from tests.util import assertEqual, assertIsInstance
 import pytest
@@ -3242,6 +3245,118 @@ class ResponseFutureTests(unittest.TestCase):
         rf._execute_after_prepare('host', None, None, response)
         rf._query.assert_called_once_with('host')
         assert rf.prepared_statement.result_metadata_id == b'foo'
+
+    def test_unprepared_refreshes_bind_names_without_rebinding(self):
+        for batch in (False, True):
+            for old_name, new_name in (('IN(ck)', 'in(ck)'),
+                                       ('in(ck)', 'IN(ck)')):
+                with self.subTest(batch=batch, old_name=old_name):
+                    self.check_unprepared_bind_metadata(batch, False, old_name, new_name)
+
+    def test_unprepared_replaces_named_bind_metadata_without_rebinding(self):
+        for batch in (False, True):
+            with self.subTest(batch=batch):
+                self.check_unprepared_bind_metadata(batch, True, None, None)
+
+    def test_unprepared_refreshes_only_the_reachable_statement(self):
+        for batch in (False, True):
+            with self.subTest(batch=batch):
+                self.check_unprepared_bind_metadata(batch, False, 'IN(ck)', 'in(ck)',
+                                                    separate_cached=True)
+
+    def check_unprepared_bind_metadata(self, batch, named, old_name, new_name,
+                                       separate_cached=False):
+        session = self.make_basic_session()
+        session.cluster.allow_control_connection_query_fallback = ControlConnectionQueryFallback.Fallback
+        session.cluster.protocol_version = ProtocolVersion.V4
+        session.keyspace = 'ks'
+        session.cluster._default_load_balancing_policy.make_query_plan.return_value = [self.host1]
+        session._pools = {}
+        session.submit.side_effect = lambda fn, *args, **kwargs: fn(*args, **kwargs)
+
+        query_id = b'bind-markers'
+        list_type = ListType.apply_parameters([Int32Type])
+        names = ('partition', 'ids') if named else ('pk', old_name)
+        metadata = [ColumnMetadata('ks', 'tbl', names[0], Int32Type),
+                    ColumnMetadata('ks', 'tbl', names[1], list_type)]
+        marker_query = ('UPDATE ks.tbl SET v = 0 WHERE pk = :partition AND ck IN :ids'
+                        if named else 'UPDATE ks.tbl SET v = 0 WHERE pk = ? AND ck IN ?')
+        prepared = PreparedStatement(
+            metadata, query_id, [0], marker_query, 'ks', 4, [], None)
+        bound = prepared.bind({'ids': [2, 3], 'partition': 1} if named else (1, [2, 3]))
+        serialized = list(bound.values)
+        routing_key = bound.routing_key
+        if batch:
+            query = BatchStatement().add(bound)
+            message = BatchMessage(query.batch_type, query._statements_and_parameters,
+                                   ConsistencyLevel.ONE)
+        else:
+            query = bound
+            message = ExecuteMessage(query_id, bound.values, ConsistencyLevel.ONE)
+        cached = (PreparedStatement(metadata, query_id, [0], marker_query,
+                                    'ks', 4, [], None) if separate_cached else prepared)
+        session.cluster._prepared_statements = {query_id: cached}
+        original_body = BytesIO()
+        message.send_body(original_body, 4)
+
+        connection = self.make_control_connection()
+        connection.keyspace = 'ks'
+        connection.get_request_id.side_effect = [7, 8, 9]
+        session.cluster.control_connection._connection = connection
+        host = self.make_host(connection.endpoint)
+        session.cluster.get_control_connection_host.return_value = host
+        future = ResponseFuture(session, message, query, 1,
+                                prepared_statement=None if batch else prepared)
+        assert future.send_request()
+        connection.send_msg.call_args_list[0][1]['cb'](
+            PreparedQueryNotFound(code=0x2500, message='evicted', info=query_id))
+        assert connection.send_msg.call_count == 2
+        assert isinstance(connection.send_msg.call_args_list[1][0][0], PrepareMessage)
+
+        response = ResultMessage(RESULT_KIND_PREPARED)
+        response.query_id = query_id
+        response.bind_metadata = [metadata[0], ColumnMetadata(
+            'ks', 'tbl', 'ids' if named else new_name, list_type)]
+        response.pk_indexes = [0]
+        response.column_metadata = []
+        response.result_metadata_id = None
+        connection.send_msg.call_args_list[1][1]['cb'](response)
+
+        assert connection.send_msg.call_count == 3
+        assert connection.send_msg.call_args_list[2][0][0] is message
+        refreshed = cached if batch else prepared
+        # Named metadata is equal by value; identity proves it was replaced too.
+        assert refreshed.column_metadata is response.bind_metadata
+        assert refreshed.routing_key_indexes == [0]
+        if separate_cached:
+            unchanged = prepared if batch else cached
+            assert unchanged.column_metadata is metadata
+        assert bound.values == serialized
+        assert bound.routing_key == routing_key
+        retried_body = BytesIO()
+        message.send_body(retried_body, 4)
+        assert retried_body.getvalue() == original_body.getvalue()
+        rebound = refreshed.bind({'ids': [4], 'partition': 1} if named else (1, [4]))
+        assert list_type.deserialize(rebound.values[1], 4) == [4]
+        assert rebound.routing_key == routing_key
+        connection.send_msg.call_args_list[2][1]['cb'](
+            self.make_mock_response([], []))
+        future.result()
+
+    def test_reprepare_id_mismatch_does_not_update_or_retry(self):
+        future = self.make_response_future(self.make_session())
+        prepared = self._make_prepared_statement([], None, query_id=b'old-id')
+        prepared.column_metadata = [ColumnMetadata('ks', 'tbl', 'IN(ck)', Int32Type)]
+        original_metadata = prepared.column_metadata
+        future.prepared_statement = prepared
+        future._query = Mock()
+        response = ResultMessage(RESULT_KIND_PREPARED)
+        response.query_id = b'new-id'
+        response.bind_metadata = [ColumnMetadata('ks', 'tbl', 'in(ck)', Int32Type)]
+        future._execute_after_prepare('host', None, None, response)
+        assert prepared.column_metadata is original_metadata
+        assert 'ID mismatch' in str(future._final_exception)
+        future._query.assert_not_called()
 
     def test_execute_after_prepare_updates_result_metadata_id(self):
         """

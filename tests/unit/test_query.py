@@ -16,7 +16,7 @@ import unittest
 
 import pytest
 
-from cassandra.cqltypes import Int32Type
+from cassandra.cqltypes import Int32Type, ListType
 from cassandra.protocol import ColumnMetadata
 from cassandra.query import (
     BatchStatement, BoundStatement, PreparedStatement, SimpleStatement,
@@ -98,6 +98,41 @@ class TestBoundStatementRebind:
         assert bound.routing_key == b'\x00\x00\x00\x01'
         bound.bind((2, 20, 200))
         assert bound.routing_key == b'\x00\x00\x00\x02'
+
+
+class TestPreparedBindMarkers:
+    @pytest.mark.parametrize('protocol_version', [3, 4, 5])
+    @pytest.mark.parametrize('marker_name', ['IN(ck)', 'in(ck)'])
+    def test_anonymous_in_markers_bind_by_position(self, protocol_version, marker_name):
+        prepared = PreparedStatement(
+            column_metadata=[ColumnMetadata('ks', 'tbl', 'pk', Int32Type),
+                             ColumnMetadata('ks', 'tbl', marker_name,
+                                            ListType.apply_parameters([Int32Type]))],
+            query_id=b'query-id', routing_key_indexes=[0],
+            query='SELECT * FROM ks.tbl WHERE pk = ? AND ck IN ?',
+            keyspace='ks', protocol_version=protocol_version,
+            result_metadata=[], result_metadata_id=None)
+        bound = prepared.bind((1, [2, 3]))
+        assert Int32Type.deserialize(bound.values[0], protocol_version) == 1
+        assert ListType.apply_parameters([Int32Type]).deserialize(
+            bound.values[1], protocol_version) == [2, 3]
+        assert bound.routing_key == bound.values[0]
+
+    @pytest.mark.parametrize('protocol_version', [3, 4, 5])
+    def test_explicit_in_markers_bind_by_name(self, protocol_version):
+        list_type = ListType.apply_parameters([Int32Type])
+        prepared = PreparedStatement(
+            column_metadata=[ColumnMetadata('ks', 'tbl', 'partition', Int32Type),
+                             ColumnMetadata('ks', 'tbl', 'ids', list_type)],
+            query_id=b'query-id', routing_key_indexes=[0],
+            query='SELECT * FROM ks.tbl WHERE pk = :partition AND ck IN :ids',
+            keyspace='ks', protocol_version=protocol_version,
+            result_metadata=[], result_metadata_id=None)
+        # Dictionary insertion order differs from marker order.
+        bound = prepared.bind({'ids': [2, 3], 'partition': 1})
+        assert bound.values == [Int32Type.serialize(1, protocol_version),
+                                list_type.serialize([2, 3], protocol_version)]
+        assert bound.routing_key == bound.values[0]
 
 
 class BatchStatementTest(unittest.TestCase):
