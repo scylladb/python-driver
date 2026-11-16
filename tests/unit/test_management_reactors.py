@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib
+import sys
 from collections import deque
 from contextlib import contextmanager
 from concurrent.futures import CancelledError, Future
@@ -1109,10 +1110,11 @@ def inherited_descriptor(module, reactor, sock):
 
 
 @pytest.mark.parametrize('dispatcher_name', [
-    '_AsyncorePipeDispatcher', '_AsyncoreUDPDispatcher', '_BusyWaitDispatcher'])
+    pytest.param('_AsyncorePipeDispatcher', marks=pytest.mark.skipif(
+        sys.platform == 'win32', reason='pipe dispatch is not supported by Windows select')),
+    '_AsyncoreUDPDispatcher', '_BusyWaitDispatcher'])
 def test_inherited_asyncore_descriptor_survives_actual_poll(dispatcher_name):
     import subprocess
-    import sys
     reactor_module('asyncore')
     # A running shared runner also consults the process-global map. Keep the
     # real polling/cleanup regression in its own process, including failures.
