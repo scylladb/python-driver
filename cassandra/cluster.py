@@ -5700,6 +5700,7 @@ class ControlConnection(object):
         message explaining the conflict.
         """
         with self._application_query_lock:
+            keyspace = keyspace or None
             self._prune_application_sessions()
 
             other_sessions = any(
@@ -7945,7 +7946,7 @@ class ResponseFuture(object):
                     "Control connection is not connected")
                 return None
 
-            keyspace = self.session.keyspace
+            keyspace = self.session.keyspace or None
             if changing_keyspace and control_connection._application_keyspace_change is not None:
                 self._set_final_exception(InvalidRequest(
                     "A control-connection keyspace change is already in progress"))

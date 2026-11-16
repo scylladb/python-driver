@@ -2025,6 +2025,26 @@ class ResponseFutureTests(unittest.TestCase):
         assert connection.keyspace == 'ks1'
         assert session1.cluster.control_connection._get_application_keyspace() == 'ks1'
 
+    def test_control_connection_fallback_empty_keyspace_behaves_as_unset(self):
+        session1 = self._make_fallback_session(keyspace='')
+        session2 = self._make_fallback_session(
+            cluster=session1.cluster, keyspace=None)
+
+        connection = self.make_control_connection()
+        connection.get_request_id.side_effect = [7, 8]
+        session1.cluster.control_connection._connection = connection
+
+        rf1 = self.make_response_future(session1)
+        rf2 = self.make_response_future(session2)
+        assert rf1.send_request()
+        assert rf2.send_request()
+
+        assert connection.send_msg.call_count == 2
+        assert connection.send_msg.call_args_list[0][0][0] is rf1.message
+        assert connection.send_msg.call_args_list[1][0][0] is rf2.message
+        assert connection.keyspace is None
+        assert session1.cluster.control_connection._get_application_keyspace() is None
+
     def test_control_connection_fallback_rejects_different_session_keyspace(self):
         for first_keyspace, second_keyspace in (
                 ('ks1', 'ks2'), ('ks1', None), (None, 'ks1')):
