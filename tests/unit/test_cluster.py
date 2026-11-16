@@ -244,6 +244,22 @@ class ClusterTest(unittest.TestCase):
         with pytest.raises(InvalidRequest, match='already attached'):
             Session(cluster, [host], keyspace='different')
 
+    def test_control_connection_query_fallback_no_node_pool_empty_keyspace_is_unset(self):
+        cluster = Cluster(
+            allow_control_connection_query_fallback=ControlConnectionQueryFallback.SkipPoolCreation,
+        )
+        self.addCleanup(cluster.shutdown)
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+
+        empty_session = Session(cluster, [host], keyspace='')
+        assert cluster.control_connection._get_application_keyspace() is None
+
+        none_session = Session(cluster, [host], keyspace=None)
+        assert empty_session.keyspace == ''
+        assert none_session.keyspace is None
+        with pytest.raises(InvalidRequest, match='already attached'):
+            Session(cluster, [host], keyspace='different')
+
     def test_control_connection_query_fallback_fallback_tolerates_empty_initial_pools(self):
         cluster = Cluster(
             allow_control_connection_query_fallback=ControlConnectionQueryFallback.Fallback,
