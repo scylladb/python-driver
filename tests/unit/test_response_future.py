@@ -3347,7 +3347,7 @@ class ResponseFutureTests(unittest.TestCase):
         response.query_id = other.query_id if mismatched else query_id
         response.bind_metadata = [metadata[0], ColumnMetadata(
             'ks', 'tbl', 'ids' if named else new_name, list_type)]
-        response.pk_indexes = [0]
+        response.pk_indexes = [1]
         response.column_metadata = []
         response.result_metadata_id = None
         connection.send_msg.call_args_list[1][1]['cb'](response)
