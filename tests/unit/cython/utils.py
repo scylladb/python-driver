@@ -28,7 +28,7 @@ def cyimport(import_path):
     """
     if HAVE_CYTHON:
         import pyximport
-        py_importer, pyx_importer = pyximport.install()
+        py_importer, pyx_importer = pyximport.install(language_level=3)
         mod = __import__(import_path, fromlist=[True])
         pyximport.uninstall(py_importer, pyx_importer)
         return mod
