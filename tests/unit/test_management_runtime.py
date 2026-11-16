@@ -70,12 +70,19 @@ def runtime(monkeypatch):
             record.delivery for record in runtime._records)
         return counts
     monkeypatch.setattr(runtime, '_observe_counts_locked', checked_counts)
-    yield runtime, dispatch
-    assert_runtime_counts(runtime)
-    runtime.close()
-    assert_runtime_counts(runtime)
-    dispatch.drain()
-    runtime.join(5)
+    try:
+        yield runtime, dispatch
+        assert_runtime_counts(runtime)
+    finally:
+        # A failed invariant must not interrupt shutdown's own observations.
+        monkeypatch.setattr(runtime, '_observe_counts_locked', observe)
+        try:
+            runtime.close()
+        finally:
+            try:
+                dispatch.drain()
+            finally:
+                runtime.join(5)
     assert all(value == 0 for value in assert_runtime_counts(runtime).values())
 
 
@@ -2323,3 +2330,69 @@ def test_inherited_compatibility_cleanup_rejects_before_parent_lock(entry):
         manager.close()
         manager.join(5)
     assert all(value == 0 for value in assert_runtime_counts(manager).values())
+
+
+@pytest.mark.parametrize('charged', [False, True])
+def test_delivered_callbacks_release_captured_objects_outside_locks(
+        runtime, charged):
+    import gc
+    import weakref
+
+    manager, dispatch = runtime
+    calls, released, references = [], [], []
+    class Payload:
+        def __del__(self):
+            released.append((future._condition._is_owned(),
+                             manager._condition._is_owned()))
+
+    def register(index):
+        payload = Payload()
+        references.append(weakref.ref(payload))
+        future.add_done_callback(
+            lambda future, payload=payload: calls.append(index))
+
+    if charged:
+        with manager._condition:
+            future = manager.submit(lambda record: 7)
+            for index in range(16):
+                register(index)
+        assert future.result(5) == 7
+        assert all(reference() is not None for reference in references)
+        dispatch.drain()
+    else:
+        future = manager.submit(lambda record: 7)
+        assert future.result(5) == 7
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: future._record.released, 5)
+        for index in range(16):
+            register(index)
+    gc.collect()
+    assert calls == list(range(16))
+    assert all(reference() is None for reference in references)
+    assert released == [(False, False)] * 16
+    assert not future._done_callbacks
+    assert future.result() == 7
+
+
+def test_runtime_fixture_cleans_up_after_counter_invariant_failure(monkeypatch):
+    from cassandra._management import _PENDING
+
+    resources = runtime.__wrapped__(monkeypatch)
+    manager, dispatch = next(resources)
+    delivered = []
+    try:
+        future = manager.submit(lambda record: _PENDING)
+        future.add_done_callback(lambda future: delivered.append(True))
+        assert future._record.started.wait(5)
+        with manager._condition:
+            manager._mailbox_pending += 1
+        with pytest.raises(AssertionError):
+            next(resources)
+        assert manager.closed.is_set() and manager.finalized.is_set()
+        assert all(not thread.is_alive() for thread in manager._threads)
+        assert not manager._records and not dispatch.queue
+        assert delivered == [True]
+    finally:
+        # Also protect a failed setup/assertion in this regression itself.
+        resources.close()

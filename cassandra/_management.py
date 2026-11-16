@@ -318,6 +318,12 @@ class _CallbackDelivery:
             with self.future._condition:
                 if (original is not self.record or
                         self.cursor == len(self.future._done_callbacks)):
+                    # Keep the standard list, but retire its delivered prefix.
+                    # Hold references until outside the condition: releasing a
+                    # callback's captured objects can run application code.
+                    retired = self.future._done_callbacks[:self.cursor]
+                    del self.future._done_callbacks[:self.cursor]
+                    self.cursor = 0
                     self.running = False
                     resume, self.waiters = (
                         self.waiters, set())
@@ -333,6 +339,7 @@ class _CallbackDelivery:
                 callback(self.future)
             except BaseException:
                 log.exception('Error in management completion callback')
+        retired.clear()
         for waiting in resume:
             waiting.runtime._resume_delivery(waiting)
         return True
