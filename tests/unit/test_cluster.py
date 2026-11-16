@@ -7787,14 +7787,94 @@ def test_callback_failure_releases_pool_reconciliation(pending_discovery_cluster
 
 
 @pytest.mark.parametrize("distance", [HostDistance.LOCAL, HostDistance.IGNORED])
-def test_up_without_pending_discovery_preserves_no_pool_behavior(pending_discovery_cluster, distance):
+def test_up_without_pool_futures_notifies_and_reconciles(
+        pending_discovery_cluster, distance):
     cluster, host, listener = pending_discovery_cluster
     cluster.profile_manager.distance.return_value = distance
-    cluster.on_up(host)
+    session = Mock()
+    session.add_or_renew_pool.return_value = None
+    cluster.sessions = (session,)
+    with patch('cassandra.cluster.log') as logger:
+        cluster.on_up(host)
+    assert call("Connection pools established for node %s", host) not in (
+        logger.info.call_args_list)
     assert host.is_up
     assert not host._currently_handling_node_up
     listener.on_add.assert_not_called()
-    listener.on_up.assert_not_called()
+    listener.on_up.assert_called_once_with(host)
+    session.update_created_pools.assert_called_once_with()
+    cluster.on_up(host)
+    assert listener.on_up.call_count == 1
+    assert session.update_created_pools.call_count == 1
+
+
+@pytest.mark.parametrize("action", ["remove", "down"])
+def test_up_without_pool_futures_stops_after_listener_reentry(
+        pending_discovery_cluster, action):
+    cluster, host, listener = pending_discovery_cluster
+    session = Mock()
+    session.add_or_renew_pool.return_value = None
+    cluster.sessions = (session,)
+    cluster._discount_down_events = False
+    cluster.executor.submit = Mock(return_value=Future())
+    if action == "remove":
+        listener.on_up.side_effect = cluster.remove_host
+    else:
+        listener.on_up.side_effect = lambda h: cluster.on_down(h, False)
+
+    cluster.on_up(host)
+
+    listener.on_up.assert_called_once_with(host)
+    session.update_created_pools.assert_not_called()
+    assert host.is_up is False
+    assert not host._currently_handling_node_up
+
+
+@pytest.mark.parametrize("pool_state", [
+    "no_session", "no_future", "completed_future"])
+def test_up_listener_error_preserves_routing_and_reconciliation(pool_state):
+    policy = RoundRobinPolicy()
+    with Cluster(load_balancing_policy=policy, protocol_version=4) as cluster:
+        cluster.control_connection.on_up = Mock()
+        cluster.control_connection.on_down = Mock()
+        cluster._start_reconnector = Mock()
+        host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
+        cluster.metadata.add_or_return_host(host)
+        if pool_state != "no_session":
+            session = Mock()
+            pool_future = None
+            if pool_state == "completed_future":
+                pool_future = Future()
+                pool_future.set_result(True)
+            session.add_or_renew_pool.return_value = pool_future
+            cluster.sessions = (session,)
+        listener = Mock()
+        listener.on_up.side_effect = RuntimeError("listener failed")
+        cluster.register_listener(listener)
+        following_listener = Mock()
+        cluster.register_listener(following_listener)
+        cluster._listeners = SimpleNamespace(
+            copy=lambda: (listener, following_listener))
+
+        with patch('cassandra.cluster.log') as logger:
+            cluster.on_up(host)
+
+        listener.on_up.assert_called_once_with(host)
+        following_listener.on_up.assert_called_once_with(host)
+        logger.exception.assert_called_once_with(
+            "Error notifying listener that host %s is up", host)
+        pool_log = call("Connection pools established for node %s", host)
+        assert (pool_log in logger.info.call_args_list) == (
+            pool_state == "completed_future")
+        if pool_state != "no_session":
+            session.add_or_renew_pool.assert_called_once_with(
+                host, is_host_addition=False)
+            session.update_created_pools.assert_called_once_with()
+        assert host.is_up is True
+        assert not host._currently_handling_node_up
+        assert host in list(policy.make_query_plan())
+        cluster.control_connection.on_down.assert_not_called()
+        cluster._start_reconnector.assert_not_called()
 
 
 @pytest.mark.parametrize("action", ["remove", "down"])

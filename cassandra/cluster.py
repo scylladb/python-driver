@@ -2279,7 +2279,8 @@ class Cluster(object):
     def _is_current_host(self, host):
         return self._lifecycle.is_current(host)
 
-    def _on_up_pools_completed(self, host, results, generation=None):
+    def _on_up_pools_completed(self, host, results, generation=None,
+                               advance_health=False):
         # Retirement can publish while a callback runs. Fence every remaining
         # effect; the FIFO delivers removal after the current notification.
         try:
@@ -2297,16 +2298,22 @@ class Cluster(object):
                 self._cleanup_failed_on_up_handling(host)
                 return
 
-            log.info("Connection pools established for node %s", host)
+            if results:
+                log.info("Connection pools established for node %s", host)
             if not self._lifecycle.mark_ready(
                     host, readiness_generation=generation,
-                    advance_health=False):
+                    advance_health=advance_health):
                 return
             self._notify_pending_add(host, generation)
             for listener in self.listeners:
-                if not self._lifecycle.dispatch_current(
-                        host, listener.on_up, readiness_generation=generation):
-                    return
+                try:
+                    if not self._lifecycle.dispatch_current(
+                            host, listener.on_up,
+                            readiness_generation=generation):
+                        return
+                except Exception:
+                    log.exception(
+                        "Error notifying listener that host %s is up", host)
 
             # see if there are any pools to add or remove now that the host is marked up
             for session in tuple(self.sessions):
@@ -2385,30 +2392,18 @@ class Cluster(object):
                 if future is not None:
                     futures.add(future)
 
-            if futures:
-                self._lifecycle.collect_futures(
-                    futures, partial(self._on_up_pools_completed, host,
-                                     generation=generation))
+            # Queue empty results too, keeping listener errors outside the
+            # preparation-failure handler after readiness is published.
+            self._lifecycle.collect_futures(
+                futures, partial(self._on_up_pools_completed, host,
+                                 generation=generation,
+                                 advance_health=not futures))
         except Exception:
             log.exception("Unexpected failure handling node %s being marked up:", host)
             for future in futures:
                 future.cancel()
 
             raise
-        else:
-            if not futures:
-                try:
-                    if self._lifecycle.mark_ready(host, readiness_generation=generation):
-                        # Preserve the existing no-pool UP behavior unless it
-                        # must finish an outstanding discovery notification.
-                        if self._notify_pending_add(host, generation):
-                            for listener in self.listeners:
-                                if not self._lifecycle.dispatch_current(
-                                        host, listener.on_up,
-                                        readiness_generation=generation):
-                                    return
-                finally:
-                    self._lifecycle.finish_up(host, generation)
 
     def _start_reconnector(self, host, is_host_addition,
                            on_add_reconnection=None, start=True,
