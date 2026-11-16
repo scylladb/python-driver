@@ -539,6 +539,8 @@ class ManagementRuntime:
         self._keys = {}
         self._pool_credits = {}
         self._credits = 0
+        self._mailbox_pending = 0
+        self._delivery_batches = 0
         self._reentry_credits = 0
         self._reentry_active = False
         self._sequence = 0
@@ -567,8 +569,8 @@ class ManagementRuntime:
             'aggregate': int(self._reentry_active),
             'health': len(self._health),
             'close': len(self._lifetimes) + self._cleanup_obligations,
-            'delivery': sum(record.delivery for record in self._records),
-            'mailbox': sum(record.mailbox_pending for record in self._records)}
+            'delivery': self._delivery_batches,
+            'mailbox': self._mailbox_pending}
         for kind, count in counts.items():
             self.high_waters[kind] = max(self.high_waters[kind], count)
         return counts
@@ -693,8 +695,22 @@ class ManagementRuntime:
             self._condition.notify_all()
             return future
 
+    def _account_mailbox_locked(self, record, delta):
+        record.mailbox_pending += delta
+        self._mailbox_pending += delta
+
+    def _dequeue_locked(self, queue):
+        entry = queue.popleft()
+        self._account_mailbox_locked(entry.record, -1)
+        return entry
+
+    def _set_delivery_locked(self, record, active):
+        if record.delivery != active:
+            self._delivery_batches += 1 if active else -1
+            record.delivery = active
+
     def _enqueue_locked(self, record, callback, retain_on_close=False):
-        record.mailbox_pending += 1
+        self._account_mailbox_locked(record, 1)
         entry = _MailboxEntry(record, callback, retain_on_close)
         if record.pool is None:
             self._cluster.append(entry)
@@ -895,7 +911,7 @@ class ManagementRuntime:
         if self.completion_error is not None:
             self._delivery_failed_locked(record, self.completion_error)
             return
-        record.delivery = True
+        self._set_delivery_locked(record, True)
         self._observe_counts_locked()
         self._dispatch_delivery_locked(record)
 
@@ -913,14 +929,14 @@ class ManagementRuntime:
     def _dispatch_delivery_locked(self, record):
         if self.completion_error is not None:
             self._delivery_failed_locked(record, self.completion_error)
-            record.delivery = False
+            self._set_delivery_locked(record, False)
             self._release_locked(record)
             return
         record.delivery_ticket = _DeliveryTicket(lambda: self._deliver(record))
         try:
             self._dispatch(record.delivery_ticket)
         except BaseException as exc:
-            record.delivery = False
+            self._set_delivery_locked(record, False)
             error = ManagementDeliveryFailed(
                 'Completion reactor rejected management delivery')
             error.__cause__ = exc
@@ -929,7 +945,7 @@ class ManagementRuntime:
                 self._delivery_failed_locked(pending, error)
                 ticket = pending.delivery_ticket
                 if ticket is None or ticket.cancel():
-                    pending.delivery = False
+                    self._set_delivery_locked(pending, False)
                     pending.delivery_ticket = None
                     self._release_locked(pending)
             # Infrastructure failure closes admission. Native outcomes already
@@ -967,7 +983,7 @@ class ManagementRuntime:
                                 self._dispatch_delivery_locked(record)
                             return
                         continue
-                    record.delivery = False
+                    self._set_delivery_locked(record, False)
                     record.delivery_ticket = None
                     record.delivery_again = False
                     self._release_locked(record)
@@ -1045,8 +1061,7 @@ class ManagementRuntime:
                         self.notify(notification)
                         notification = pending = None
                         continue
-                    record, callback, _ = self._cluster.popleft()
-                    record.mailbox_pending -= 1
+                    record, callback, _ = self._dequeue_locked(self._cluster)
                     native_health = False
             self._execute(record, callback, 'cluster')
             if native_health:
@@ -1064,8 +1079,7 @@ class ManagementRuntime:
                     return
                 pool = self._ready.popleft()
                 self._active_pools.add(pool)
-                record, callback, _ = self._pools[pool].popleft()
-                record.mailbox_pending -= 1
+                record, callback, _ = self._dequeue_locked(self._pools[pool])
             self._execute(record, callback, 'pool')
             with self._condition:
                 self._active_pools.remove(pool)
@@ -1154,7 +1168,7 @@ class ManagementRuntime:
                 if item.retain_on_close:
                     retained.append(item)
                 else:
-                    item.record.mailbox_pending -= 1
+                    self._account_mailbox_locked(item.record, -1)
                     self._release_locked(item.record)
             return retained
         self._cluster = retained_results(self._cluster)

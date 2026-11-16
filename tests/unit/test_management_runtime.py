@@ -46,14 +46,37 @@ def complete_physical(manager, future, value):
     assert not errors
 
 
+def assert_runtime_counts(manager):
+    with manager._condition:
+        counts = manager.counts()
+        assert counts['mailbox'] == sum(
+            record.mailbox_pending for record in manager._records)
+        assert counts['delivery'] == sum(
+            record.delivery for record in manager._records)
+        assert all(value >= 0 for value in counts.values())
+        return counts
+
+
 @pytest.fixture
-def runtime():
+def runtime(monkeypatch):
     dispatch = Dispatcher()
     runtime = ManagementRuntime(dispatch, limit=4, pool_limit=2)
+    observe = runtime._observe_counts_locked
+    def checked_counts():
+        counts = observe()
+        assert counts['mailbox'] == sum(
+            record.mailbox_pending for record in runtime._records)
+        assert counts['delivery'] == sum(
+            record.delivery for record in runtime._records)
+        return counts
+    monkeypatch.setattr(runtime, '_observe_counts_locked', checked_counts)
     yield runtime, dispatch
+    assert_runtime_counts(runtime)
     runtime.close()
+    assert_runtime_counts(runtime)
     dispatch.drain()
     runtime.join(5)
+    assert all(value == 0 for value in assert_runtime_counts(runtime).values())
 
 
 def test_fifo_one_owner_and_exception_progress(runtime):
@@ -1838,6 +1861,7 @@ def test_deferred_callback_handoffs_keep_one_ticket_per_charged_record(
         assert not reactor.is_alive()
         with manager._condition:
             assert len(manager._records) == count
+            assert assert_runtime_counts(manager)['delivery'] == count
             assert all(r.delivery and r.delivery_ticket is None
                        for r in manager._records)
         assert not dispatch.queue
@@ -1894,6 +1918,7 @@ def test_callback_handoff_completion_during_active_delivery_cannot_lose_wakeup(
         caller.join(5)
         assert not caller.is_alive()
         with manager._condition:
+            assert assert_runtime_counts(manager)['delivery'] == 1
             assert owner._record.delivery_again
             assert owner._record.delivery_ticket is not None
         return_delivery.set()
@@ -2152,3 +2177,64 @@ def test_mixed_bulk_fork_rejection_preserves_fresh_locks(
         holder.join(5)
         os.close(read_fd)
         os.waitpid(pid, 0)
+
+
+def test_count_snapshots_do_not_enumerate_retained_records():
+    class NoIteration(set):
+        def __iter__(self):
+            pytest.fail('telemetry enumerated admitted records')
+
+    dispatch = Dispatcher()
+    manager = ManagementRuntime(dispatch)
+    manager._started = True
+    futures = [manager.submit(lambda record: None) for _ in range(64)]
+    records = manager._records
+    try:
+        manager._records = NoIteration(records)
+        assert manager.counts()['mailbox'] == 64
+        assert manager.high_waters['mailbox'] == 64
+        for future in futures:
+            future.add_done_callback(lambda future: None)
+            manager._finish(future._record)
+        assert manager.counts()['delivery'] == 64
+        assert manager.high_waters['delivery'] == 64
+    finally:
+        manager._records = records
+        manager.close()
+        dispatch.drain()
+        manager.join(5)
+    assert all(future.done() for future in futures)
+    assert all(value == 0 for value in assert_runtime_counts(manager).values())
+
+
+@pytest.mark.parametrize('pool', [None, 'pool'])
+def test_shutdown_prunes_handlers_but_retains_result_mailbox_counts(pool):
+    from cassandra._management import _PENDING
+
+    dispatch = Dispatcher()
+    manager = ManagementRuntime(dispatch)
+    manager._started = True
+    results = []
+    future = manager.submit(lambda record: _PENDING, pool=pool)
+    record = future._record
+    future.add_done_callback(lambda future: results.append('callback'))
+    with manager._condition:
+        manager._enqueue_locked(record, lambda: results.append('result'),
+                                retain_on_close=True)
+        assert assert_runtime_counts(manager)['mailbox'] == 2
+    manager.close()
+    counts = assert_runtime_counts(manager)
+    assert counts['mailbox'] == counts['delivery'] == 1
+    queue = manager._cluster if pool is None else manager._pools[pool]
+    with manager._condition:
+        entry = manager._dequeue_locked(queue)
+        assert entry.retain_on_close
+    manager._execute(entry.record, entry.callback,
+                     'cluster' if pool is None else 'pool')
+    with manager._condition:
+        manager._release_locked(record)
+    assert assert_runtime_counts(manager)['mailbox'] == 0
+    dispatch.drain()
+    manager.join(5)
+    assert results == ['result', 'callback']
+    assert all(value == 0 for value in assert_runtime_counts(manager).values())
