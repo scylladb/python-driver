@@ -760,7 +760,7 @@ def test_owner_callback_reselects_batch_retired_during_registration(runtime):
         def handler(record):
             armed.set()
             old.add_done_callback(lambda future: calls.append('new'))
-            assert old._delivery_record is record
+            assert old._delivery.record is record
         current = manager.submit(handler)
         assert selected.wait(5)
         dispatch.drain()
@@ -1168,7 +1168,7 @@ def test_dispatch_rejection_closes_without_stranding_waiters_or_resources():
             assert manager.closed.wait(5)
             assert isinstance(
                 manager.completion_error, ManagementDeliveryFailed)
-            assert isinstance(future._delivery_error, ManagementDeliveryFailed)
+            assert isinstance(future._delivery.error, ManagementDeliveryFailed)
             with pytest.raises(ManagementDeliveryFailed):
                 future.add_done_callback(lambda f: calls.append('late'))
             with pytest.raises(ManagementClosed):
@@ -1225,7 +1225,7 @@ def test_fatal_service_loss_abandons_queued_tickets_without_retaining_results(
         for ticket in queue:
             ticket()
         manager.join(5)
-    assert isinstance(first._delivery_error, ManagementDeliveryFailed)
+    assert isinstance(first._delivery.error, ManagementDeliveryFailed)
     assert queue[0]._callback is None
     queue[0]()  # A late reactor wakeup cannot resurrect an abandoned batch.
     assert calls == []
@@ -1780,7 +1780,7 @@ def test_owner_callback_handoff_yields_reactor_while_caller_callback_runs(
             assert failed_delivery.result(5) == 9
             assert manager.closed.wait(5)
             manager.join(5)
-            assert isinstance(old._delivery_error, ManagementDeliveryFailed)
+            assert isinstance(old._delivery.error, ManagementDeliveryFailed)
             assert manager.counts()['ordinary'] == 0
     finally:
         resume.set()
@@ -1794,7 +1794,7 @@ def test_owner_callback_handoff_yields_reactor_while_caller_callback_runs(
         expected.append(('owner', 'bridge'))
     assert calls == expected
     assert manager.counts()['ordinary'] == 0
-    assert not old._callback_waiters
+    assert not old._delivery.waiters
 
 
 @pytest.mark.parametrize('one_record', [False, True])
@@ -1851,7 +1851,7 @@ def test_deferred_callback_handoffs_keep_one_ticket_per_charged_record(
         dispatch.drain()
         assert calls == ['bridge'] * 3
         assert manager.counts()['ordinary'] == 0
-        assert all(not f._callback_waiters for f in old)
+        assert all(not f._delivery.waiters for f in old)
     finally:
         resume.set()
         for thread in callers:
@@ -1874,14 +1874,14 @@ def test_callback_handoff_completion_during_active_delivery_cannot_lose_wakeup(
         assert resume.wait(5)
     caller = Thread(target=lambda: future.add_done_callback(callback))
     reactor = Thread(target=dispatch.drain)
-    original = future._drain_callbacks
+    original = future._delivery.drain
     def drain(record=None):
         result = original(record)
         if record is not None and not result:
             deferred.set()
             assert return_delivery.wait(5)
         return result
-    monkeypatch.setattr(future, '_drain_callbacks', drain)
+    monkeypatch.setattr(future._delivery, 'drain', drain)
     caller.start()
     try:
         assert entered.wait(5)
@@ -1923,7 +1923,7 @@ def test_private_owner_record_cannot_borrow_an_old_future_callback_batch(
             future.add_done_callback(
                 lambda f: pytest.fail('uncharged callback'))
     manager.submit(handler, budget=budget).result(5)
-    assert future._delivery_record is future._record
+    assert future._delivery.record is future._record
     assert not dispatch.queue
 
 

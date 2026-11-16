@@ -151,11 +151,7 @@ class OperationFuture(Future):
         self._record = record
         self._condition = _FutureCondition(record.runtime)
         self._budget = 'ordinary'
-        self._delivery_error = None
-        self._callback_cursor = 0
-        self._callbacks_running = False
-        self._callback_waiters = set()
-        self._delivery_record = record
+        self._delivery = _CallbackDelivery(self, record)
         self._publishing = False
 
     @property
@@ -239,13 +235,42 @@ class OperationFuture(Future):
 
     def add_done_callback(self, fn):
         self._record.runtime._check_pid()
-        if self._delivery_error is not None:
-            raise self._delivery_error
-        if self._budget in ('reentry', 'aggregate'):
+        self._delivery.add(fn)
+
+
+class _CallbackDelivery:
+    """Serialize callbacks while handing delivery between charged records.
+
+    The runtime condition precedes the Future condition whenever both are
+    needed. The standard Future callback list remains on the Future itself.
+    """
+
+    def __init__(self, future, record):
+        self.future = future
+        self.record = record
+        self.error = None
+        self.cursor = 0
+        self.running = False
+        self.waiters = set()
+
+    @property
+    def pending(self):
+        return self.cursor < len(self.future._done_callbacks)
+
+    def fail(self, error):
+        with self.future._condition:
+            self.error = error
+            self.future._done_callbacks.clear()
+            self.cursor = 0
+
+    def add(self, fn):
+        if self.error is not None:
+            raise self.error
+        if self.future._budget in ('reentry', 'aggregate'):
             raise ManagementContextError(
                 'Private synchronous waiters have no callback batch')
         while True:
-            record = self._delivery_record
+            record = self.record
             owner = execution_context() in ('cluster', 'pool')
             target = (getattr(_context, 'record', None)
                       if record.released and owner else record)
@@ -253,23 +278,23 @@ class OperationFuture(Future):
                 raise ManagementContextError(
                     'Owner callback has no reservation')
             with target.runtime._condition:
-                with self._condition:
-                    if record is not self._delivery_record:
+                with self.future._condition:
+                    if record is not self.record:
                         continue
                     if owner and record.released and target is record:
                         # Retirement can happen after target selection but
                         # before acquiring the runtime condition.
                         continue
-                    if self._delivery_error is not None:
-                        raise self._delivery_error
+                    if self.error is not None:
+                        raise self.error
                     if record.released and owner:
                         if target.released or not target.budgets['ordinary']:
                             raise ManagementContextError(
                                 'Owner callback has no reservation')
-                        self._delivery_record = target
-                        target.foreign_futures.add(self)
-                    self._done_callbacks.append(fn)
-                    terminal = self.done()
+                        self.record = target
+                        target.foreign_futures.add(self.future)
+                    self.future._done_callbacks.append(fn)
+                    terminal = self.future.done()
                 if not terminal:
                     return
                 if not target.released:
@@ -277,35 +302,35 @@ class OperationFuture(Future):
                     return
             # Released callbacks share a caller-side drainer; a concurrent
             # registrant may leave its callback to the active drainer.
-            self._drain_callbacks()
+            self.drain()
             return
 
-    def _drain_callbacks(self, record=None):
+    def drain(self, record=None):
         """Drain the adapter's serialized callback stream outside C/P."""
-        with self._condition:
-            if self._callbacks_running:
+        with self.future._condition:
+            if self.running:
                 if record is not None:
-                    self._callback_waiters.add(record)
+                    self.waiters.add(record)
                 return False
-            self._callbacks_running = True
-            original = self._delivery_record
+            self.running = True
+            original = self.record
         while True:
-            with self._condition:
-                if (original is not self._delivery_record or
-                        self._callback_cursor == len(self._done_callbacks)):
-                    self._callbacks_running = False
-                    resume, self._callback_waiters = (
-                        self._callback_waiters, set())
-                    if original is not self._delivery_record:
+            with self.future._condition:
+                if (original is not self.record or
+                        self.cursor == len(self.future._done_callbacks)):
+                    self.running = False
+                    resume, self.waiters = (
+                        self.waiters, set())
+                    if original is not self.record:
                         # An owner took responsibility for callbacks appended
                         # during a caller-side drain. Hand them back to its
                         # reactor batch after this callback has returned.
-                        resume.add(self._delivery_record)
+                        resume.add(self.record)
                     break
-                callback = self._done_callbacks[self._callback_cursor]
-                self._callback_cursor += 1
+                callback = self.future._done_callbacks[self.cursor]
+                self.cursor += 1
             try:
-                callback(self)
+                callback(self.future)
             except BaseException:
                 log.exception('Error in management completion callback')
         for waiting in resume:
@@ -857,17 +882,14 @@ class ManagementRuntime:
 
     def _delivery_failed_locked(self, record, error):
         for future in chain(record.futures, record.foreign_futures):
-            with future._condition:
-                future._delivery_error = error
-                future._done_callbacks.clear()
-                future._callback_cursor = 0
+            future._delivery.fail(error)
 
     def _queue_delivery_locked(self, record):
         if record.delivery:
             return
         if not any(
                 future.done() and
-                future._callback_cursor < len(future._done_callbacks)
+                future._delivery.pending
                 for future in chain(record.futures, record.foreign_futures)):
             return
         if self.completion_error is not None:
@@ -929,12 +951,11 @@ class ManagementRuntime:
                 stalled = False
                 for future in futures:
                     if future.done():
-                        if not future._drain_callbacks(record):
+                        if not future._delivery.drain(record):
                             stalled = True
                 with self._condition:
                     if any(
-                            future.done() and future._callback_cursor <
-                            len(future._done_callbacks)
+                            future.done() and future._delivery.pending
                             for future in chain(record.futures,
                                                 record.foreign_futures)):
                         if stalled:
