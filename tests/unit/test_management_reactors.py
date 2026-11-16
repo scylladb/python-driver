@@ -203,7 +203,7 @@ def test_libev_dispatch_enqueued_during_idle_exit_is_not_lost():
         assert not loop._thread.is_alive()
     finally:
         release.set()
-        loop._cleanup()
+        loop._cleanup_unpublished()
 
 
 def test_libev_retired_runner_does_not_claim_replacement_work(monkeypatch):
@@ -253,6 +253,8 @@ def test_libev_retired_runner_does_not_claim_replacement_work(monkeypatch):
         loop._cleanup()
         for thread in old_threads:
             thread.join(5)
+            assert not thread.is_alive()
+        loop._cleanup_unpublished()
 
 
 @pytest.mark.parametrize('arming_path', ['acquire', 'keepalive'])
@@ -275,7 +277,7 @@ def test_libev_keeper_arming_cannot_outlive_cleanup(monkeypatch, arming_path):
             self.active = False
             stopped.set()
     keeper = PausedKeeper()
-    monkeypatch.setattr(loop, '_management_keeper', keeper)
+    loop._management_keeper = keeper
     def borrow():
         try:
             releases.append(loop.borrow_management())
@@ -317,7 +319,7 @@ def test_libev_keeper_arming_cannot_outlive_cleanup(monkeypatch, arming_path):
             release(lambda: None)
         if stopper is not None:
             stopper.join(5)
-        loop._cleanup()
+        loop._cleanup_unpublished()
 
 
 @pytest.mark.parametrize('cleanup_order', ['during-release', 'before-release'])
@@ -371,9 +373,9 @@ def test_libev_borrow_release_completes_during_cleanup(monkeypatch, cleanup_orde
         assert entered.wait(5)
         runner = loop._thread
         monkeypatch.setattr(loop, '_lock_thread', ObservedLock())
-        monkeypatch.setattr(loop, '_management_keeper', ObservedKeeper())
+        loop._management_keeper = ObservedKeeper()
         if cleanup_order == 'during-release':
-            monkeypatch.setattr(loop, 'call_soon', racing_dispatch)
+            loop.call_soon = racing_dispatch
         else:
             stopper.start()
             assert stopped.wait(5)
@@ -400,7 +402,12 @@ def test_libev_borrow_release_completes_during_cleanup(monkeypatch, cleanup_orde
         if stopper.ident is not None:
             stopper.join(5)
         loop._cleanup()
-        release_borrow(lambda: None)
+        try:
+            release_borrow(lambda: None)
+        finally:
+            if loop.call_soon is racing_dispatch:
+                del loop.call_soon
+            loop._cleanup_unpublished()
 
 
 def test_chaining_application_loop_closes_when_management_join_raises(monkeypatch, connection_class):
@@ -702,7 +709,10 @@ def test_startup_failure_does_not_acknowledge_concurrent_dispatch(monkeypatch, r
         first_thread.join(5)
         if second_thread.ident is not None:
             second_thread.join(5)
-        loop._cleanup()
+        if reactor == 'libev':
+            loop._cleanup_unpublished()
+        else:
+            loop._cleanup()
 
 
 def test_asyncore_terminal_drain_survives_closed_pipe_dispatcher(monkeypatch):
@@ -943,7 +953,10 @@ def test_reactor_shutdown_delivers_already_accepted_callbacks(monkeypatch, react
             stopping.set()
             loop._cleanup()
         def cleanup():
-            loop._cleanup()
+            if reactor == 'libev':
+                loop._cleanup_unpublished()
+            else:
+                loop._cleanup()
         runner = None
     observations = []
     def hold():
@@ -995,6 +1008,62 @@ def test_reactor_shutdown_delivers_already_accepted_callbacks(monkeypatch, react
         if stopper is not None:
             stopper.join(5)
         cleanup()
+
+
+@pytest.mark.parametrize('case,args,fail_after_delivery', [
+    ('test_libev_dispatch_enqueued_during_idle_exit_is_not_lost', (), False),
+    ('test_libev_retired_runner_does_not_claim_replacement_work', (), False),
+    ('test_libev_keeper_arming_cannot_outlive_cleanup', ('acquire',), False),
+    ('test_libev_keeper_arming_cannot_outlive_cleanup', ('keepalive',), False),
+    ('test_libev_borrow_release_completes_during_cleanup', ('during-release',), False),
+    ('test_libev_borrow_release_completes_during_cleanup', ('before-release',), False),
+    ('test_startup_failure_does_not_acknowledge_concurrent_dispatch', ('libev',), False),
+    ('test_reactor_shutdown_delivers_already_accepted_callbacks', ('libev', 1), False),
+    ('test_reactor_shutdown_delivers_already_accepted_callbacks', ('libev', 130), False),
+    ('test_libev_dispatch_enqueued_during_idle_exit_is_not_lost', (), True),
+])
+def test_private_libev_fixture_teardown_releases_native_callbacks(monkeypatch, case, args, fail_after_delivery):
+    import gc
+    import weakref
+    module = reactor_module('libev')
+    factory = module.LibevLoop
+    references = []
+    def tracked():
+        loop = factory()
+        references.append(weakref.ref(loop))
+        if fail_after_delivery:
+            dispatch = loop.call_soon
+            def fail(callback):
+                delivered = Event()
+                def observed():
+                    callback()
+                    delivered.set()
+                dispatch(observed)
+                assert delivered.wait(5)
+                raise AssertionError('forced fixture failure after native delivery')
+            fixture_patches.setattr(loop, 'call_soon', fail)
+        return loop
+    try:
+        with monkeypatch.context() as fixture_patches:
+            fixture_patches.setattr(module, 'LibevLoop', tracked)
+            test = globals()[case]
+            if fail_after_delivery:
+                with pytest.raises(AssertionError, match='forced fixture failure after native delivery'):
+                    test(*args)
+            elif case == 'test_libev_dispatch_enqueued_during_idle_exit_is_not_lost':
+                test(*args)
+            else:
+                test(fixture_patches, *args)
+        gc.collect()
+        assert references
+        assert all(reference() is None for reference in references), 'private native reactor retained after fixture teardown'
+    finally:
+        # Keep a failing ownership assertion from retaining its native loop in
+        # this test process; this fallback runs after the assertion above.
+        for reference in references:
+            loop = reference()
+            if loop is not None:
+                loop._cleanup_unpublished()
 
 
 @contextmanager
