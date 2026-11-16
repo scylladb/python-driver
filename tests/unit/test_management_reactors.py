@@ -477,18 +477,20 @@ def test_reactor_startup_lock_is_reset_in_fork_child(connection_class):
             assert release.wait(10)
     thread = Thread(target=holder)
     thread.start()
-    assert entered.wait(5)
-    read_fd, write_fd = os.pipe()
-    pid = os.fork()
-    if pid == 0:
-        try:
-            os.close(read_fd)
-            child_channel = ReactorChannel(connection_class)
-            os.write(write_fd, b'started')
-        finally:
-            os._exit(0)
-    os.close(write_fd)
+    read_fd = write_fd = pid = None
     try:
+        assert entered.wait(5)
+        read_fd, write_fd = os.pipe()
+        pid = os.fork()
+        if pid == 0:
+            try:
+                os.close(read_fd)
+                child_channel = ReactorChannel(connection_class)
+                os.write(write_fd, b'started')
+            finally:
+                os._exit(0)
+        os.close(write_fd)
+        write_fd = None
         ready, _, _ = select.select([read_fd], [], [], 5)
         if not ready:
             os.kill(pid, signal.SIGKILL)
@@ -497,8 +499,12 @@ def test_reactor_startup_lock_is_reset_in_fork_child(connection_class):
     finally:
         release.set()
         thread.join(5)
-        os.close(read_fd)
-        os.waitpid(pid, 0)
+        if read_fd is not None:
+            os.close(read_fd)
+        if write_fd is not None:
+            os.close(write_fd)
+        if pid is not None:
+            os.waitpid(pid, 0)
 
 
 def test_libev_shutdown_drain_rejects_inline_channel_borrow(monkeypatch):
@@ -1261,16 +1267,18 @@ def test_fork_reinitialization_closes_inherited_descriptors(monkeypatch, reactor
                 return original_factory()
             monkeypatch.setattr(module, original_factory.__name__, checked_factory)
             read_fd, write_fd = os.pipe()
-            pid = os.fork()
-            if pid == 0:
-                try:
-                    os.close(read_fd)
-                    connection.initialize_reactor()
-                    os.write(write_fd, b'closed')
-                finally:
-                    os._exit(0)
-            os.close(write_fd)
+            pid = None
             try:
+                pid = os.fork()
+                if pid == 0:
+                    try:
+                        os.close(read_fd)
+                        connection.initialize_reactor()
+                        os.write(write_fd, b'closed')
+                    finally:
+                        os._exit(0)
+                os.close(write_fd)
+                write_fd = None
                 ready, _, _ = select.select([read_fd], [], [], 5)
                 if not ready:
                     os.kill(pid, signal.SIGKILL)
@@ -1281,7 +1289,73 @@ def test_fork_reinitialization_closes_inherited_descriptors(monkeypatch, reactor
                 assert peer.recv(1) == b'x'
             finally:
                 os.close(read_fd)
-                os.waitpid(pid, 0)
+                if write_fd is not None:
+                    os.close(write_fd)
+                if pid is not None:
+                    os.waitpid(pid, 0)
     finally:
         ours.close()
         peer.close()
+
+
+@pytest.mark.parametrize('site,reactor', [
+    ('startup', 'asyncio'), ('startup', 'libev'), ('startup', 'asyncore'),
+    ('descriptors', 'libev'), ('descriptors', 'asyncore')])
+def test_failed_fork_setup_releases_owned_resources(monkeypatch, site, reactor):
+    import errno
+    import os
+    if not hasattr(os, 'fork'):
+        pytest.skip('fork unavailable')
+    module = reactor_module(reactor)
+    connection = getattr(module, {'asyncio': 'AsyncioConnection',
+                                  'libev': 'LibevConnection',
+                                  'asyncore': 'AsyncoreConnection'}[reactor])
+    connection.initialize_reactor()
+    descriptors, holders, releases, owned = [], [], [], set()
+    pipe, close, thread_class = os.pipe, os.close, Thread
+    def tracked_pipe():
+        pair = pipe()
+        descriptors.extend(pair)
+        owned.update(pair)
+        return pair
+    def tracked_close(descriptor):
+        close(descriptor)
+        owned.discard(descriptor)
+    def tracked_thread(*args, **kwargs):
+        target = kwargs['target']
+        closure = dict(zip(target.__code__.co_freevars,
+                           (cell.cell_contents for cell in target.__closure__)))
+        releases.append(closure['release'])
+        thread = thread_class(*args, **kwargs)
+        holders.append(thread)
+        return thread
+    def failed_fork():
+        raise OSError(errno.EAGAIN, 'fork setup failed')
+    monkeypatch.setattr(os, 'pipe', tracked_pipe)
+    monkeypatch.setattr(os, 'close', tracked_close)
+    monkeypatch.setattr(os, 'fork', failed_fork)
+    monkeypatch.setattr(__name__ + '.Thread', tracked_thread)
+    try:
+        with pytest.raises(OSError, match='fork setup failed'):
+            if site == 'startup':
+                test_reactor_startup_lock_is_reset_in_fork_child(connection)
+            else:
+                test_fork_reinitialization_closes_inherited_descriptors(monkeypatch, reactor)
+        assert len(descriptors) == 2
+        assert len(holders) == len(releases) == (1 if site == 'startup' else 0)
+        for descriptor in descriptors:
+            with pytest.raises(OSError) as closed:
+                os.fstat(descriptor)
+            assert closed.value.errno == errno.EBADF
+        assert all(release.is_set() for release in releases)
+        assert all(not thread.is_alive() for thread in holders)
+    finally:
+        # A failed regression assertion must still release its actual resources.
+        for release in releases:
+            release.set()
+        for thread in holders:
+            thread.join(5)
+            assert not thread.is_alive()
+        for descriptor in list(owned):
+            os.close(descriptor)
+
