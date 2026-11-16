@@ -1429,11 +1429,17 @@ def paused_native_start(monkeypatch, module, failure):
     """Create a real native thread, then interrupt start before bootstrap."""
     native_entered, bootstrap, retired = Event(), Event(), Event()
     threads = []
+    bootstrap_errors = []
     thread_class = module.Thread
     class PendingBootstrap(thread_class):
         def _bootstrap(self):
             native_entered.set()
-            assert bootstrap.wait(20)
+            try:
+                assert bootstrap.wait(20), 'native bootstrap guard timed out'
+            except BaseException as exc:
+                # Run Thread bookkeeping, but never invoke a target whose guard failed.
+                self._target = None
+                bootstrap_errors.append(exc)
             try:
                 super()._bootstrap()
             finally:
@@ -1462,6 +1468,76 @@ def paused_native_start(monkeypatch, module, failure):
             assert threads[0]._started.wait(5)
             threads[0].join(5)
             assert not threads[0].is_alive()
+        if bootstrap_errors:
+            raise bootstrap_errors[0]
+
+
+@pytest.mark.parametrize('guard_released', [True, False])
+def test_paused_native_start_cleans_up_after_guard_result(guard_released):
+    import subprocess
+    import textwrap
+    # Keep a broken helper's process-global Thread bookkeeping out of this runner.
+    script = textwrap.dedent("""
+        import json
+        import sys
+        import threading
+        from types import SimpleNamespace
+        import pytest
+        from tests.unit import test_management_reactors as tests
+
+        Event, Thread = threading.Event, threading.Thread
+        guard_released = sys.argv[1] == 'True'
+        waiting, proceed = Event(), Event()
+        ran, errors = [], []
+        class BootstrapGate(Event):
+            def wait(self, timeout=None):
+                assert timeout == 20
+                waiting.set()
+                assert proceed.wait(5)
+                return super().wait(5) if guard_released else False
+        module = SimpleNamespace(Thread=Thread)
+        events = iter([Event(), BootstrapGate(), Event()])
+        try:
+            with pytest.MonkeyPatch.context() as patch:
+                patch.setattr(tests, 'Event', lambda: next(events))
+                with tests.paused_native_start(patch, module, KeyboardInterrupt) as state:
+                    native_entered, bootstrap, retired, threads = state
+                    thread = module.Thread(target=lambda: ran.append(True), daemon=True)
+                    with pytest.raises(KeyboardInterrupt, match='native launch preceded bootstrap'):
+                        thread.start()
+                    assert native_entered.is_set()
+                    assert waiting.wait(5)
+                    assert not thread._started.is_set()
+                    if guard_released:
+                        bootstrap.set()
+                    proceed.set()
+        except AssertionError as exc:
+            errors.append(str(exc))
+        finally:
+            proceed.set()
+        with threading._active_limbo_lock:
+            retained = thread in threading._limbo
+        print('BOOTSTRAP_CLEANUP', json.dumps({
+            'released': guard_released, 'retired': retired.is_set(),
+            'started': thread._started.is_set(), 'retained_limbo': retained,
+            'ran': ran, 'errors': errors}), flush=True)
+        assert retired.is_set(), 'bootstrap guard failure bypassed retirement'
+        assert not retained, 'bootstrap guard failure retained Thread in limbo'
+        assert thread._started.is_set()
+        thread.join(5)
+        assert not thread.is_alive()
+        if guard_released:
+            assert errors == []
+            assert ran == [True]
+        else:
+            assert errors == ['native bootstrap guard timed out']
+            assert ran == []
+    """)
+    result = subprocess.run(
+        [sys.executable, '-u', '-c', script, str(guard_released)],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=30)
+    print(result.stdout, end='')
+    assert result.returncode == 0, result.stdout
 
 
 @pytest.mark.parametrize('reactor', ['libev', 'asyncore'])
