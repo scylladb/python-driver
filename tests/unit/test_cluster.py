@@ -41,7 +41,7 @@ from cassandra.ssl_session_cache import SSLSessionCache
 from cassandra.driver_config import DriverConfigReporter
 from cassandra.metadata import Metadata
 from cassandra.pool import Host, _HostReconnectionHandler
-from cassandra.policies import ExponentialReconnectionPolicy, HostDistance, RetryPolicy, RoundRobinPolicy, DowngradingConsistencyRetryPolicy, SimpleConvictionPolicy
+from cassandra.policies import DCAwareRoundRobinPolicy, ExponentialReconnectionPolicy, HostDistance, RetryPolicy, RoundRobinPolicy, DowngradingConsistencyRetryPolicy, SimpleConvictionPolicy
 from cassandra.query import SimpleStatement, named_tuple_factory, tuple_factory
 from tests.unit.utils import (mock_session_pools, move_host, new_session_with_pool_state,
                               run_isolated_subprocess)
@@ -6318,6 +6318,47 @@ def test_profile_manager_positive_callbacks(event, pools_allowed, removed):
         expected = [getattr(getattr(call, name), 'on_' + event)(host)
                     for name in ('first', 'second', 'third')]
     assert observed.mock_calls == expected
+
+
+def test_profile_manager_down_isolates_policy_errors():
+    manager = ProfileManager()
+    failed = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
+    failed.set_location_info('remote', 'rack1')
+    healthy = Host('127.0.0.2', SimpleConvictionPolicy, host_id=uuid.uuid4())
+    healthy.set_location_info('remote', 'rack1')
+
+    failing = Mock()
+    failing.on_down.side_effect = RuntimeError('policy failed')
+    later = DCAwareRoundRobinPolicy(local_dc='local', used_hosts_per_remote_dc=1)
+    later._dc_live_hosts = {'remote': (failed, healthy)}
+    manager.profiles['first'] = ExecutionProfile(load_balancing_policy=failing)
+    manager.profiles['later'] = ExecutionProfile(load_balancing_policy=later)
+
+    assert list(later.make_query_plan()) == [failed]
+    with patch('cassandra.cluster.log') as log:
+        manager.on_down(failed)
+
+    failing.on_down.assert_called_once_with(failed)
+    assert log.exception.call_count == 1
+    assert list(later.make_query_plan()) == [healthy]
+
+
+def test_profile_manager_down_stops_when_removed_during_callback():
+    manager = ProfileManager()
+    host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
+    first, second = Mock(), Mock()
+
+    def remove_then_fail(_):
+        host._is_removed = True
+        raise RuntimeError('policy failed')
+
+    first.on_down.side_effect = remove_then_fail
+    manager.profiles['first'] = ExecutionProfile(load_balancing_policy=first)
+    manager.profiles['second'] = ExecutionProfile(load_balancing_policy=second)
+
+    manager.on_down(host)
+
+    second.on_down.assert_not_called()
 
 
 class ExecutionProfileTest(unittest.TestCase):
