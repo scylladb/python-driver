@@ -1359,3 +1359,60 @@ def test_failed_fork_setup_releases_owned_resources(monkeypatch, site, reactor):
         for descriptor in list(owned):
             os.close(descriptor)
 
+
+@pytest.mark.parametrize('failure', [KeyboardInterrupt, SystemExit])
+def test_asyncore_fatal_timer_failure_is_visible_and_drains(monkeypatch, caplog, failure):
+    import logging
+    import os
+    import threading
+    if os.name == 'nt':
+        pytest.skip('pipe dispatch is not supported by Windows select')
+    module = reactor_module('asyncore')
+    monkeypatch.setattr(module, '_dispatcher_map', {})
+    monkeypatch.setattr(module.AsyncoreLoop, '_loop_dispatch_class',
+                        module._AsyncorePipeDispatcher)
+    loop = module.AsyncoreLoop()
+    polling, resume = Event(), Event()
+    observations, uncaught = [], []
+    poll = loop._loop_dispatcher.loop
+    def held_poll(timeout):
+        polling.set()
+        assert resume.wait(5)
+        poll(timeout)
+    def failed_timer():
+        timer.cancel()
+        raise failure('fatal timer failure')
+    monkeypatch.setattr(loop._loop_dispatcher, 'loop', held_poll)
+    monkeypatch.setattr(threading, 'excepthook', uncaught.append)
+    caplog.set_level(logging.INFO, logger=module.__name__)
+    try:
+        timer = module.Timer(0, failed_timer)
+        loop.add_timer(timer)
+        loop.maybe_start()
+        runner = loop._thread
+        assert polling.wait(5)
+        for _ in range(130):
+            loop.call_soon(lambda: observations.append(current_thread()))
+        assert len(loop._management_callbacks) == 130
+        resume.set()
+        runner.join(5)
+        assert not runner.is_alive()
+        assert observations == [runner] * 130
+        assert not loop._management_callbacks
+        assert loop._started is False
+        assert loop._management_failed
+        with pytest.raises(RuntimeError, match='shutting down'):
+            loop.call_soon(lambda: None)
+        assert uncaught == []
+        diagnostics = [record for record in caplog.records
+                       if record.name == module.__name__ and record.exc_info
+                       and record.exc_info[0] is failure]
+        assert len(diagnostics) == 1, 'fatal timer failure lost its visible cause'
+        assert diagnostics[0].levelno >= logging.ERROR
+        assert diagnostics[0].exc_info[1].args == ('fatal timer failure',)
+    finally:
+        resume.set()
+        loop._cleanup()
+        if loop._thread is not None:
+            loop._thread.join(5)
+            assert not loop._thread.is_alive()
