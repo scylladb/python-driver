@@ -525,6 +525,7 @@ def test_completed_executor_future_does_not_dispose_on_registering_owner(
     manager, dispatch = runtime
     resource = object()
     disposal_threads = []
+    completed = Event()
     with ThreadPoolExecutor(1) as executor:
         class ClosingExecutor:
             def submit(self, function):
@@ -534,12 +535,16 @@ def test_completed_executor_future_does_not_dispose_on_registering_owner(
                 # invoke that callback on this owner. Cleanup must already
                 # have happened on the physical worker, exactly once.
                 assert physical.result(5) is resource
+                completed.set()
                 return physical
         future = manager.submit(lambda record: manager.work(
             record, ClosingExecutor(), lambda: resource,
             dispose=lambda value: disposal_threads.append(get_ident())))
         with pytest.raises(ManagementClosed):
             future.result(5)
+        # Shutdown publishes the native Future before executor submission has
+        # returned on the owner. Keep the executor open through that handoff.
+        assert completed.wait(5)
     manager.join(5)
     assert len(disposal_threads) == 1
     assert disposal_threads[0] not in {
@@ -2237,4 +2242,40 @@ def test_shutdown_prunes_handlers_but_retains_result_mailbox_counts(pool):
     dispatch.drain()
     manager.join(5)
     assert results == ['result', 'callback']
+    assert all(value == 0 for value in assert_runtime_counts(manager).values())
+
+
+def test_delivery_counts_retain_active_ticket_after_dispatch_failure(
+        runtime, monkeypatch):
+    manager, dispatch = runtime
+    entered, release = Event(), Event()
+    with manager._condition:
+        first = manager.submit(lambda record: 1)
+        first.add_done_callback(
+            lambda future: (entered.set(), release.wait(5)))
+    assert first.result(5) == 1
+    reactor = Thread(target=dispatch.drain)
+    reactor.start()
+    try:
+        assert entered.wait(5)
+        assert assert_runtime_counts(manager)['delivery'] == 1
+
+        def reject(ticket):
+            raise RuntimeError('reactor lost with an active delivery')
+        monkeypatch.setattr(manager, '_dispatch', reject)
+        with manager._condition:
+            second = manager.submit(lambda record: 2)
+            second.add_done_callback(lambda future: pytest.fail('delivery ran'))
+        assert second.result(5) == 2
+        assert manager.closed.wait(5)
+        counts = assert_runtime_counts(manager)
+        assert counts['ordinary'] == counts['delivery'] == 1
+        assert counts['mailbox'] == 0
+        assert manager.high_waters['delivery'] == 2
+        assert not manager.finalized.is_set()
+    finally:
+        release.set()
+        reactor.join(5)
+        assert not reactor.is_alive()
+    manager.join(5)
     assert all(value == 0 for value in assert_runtime_counts(manager).values())
