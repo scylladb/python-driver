@@ -308,6 +308,10 @@ class _CallbackDelivery:
     def drain(self, record=None):
         """Drain the adapter's serialized callback stream outside C/P."""
         with self.future._condition:
+            if record is None and not self.record.released:
+                # An owner may have adopted this stream after registration
+                # released the runtime condition. Its reactor batch owns it.
+                return False
             if self.running:
                 if record is not None:
                     self.waiters.add(record)
@@ -978,7 +982,8 @@ class ManagementRuntime:
                             stalled = True
                 with self._condition:
                     if any(
-                            future.done() and future._delivery.pending
+                            future.done() and (future._delivery.pending or
+                                               future._delivery.running)
                             for future in chain(record.futures,
                                                 record.foreign_futures)):
                         if stalled:
@@ -1021,6 +1026,11 @@ class ManagementRuntime:
                 else:
                     del self._pool_credits[record.pool]
         self._records.discard(record)
+        for future in record.foreign_futures:
+            with future._condition:
+                if future._delivery.record is record:
+                    future._delivery.record = future._record
+        record.foreign_futures.clear()
         record.handler = None
         self._condition.notify_all()
         self._maybe_finalized_locked()

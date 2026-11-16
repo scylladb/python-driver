@@ -2396,3 +2396,71 @@ def test_runtime_fixture_cleans_up_after_counter_invariant_failure(monkeypatch):
     finally:
         # Also protect a failed setup/assertion in this regression itself.
         resources.close()
+
+
+def test_retired_foreign_delivery_does_not_retain_later_results(runtime):
+    import gc
+    import weakref
+
+    manager, dispatch = runtime
+    class Payload:
+        pass
+    first = manager.submit(lambda record: Payload())
+    first.result(5)
+    previous, references = first, []
+    for _ in range(16):
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: previous._record.released, 5)
+        following = manager.submit(lambda record, previous=previous: (
+            previous.add_done_callback(lambda future: None), Payload())[1])
+        following.result(5)
+        dispatch.drain()
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: following._record.released, 5)
+        references.append(weakref.ref(following.result()))
+        previous = following
+    del previous, following
+    gc.collect()
+    assert all(reference() is None for reference in references)
+    assert first._delivery.record is first._record
+
+
+def test_caller_drain_defers_to_owner_adopted_before_claim(
+        runtime, monkeypatch):
+    manager, dispatch = runtime
+    future = manager.submit(lambda record: 7)
+    assert future.result(5) == 7
+    with manager._condition:
+        assert manager._condition.wait_for(lambda: future._record.released, 5)
+    before_claim, resume = Event(), Event()
+    calls = []
+    drain = future._delivery.drain
+    def paused(record=None):
+        if record is None:
+            before_claim.set()
+            assert resume.wait(5)
+        return drain(record)
+    monkeypatch.setattr(future._delivery, 'drain', paused)
+    caller = Thread(target=lambda: future.add_done_callback(
+        lambda future: calls.append(('caller', execution_context()))))
+    caller.start()
+    try:
+        assert before_claim.wait(5)
+        owner = manager.submit(lambda record: future.add_done_callback(
+            lambda future: calls.append(('owner', execution_context()))))
+        owner.result(5)
+        resume.set()
+        caller.join(5)
+        assert not caller.is_alive()
+        assert not calls
+        assert assert_runtime_counts(manager)['ordinary'] == 1
+        dispatch.drain()
+        assert calls == [('caller', 'bridge'), ('owner', 'bridge')]
+        assert owner._record.released
+        assert assert_runtime_counts(manager)['ordinary'] == 0
+    finally:
+        resume.set()
+        caller.join(5)
+        assert not caller.is_alive()
