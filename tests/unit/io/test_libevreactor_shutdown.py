@@ -194,6 +194,41 @@ class LibevShutdownRaceConditionTest(unittest.TestCase):
         if LibevConnection is None:
             raise unittest.SkipTest('libev does not appear to be installed correctly')
 
+    def test_private_cleanup_reclaims_native_loop_after_success_or_failure(self):
+        import gc
+        import weakref
+        from cassandra.io import libevreactor
+        factory = libevreactor.LibevLoop
+        for fail in (False, True):
+            with self.subTest(assertion_failure=fail):
+                references = []
+                def tracked():
+                    loop = factory()
+                    references.append(weakref.ref(loop))
+                    return loop
+                case = LibevShutdownRaceConditionTest('test_cleanup_with_fix_properly_shuts_down')
+                result = unittest.TestResult()
+                try:
+                    with patch.object(libevreactor, 'LibevLoop', side_effect=tracked):
+                        if fail:
+                            with patch.object(case, 'assertFalse', side_effect=AssertionError('forced fixture assertion')):
+                                case.run(result)
+                        else:
+                            case.run(result)
+                    self.assertFalse(result.errors)
+                    self.assertEqual(len(result.failures), int(fail))
+                    if fail:
+                        self.assertIn('forced fixture assertion', result.failures[0][1])
+                    gc.collect()
+                    self.assertTrue(references)
+                    self.assertTrue(all(reference() is None for reference in references),
+                                    'private shutdown loop retained after unittest cleanups')
+                finally:
+                    for reference in references:
+                        loop = reference()
+                        if loop is not None:
+                            loop._cleanup_unpublished()
+
     def test_cleanup_with_fix_properly_shuts_down(self):
         """
         Test to verify the fix properly shuts down the event loop.
@@ -224,8 +259,8 @@ class LibevShutdownRaceConditionTest(unittest.TestCase):
         self.addCleanup(singleton.stop)
         def close_private_loop():
             loop = libevreactor._global_loop
-            if loop is not None and not loop._shutdown:
-                _cleanup(loop)
+            if loop is not None:
+                loop._cleanup_unpublished()
         self.addCleanup(close_private_loop)
 
         LibevConnection.initialize_reactor()
