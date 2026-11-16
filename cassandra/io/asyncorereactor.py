@@ -279,7 +279,10 @@ class AsyncoreLoop(object):
                 callback()
             except BaseException:
                 log.exception("Error in management reactor dispatch")
-        self.wake_loop()
+        # Terminal draining owns every remaining callback; cleanup may already
+        # have closed the notifier after its bounded runner join.
+        if not self._management_failed:
+            self.wake_loop()
 
     def wake_loop(self):
         self._loop_dispatcher.notify_loop()
