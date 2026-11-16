@@ -1003,14 +1003,20 @@ def test_reactor_shutdown_delivers_already_accepted_callbacks(monkeypatch, react
         else:
             runner = loop._thread
             stopper = Thread(target=stop)
+            shutdown_committed = Event()
+            state_lock = loop._lock if reactor == 'libev' else loop._state_lock
+            join = runner.join
+            def observe_shutdown_join(*args, **kwargs):
+                if current_thread() is stopper:
+                    with state_lock:
+                        if loop._shutdown:
+                            shutdown_committed.set()
+                return join(*args, **kwargs)
+            monkeypatch.setattr(runner, 'join', observe_shutdown_join)
             stopper.start()
             assert stopping.wait(5)
-            # Cleanup commits shutdown under the admission lock before join.
-            for _ in range(500):
-                with (loop._lock if reactor == 'libev' else loop._state_lock):
-                    if loop._shutdown:
-                        break
-                Event().wait(0.001)
+            # Observe cleanup's committed state before releasing its runner.
+            assert shutdown_committed.wait(5)
             assert loop._shutdown
         release.set()
         assert delivered.wait(5)
