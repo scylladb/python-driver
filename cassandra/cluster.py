@@ -8575,6 +8575,12 @@ class ResponseFuture(object):
                                 expected=hexlify(self.prepared_statement.query_id), got=hexlify(response.query_id)
                             )
                         ))
+                        return
+                    # Replace all bind metadata for subsequent binds, including
+                    # names and types. Keep the original routing indexes and this
+                    # request's serialized values; type/layout changes require a
+                    # fresh prepare and bind.
+                    self.prepared_statement.column_metadata = response.bind_metadata
                     # Update the metadata/id pair atomically from exactly what this
                     # reprepare response carries. Falling back to the previously
                     # cached id when this response has none would risk pairing it
@@ -8586,7 +8592,12 @@ class ResponseFuture(object):
                     # b'' sentinel path a never-prepared id would.
                     self.prepared_statement.update_result_metadata(
                         response.column_metadata, response.result_metadata_id)
-                
+                else:
+                    prepared_statement = self.session.cluster._prepared_statements.get(
+                        response.query_id)
+                    if prepared_statement is not None:
+                        prepared_statement.column_metadata = response.bind_metadata
+
                 # use self._query to re-use the same host and
                 # at the same time properly borrow the connection
                 if pool is None and connection is not None and connection.is_control_connection:

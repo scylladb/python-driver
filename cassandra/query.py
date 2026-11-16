@@ -639,7 +639,15 @@ class BoundStatement(Statement):
         and returns this instance.  Note that `values` *must* be:
 
         * a sequence, even if you are only binding one value, or
-        * a dict that relates 1-to-1 between dict keys and columns
+        * a dict that maps prepared marker names to values
+
+        Bind anonymous ``?`` markers with a sequence, in marker order. The server
+        supplies names for anonymous markers (for example, ``IN(column)``), but
+        those names can change between server versions. Dictionary keys are
+        matched exactly against prepared metadata, so relying on synthesized
+        names can fail during an upgrade. Use explicit ``:name`` markers when
+        dictionary binding is needed. Dictionary lookup happens locally; values
+        are always sent to the coordinator positionally.
 
         .. versionchanged:: 2.6.0
 

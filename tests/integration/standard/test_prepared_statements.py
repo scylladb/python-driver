@@ -16,12 +16,14 @@
 from tests.integration import use_singledc, PROTOCOL_VERSION, TestCluster, CASSANDRA_VERSION
 
 import unittest
+from unittest.mock import patch
 
 from packaging.version import Version
 
 from cassandra import InvalidRequest, DriverException
 
 from cassandra import ConsistencyLevel, ProtocolVersion
+from cassandra.cluster import ResponseFuture
 from cassandra.query import PreparedStatement, UNSET_VALUE
 from tests.integration import (get_server_versions, greaterthanorequalcass40,
     BasicSharedKeyspaceUnitTestCase)
@@ -447,6 +449,52 @@ class PreparedStatementTests(unittest.TestCase):
         with pytest.raises(DriverException) as e:
             self.session.execute(prepared, [0])
         assert "ID mismatch" in str(e.value)
+
+
+class PreparedBindMarkerTests(BasicSharedKeyspaceUnitTestCase):
+    def test_in_markers_across_coordinators(self):
+        table = '{}.prepared_bind_markers'.format(self.keyspace_name)
+        self.session.execute('CREATE TABLE {} (pk int, ck int, v int, '
+                             'PRIMARY KEY (pk, ck))'.format(table))
+        self.addCleanup(self.session.execute, 'DROP TABLE {}'.format(table))
+        for pk, ck in ((1, 2), (1, 3), (2, 2)):
+            self.session.execute('INSERT INTO {} (pk, ck, v) VALUES (%s, %s, 0)'.format(table),
+                                 (pk, ck))
+
+        # Only the initial coordinator knows each statement. Executing against
+        # other coordinators exercises transparent UNPREPARED recovery.
+        cluster = TestCluster(protocol_version=PROTOCOL_VERSION,
+                              prepare_on_all_hosts=False, reprepare_on_up=False)
+        self.addCleanup(cluster.shutdown)
+        session = cluster.connect(wait_for_all_pools=True)
+        cases = (
+            ('pk = ? AND ck IN ?', (1, [2, 3]), {(1, 2), (1, 3)}),
+            ('pk = ? AND ck IN (?, ?)', (1, 2, 3), {(1, 2), (1, 3)}),
+            ('pk = :partition AND ck IN :ids',
+             {'ids': [2, 3], 'partition': 1}, {(1, 2), (1, 3)}),
+            ('pk = :partition AND ck IN (:first, :second)',
+             {'second': 3, 'first': 2, 'partition': 1}, {(1, 2), (1, 3)}),
+            ('pk IN ? AND ck = ?', ([1, 2], 2), {(1, 2), (2, 2)}),
+            ('pk IN :partitions AND ck = :clustering',
+             {'clustering': 2, 'partitions': [1, 2]}, {(1, 2), (2, 2)}),
+        )
+        reprepare_calls = []
+        original_reprepare = ResponseFuture._reprepare
+
+        def record_reprepare(future, *args, **kwargs):
+            reprepare_calls.append(future)
+            return original_reprepare(future, *args, **kwargs)
+
+        for restriction, values, expected in cases:
+            with self.subTest(restriction=restriction):
+                prepared = session.prepare(
+                    'SELECT pk, ck FROM {} WHERE {}'.format(table, restriction))
+                previous_calls = len(reprepare_calls)
+                with patch.object(ResponseFuture, '_reprepare', record_reprepare):
+                    for host in cluster.metadata.all_hosts():
+                        assert set(session.execute(prepared.bind(values), host=host)) == expected
+                        assert set(session.execute(prepared.bind(values), host=host)) == expected
+                assert len(reprepare_calls) > previous_calls
 
 
 @greaterthanorequalcass40
