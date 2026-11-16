@@ -296,7 +296,10 @@ class AsyncoreLoop(object):
                     self._timers.service_timeouts()
                     self._dispatch_management()
             except BaseException as exc:
-                self._maybe_log_debug("Asyncore event loop stopped unexpectedly", exc_info=exc)
+                if isinstance(exc, Exception):
+                    self._maybe_log_debug("Asyncore event loop stopped unexpectedly", exc_info=exc)
+                else:
+                    log.error("Asyncore event loop stopped unexpectedly", exc_info=exc)
             finally:
                 # Management service loss is permanent for existing channels.
                 # Ordinary I/O can restart after this runner drains accepted
