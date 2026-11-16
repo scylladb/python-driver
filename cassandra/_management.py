@@ -1326,6 +1326,7 @@ class _CompatibilityCall:
     def release(self):
         record, self.record = self.record, None
         if record is not None:
+            self.runtime._check_pid()
             with self.runtime._condition:
                 self.runtime._finish(record)
                 record.physical -= 1
@@ -1388,6 +1389,7 @@ def compatibility_work(runtime):
 
     def complete(work):
         nonlocal completed
+        runtime._check_pid()
         with runtime._condition:
             if completed:
                 return
@@ -1412,6 +1414,8 @@ def compatibility_work(runtime):
                     try:
                         work.result()
                     except BaseException:
+                        # Interruptions must not abandon physical ownership;
+                        # retry until completion can retire it exactly once.
                         pass
                 complete(work)
                 raise

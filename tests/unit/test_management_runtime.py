@@ -2279,3 +2279,47 @@ def test_delivery_counts_retain_active_ticket_after_dispatch_failure(
         assert not reactor.is_alive()
     manager.join(5)
     assert all(value == 0 for value in assert_runtime_counts(manager).values())
+
+
+@pytest.mark.parametrize('entry', ['call', 'work'])
+def test_inherited_compatibility_cleanup_rejects_before_parent_lock(entry):
+    import os
+    import signal
+    from cassandra._management import compatibility_call, compatibility_work
+
+    if not hasattr(os, 'fork'):
+        pytest.skip('fork unavailable')
+    manager = ManagementRuntime(Dispatcher())
+    scope = (compatibility_call if entry == 'call' else compatibility_work)(
+        manager)
+    scope.__enter__()
+    held, release = Event(), Event()
+    def hold():
+        with manager._condition:
+            held.set()
+            assert release.wait(5)
+    holder = Thread(target=hold)
+    holder.start()
+    try:
+        assert held.wait(5)
+        pid = os.fork()
+        if pid == 0:
+            # Bound the old-source deadlock as well as the expected rejection.
+            signal.alarm(2)
+            try:
+                scope.__exit__(None, None, None)
+            except ManagementClosed:
+                os._exit(0)
+            except BaseException:
+                os._exit(2)
+            os._exit(3)
+        _, status = os.waitpid(pid, 0)
+        assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
+    finally:
+        release.set()
+        holder.join(5)
+        assert not holder.is_alive()
+        scope.__exit__(None, None, None)
+        manager.close()
+        manager.join(5)
+    assert all(value == 0 for value in assert_runtime_counts(manager).values())
