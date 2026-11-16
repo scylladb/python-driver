@@ -244,7 +244,7 @@ class AsyncoreLoop(object):
             if self._shutdown or self._started:
                 return
             self._started = True
-            self._thread = Thread(target=self._run_loop,
+            self._thread = Thread(target=self._run_loop_if_current,
                                   name="asyncore_cassandra_driver_event_loop", daemon=True)
             try:
                 self._thread.start()
@@ -286,6 +286,14 @@ class AsyncoreLoop(object):
 
     def wake_loop(self):
         self._loop_dispatcher.notify_loop()
+
+    def _run_loop_if_current(self):
+        # A failed start can leave a native thread waiting to bootstrap.
+        # Check ownership under rollback's lock before polling or retirement.
+        with self._state_lock:
+            if current_thread() is not self._thread:
+                return
+        self._run_loop()
 
     def _run_loop(self):
         log.debug("Starting asyncore event loop")
