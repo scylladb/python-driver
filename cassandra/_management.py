@@ -28,6 +28,7 @@ from threading import (
     Condition, Event, Lock, Thread, current_thread, enumerate as active_threads,
     local)
 import time
+from typing import NamedTuple
 
 from cassandra import DriverException
 
@@ -128,6 +129,20 @@ class Envelope:
     identity: tuple
 
 
+@dataclass
+class _HealthSlot:
+    incarnation: object
+    apply: object = None
+    notification: object = None
+    removed: bool = False
+
+
+class _MailboxEntry(NamedTuple):
+    record: object
+    callback: object
+    retain_on_close: bool
+
+
 class OperationFuture(Future):
     """Native futures complete without running callbacks on owners."""
 
@@ -165,29 +180,24 @@ class OperationFuture(Future):
 
     @_future_access
     def done(self):
-        self._record.runtime._check_pid()
         return super().done()
 
     @_future_access
     def running(self):
-        self._record.runtime._check_pid()
         return super().running()
 
     @_future_access
     def cancelled(self):
-        self._record.runtime._check_pid()
         return super().cancelled()
 
     @_future_access
     def result(self, timeout=None):
-        self._record.runtime._check_pid()
         if not self.done():
             self._assert_can_wait()
         return super().result(timeout)
 
     @_future_access
     def exception(self, timeout=None):
-        self._record.runtime._check_pid()
         if not self.done():
             self._assert_can_wait()
         return super().exception(timeout)
@@ -203,7 +213,6 @@ class OperationFuture(Future):
 
     @_future_access
     def cancel(self):
-        self._record.runtime._check_pid()
         cancelled = super().cancel()
         if cancelled:
             # Future.cancel() alone leaves concurrent.futures.wait() asleep.
@@ -350,9 +359,6 @@ class _Record:
         self.delivery_again = False
         self.notification = False
         self.released = False
-        self.dispatched = False
-        self.result = None
-        self.error = None
 
 
 class _LifetimeHandle:
@@ -548,13 +554,14 @@ class ManagementRuntime:
             self._condition.notify_all()
             return future
 
-    def _enqueue_locked(self, record, callback, reserved=False):
+    def _enqueue_locked(self, record, callback, retain_on_close=False):
         record.mailbox_pending += 1
+        entry = _MailboxEntry(record, callback, retain_on_close)
         if record.pool is None:
-            self._cluster.append((record, callback, reserved))
+            self._cluster.append(entry)
         else:
             queue = self._pools.setdefault(record.pool, deque())
-            queue.append((record, callback, reserved))
+            queue.append(entry)
             if (record.pool not in self._active_pools and
                     record.pool not in self._ready):
                 self._ready.append(record.pool)
@@ -563,7 +570,6 @@ class ManagementRuntime:
     def _handle(self, record):
         if record.handler_done:
             return
-        record.dispatched = True
         record.started.set()
         try:
             outcome = record.handler(record)
@@ -578,8 +584,7 @@ class ManagementRuntime:
         with self._condition:
             if record.handler_done:
                 return
-            record.handler_done, record.result, record.error = (
-                True, result, error)
+            record.handler_done = True
             record.started.set()
             if record.key is not None:
                 self._keys.pop(record.key, None)
@@ -646,7 +651,8 @@ class ManagementRuntime:
                 received = True
                 if not self._closing:
                     self._enqueue_locked(
-                        record, lambda: returned(value, error), reserved=True)
+                        record, lambda: returned(value, error),
+                        retain_on_close=True)
                     queued = True
                 else:
                     queued = False
@@ -771,7 +777,7 @@ class ManagementRuntime:
             if self._closing:
                 raise ManagementClosed('Management lifetime is closed')
             self._health.setdefault(
-                id(incarnation), (incarnation, [None, None, False]))
+                id(incarnation), _HealthSlot(incarnation))
             self._observe_counts_locked()
 
     def observe_negative(self, incarnation, apply, notification=None,
@@ -781,16 +787,15 @@ class ManagementRuntime:
         with self._condition:
             if self._closing:
                 return False
-            entry = self._health.get(id(incarnation))
-            slot = (entry[1] if entry is not None and entry[0] is incarnation
-                    else None)
-            if slot is None:
+            slot = self._health.get(id(incarnation))
+            if slot is None or slot.incarnation is not incarnation:
                 self._unknown_refresh = True
                 return False
             # An already pending removal is terminal for this incarnation.
-            if slot[2] and not removed:
+            if slot.removed and not removed:
                 return True
-            slot[:] = [apply, notification, removed]
+            slot.apply, slot.notification, slot.removed = (
+                apply, notification, removed)
             self._condition.notify_all()
             return True
 
@@ -973,9 +978,10 @@ class ManagementRuntime:
                     self._maybe_finalized_locked()
 
     def _health_ready(self):
-        return any(slot[0] is not None or
-                   (slot[1] is not None and self._capacity(None, 'ordinary'))
-                   for _, slot in self._health.values())
+        return any(slot.apply is not None or
+                   (slot.notification is not None and
+                    self._capacity(None, 'ordinary'))
+                   for slot in self._health.values())
 
     def _run_cluster(self):
         while True:
@@ -985,10 +991,10 @@ class ManagementRuntime:
                     self._condition.wait()
                 if self._closing and not self._cluster:
                     return
-                health = next((slot for _, slot in self._health.values()
-                               if slot[0] is not None), None)
+                health = next((slot for slot in self._health.values()
+                               if slot.apply is not None), None)
                 if health is not None:
-                    callback, health[0] = health[0], None
+                    callback, health.apply = health.apply, None
                     self._sequence += 1
                     record = _Record(
                         self, Envelope(self._sequence, 'health', None,
@@ -996,15 +1002,16 @@ class ManagementRuntime:
                     self._records.add(record)
                     native_health = True
                 else:
-                    pending = next((slot for _, slot in self._health.values()
-                                    if slot[1] is not None and
+                    pending = next((slot for slot in self._health.values()
+                                    if slot.notification is not None and
                                     self._capacity(None, 'ordinary')), None)
                     if pending is not None:
-                        notification, pending[1] = pending[1], None
+                        notification, pending.notification = (
+                            pending.notification, None)
                         self.notify(notification)
                         notification = pending = None
                         continue
-                    record, callback, reserved = self._cluster.popleft()
+                    record, callback, _ = self._cluster.popleft()
                     record.mailbox_pending -= 1
                     native_health = False
             self._execute(record, callback, 'cluster')
@@ -1023,7 +1030,7 @@ class ManagementRuntime:
                     return
                 pool = self._ready.popleft()
                 self._active_pools.add(pool)
-                record, callback, reserved = self._pools[pool].popleft()
+                record, callback, _ = self._pools[pool].popleft()
                 record.mailbox_pending -= 1
             self._execute(record, callback, 'pool')
             with self._condition:
@@ -1110,11 +1117,11 @@ class ManagementRuntime:
         def retained_results(queue):
             retained = deque()
             for item in queue:
-                if item[2]:
+                if item.retain_on_close:
                     retained.append(item)
                 else:
-                    item[0].mailbox_pending -= 1
-                    self._release_locked(item[0])
+                    item.record.mailbox_pending -= 1
+                    self._release_locked(item.record)
             return retained
         self._cluster = retained_results(self._cluster)
         for pool, queue in tuple(self._pools.items()):
