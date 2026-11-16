@@ -1,4 +1,4 @@
-"""Socket-free tests of the actual supported reactor completion adapters."""
+"""Test reactor completion adapters and ownership of real local descriptors."""
 
 import asyncio
 import importlib
@@ -793,11 +793,9 @@ def test_asyncore_terminal_drain_survives_closed_pipe_dispatcher(monkeypatch):
         resume_timer.set()
         runner.join(5)
         assert not runner.is_alive()
-        assert (len(observations), len(loop._management_callbacks), loop._started,
-                [type(error).__name__ for error in errors]) == (130, 0, False, []), 'terminal drain lost delivery or ownership'
         assert observations == [runner] * 130, 'terminal drain stranded accepted callbacks'
         assert not loop._management_callbacks
-        assert not loop._started, 'terminal drain did not relinquish runner ownership'
+        assert loop._started is False, 'terminal drain did not relinquish runner ownership'
         assert loop._management_failed
         assert errors == []
         with pytest.raises(RuntimeError):
