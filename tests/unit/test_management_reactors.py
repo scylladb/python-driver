@@ -705,6 +705,112 @@ def test_startup_failure_does_not_acknowledge_concurrent_dispatch(monkeypatch, r
         loop._cleanup()
 
 
+def test_asyncore_terminal_drain_survives_closed_pipe_dispatcher(monkeypatch):
+    import os
+    if os.name == 'nt':
+        pytest.skip('pipe dispatch is not supported by Windows select')
+    module = reactor_module('asyncore')
+    monkeypatch.setattr(module, '_dispatcher_map', {})
+    monkeypatch.setattr(module.AsyncoreLoop, '_loop_dispatch_class',
+                        module._AsyncorePipeDispatcher)
+    loop = module.AsyncoreLoop()
+    dispatcher = loop._loop_dispatcher
+    polling, resume_poll, timing, resume_timer, stopping, closed = [Event() for _ in range(6)]
+    observations, errors = [], []
+    poll, notify, close, run = dispatcher.loop, dispatcher.notify_loop, dispatcher.close, loop._run_loop
+    def held_poll(timeout):
+        polling.set()
+        assert resume_poll.wait(5)
+        poll(timeout)
+    def notified():
+        notify()
+        if loop._shutdown:
+            stopping.set()
+    def closed_dispatcher():
+        close()
+        closed.set()
+    def run_observed():
+        try:
+            run()
+        except BaseException as exc:
+            errors.append(exc)
+    def expired():
+        # Cleanup also services timers after its bounded join. It must be able
+        # to remove this timer while its original callback is still running.
+        timer.cancel()
+        timing.set()
+        assert resume_timer.wait(10)
+        raise SystemExit('timer stopped the reactor before normal dispatch')
+    timer = module.Timer(0, expired)
+    monkeypatch.setattr(dispatcher, 'loop', held_poll)
+    monkeypatch.setattr(dispatcher, 'notify_loop', notified)
+    monkeypatch.setattr(dispatcher, 'close', closed_dispatcher)
+    monkeypatch.setattr(loop, '_run_loop', run_observed)
+    stopper = Thread(target=loop._cleanup)
+    try:
+        loop.add_timer(timer)
+        loop.maybe_start()
+        runner = loop._thread
+        assert polling.wait(5)
+        for _ in range(130):
+            loop.call_soon(lambda: observations.append(current_thread()))
+        assert len(loop._management_callbacks) == 130
+        stopper.start()
+        assert stopping.wait(5)
+        resume_poll.set()
+        assert timing.wait(5)
+        assert not dispatcher._notified
+        assert observations == []
+        assert closed.wait(5), 'cleanup did not close the dispatcher after its bounded join'
+        stopper.join(5)
+        assert not stopper.is_alive()
+        assert dispatcher.write_fd is None
+        resume_timer.set()
+        runner.join(5)
+        assert not runner.is_alive()
+        assert (len(observations), len(loop._management_callbacks), loop._started,
+                [type(error).__name__ for error in errors]) == (130, 0, False, []), 'terminal drain lost delivery or ownership'
+        assert observations == [runner] * 130, 'terminal drain stranded accepted callbacks'
+        assert not loop._management_callbacks
+        assert not loop._started, 'terminal drain did not relinquish runner ownership'
+        assert loop._management_failed
+        assert errors == []
+        with pytest.raises(RuntimeError):
+            loop.call_soon(lambda: None)
+    finally:
+        resume_poll.set()
+        resume_timer.set()
+        if stopper.ident is not None:
+            stopper.join(5)
+        loop._cleanup()
+        if loop._thread is not None:
+            loop._thread.join(5)
+            assert not loop._thread.is_alive()
+
+
+def test_asyncore_normal_dispatch_keeps_full_batches_bounded(monkeypatch):
+    module = reactor_module('asyncore')
+    monkeypatch.setattr(module, '_dispatcher_map', {})
+    loop = module.AsyncoreLoop()
+    delivered, wakes = [], []
+    monkeypatch.setattr(loop, 'wake_loop', lambda: wakes.append(len(delivered)))
+    try:
+        loop._management_callbacks.extend(lambda: delivered.append(True) for _ in range(130))
+        loop._dispatch_management()
+        assert len(delivered) == 64
+        assert len(loop._management_callbacks) == 66
+        assert wakes == [64]
+        loop._dispatch_management()
+        assert len(delivered) == 128
+        assert wakes == [64, 128]
+        loop._dispatch_management()
+        assert len(delivered) == 130
+        assert not loop._management_callbacks
+        assert wakes == [64, 128]
+    finally:
+        loop._cleanup()
+
+
 def test_asyncore_dispatch_accepted_during_runner_failure_is_delivered(monkeypatch):
     module = reactor_module('asyncore')
     monkeypatch.setattr(module, '_dispatcher_map', {})
