@@ -206,7 +206,8 @@ def test_libev_dispatch_enqueued_during_idle_exit_is_not_lost():
         loop._cleanup_unpublished()
 
 
-def test_libev_retired_runner_does_not_claim_replacement_work(monkeypatch):
+@pytest.mark.parametrize('cleanup_before_exit', [False, True])
+def test_libev_retired_runner_does_not_claim_replacement_work(monkeypatch, cleanup_before_exit):
     module = reactor_module('libev')
     loop = module.LibevLoop()
     native, drain = loop._loop, loop._drain_deferred
@@ -222,12 +223,16 @@ def test_libev_retired_runner_does_not_claim_replacement_work(monkeypatch):
         def start(self):
             if retired.is_set() and current_thread() is not old_threads[0]:
                 replacement.set()
-                assert release_new.wait(5)
-            native.start()
+                assert release_new.wait(15 if cleanup_before_exit else 5)
+            # A failing ownership assertion must not re-enter a disposed native loop.
+            if loop._loop is not None:
+                native.start()
         def __getattr__(self, name):
             return getattr(native, name)
     monkeypatch.setattr(loop, '_drain_deferred', pause_retired)
     loop._loop = PausedReplacement()
+    native_fields = ('_loop', '_preparer', '_loop_timer', '_management_keeper', '_notifier')
+    native_state = [getattr(loop, name) for name in native_fields]
     def completion():
         observations.append((get_ident(), current_thread() is loop._thread))
         delivered.set()
@@ -242,11 +247,20 @@ def test_libev_retired_runner_does_not_claim_replacement_work(monkeypatch):
         old_threads[0].join(5)
         assert not old_threads[0].is_alive()
         assert observations == [], 'retired runner consumed new-generation work'
+        if cleanup_before_exit:
+            loop._cleanup_unpublished()
+            assert new_thread.is_alive()
+            assert all(getattr(loop, name) is value
+                       for name, value in zip(native_fields, native_state)), (
+                'retired runner allowed disposal before current native execution exited')
+            assert not loop._runner_exited
         release_new.set()
         assert delivered.wait(5)
         new_thread.join(5)
         assert observations == [(new_thread.ident, True)]
         assert not new_thread.is_alive()
+        if cleanup_before_exit:
+            assert all(getattr(loop, name) is None for name in native_fields)
     finally:
         release_old.set()
         release_new.set()
@@ -1012,7 +1026,7 @@ def test_reactor_shutdown_delivers_already_accepted_callbacks(monkeypatch, react
 
 @pytest.mark.parametrize('case,args,fail_after_delivery', [
     ('test_libev_dispatch_enqueued_during_idle_exit_is_not_lost', (), False),
-    ('test_libev_retired_runner_does_not_claim_replacement_work', (), False),
+    ('test_libev_retired_runner_does_not_claim_replacement_work', (False,), False),
     ('test_libev_keeper_arming_cannot_outlive_cleanup', ('acquire',), False),
     ('test_libev_keeper_arming_cannot_outlive_cleanup', ('keepalive',), False),
     ('test_libev_borrow_release_completes_during_cleanup', ('during-release',), False),
