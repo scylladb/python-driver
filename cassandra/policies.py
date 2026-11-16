@@ -596,14 +596,17 @@ class TokenAwarePolicy(LoadBalancingPolicy):
         keep_order = query.is_lwt() or ConsistencyLevel.is_serial(query.consistency_level)
         replicas = []
         leader_host = None
+        ordered_plan = None
         token = self._cluster_metadata.token_map.token_class.from_key(query.routing_key)
         tablet = self._cluster_metadata._tablets.get_tablet_for_key(keyspace, query.table, token)
 
         if tablet is not None:
             if keep_order:
-                # The child plan is round-robin rotated, so it cannot provide a stable order.
+                # Filter by the child plan without taking its rotating replica order.
+                ordered_plan = list(child.make_query_plan(keyspace, query))
+                eligible_hosts = set(ordered_plan)
                 replicas = [host for host in (self._cluster_metadata.get_host_by_host_id(host_id)
-                                              for host_id, _ in tablet.replicas) if host is not None]
+                                              for host_id, _ in tablet.replicas) if host in eligible_hosts]
             else:
                 replicas_mapped = set(map(lambda r: r[0], tablet.replicas))
                 child_plan = child.make_query_plan(keyspace, query)
@@ -672,7 +675,8 @@ class TokenAwarePolicy(LoadBalancingPolicy):
 
         # yield rest of the cluster: local_rack, local, remote
         # Note: The leader is always a replica, so we don't need to filter it out here.
-        yield from yield_in_order([host for host in child.make_query_plan(keyspace, query) if host not in replicas])
+        tail_plan = ordered_plan if ordered_plan is not None else child.make_query_plan(keyspace, query)
+        yield from yield_in_order([host for host in tail_plan if host not in replicas])
 
     def on_up(self, *args, **kwargs):
         return self._child_policy.on_up(*args, **kwargs)

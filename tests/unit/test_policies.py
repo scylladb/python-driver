@@ -1013,6 +1013,32 @@ class TokenAwarePolicyTest(unittest.TestCase):
             for _ in range(len(hosts)):
                 assert list(policy.make_query_plan(None, query))[:3] == order
 
+    def test_ordered_tablet_routing_respects_child_plan(self):
+        cluster = self._prepare_cluster_with_tablets()
+        hosts = cluster.metadata.all_hosts()
+        omitted, first, second, fallback = hosts
+        by_id = {host.host_id: host for host in hosts}
+        cluster.metadata.get_host_by_host_id.side_effect = by_id.get
+        cluster.metadata._tablets.get_tablet_for_key.return_value = Tablet(
+            replicas=[(host.host_id, 0) for host in (omitted, first, second)]
+        )
+
+        child_policy = Mock(spec=LoadBalancingPolicy)
+        child_policy.distance.return_value = HostDistance.LOCAL
+        policy = TokenAwarePolicy(child_policy)
+        policy.populate(cluster, hosts)
+
+        lwt = Statement(routing_key=b"key", keyspace="ks")
+        lwt.is_lwt = lambda: True
+        serial = Statement(routing_key=b"key", keyspace="ks")
+        serial.consistency_level = ConsistencyLevel.SERIAL
+        for name, query in (("LWT", lwt), ("SERIAL", serial)):
+            with self.subTest(query=name):
+                child_policy.make_query_plan.reset_mock()
+                child_policy.make_query_plan.return_value = iter((fallback, second, first))
+                assert list(policy.make_query_plan(None, query)) == [first, second, fallback]
+                child_policy.make_query_plan.assert_called_once_with("ks", query)
+
     def test_leader_aware_routing_with_tablet_version(self):
         """
         For a strongly-consistent keyspace, the leader (first replica in the
