@@ -161,9 +161,11 @@ class LibevLoop(object):
             while self._management_callbacks:
                 self._dispatch_management()
         with self._lock:
-            self._runner_exited = True
-            if self._dispose_on_exit:
-                self._release_loop()
+            # A retired runner cannot certify the replacement's native exit.
+            if current_thread() is self._thread:
+                self._runner_exited = True
+                if self._dispose_on_exit:
+                    self._release_loop()
 
     def _cleanup_unpublished(self):
         # An unpublished candidate has no future owner. If bounded cleanup
