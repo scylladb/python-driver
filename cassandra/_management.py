@@ -361,6 +361,120 @@ class _Record:
         self.released = False
 
 
+class _PhysicalAttempt:
+    """Own one worker-to-owner handoff through adoption or disposal.
+
+    Shared state is protected by the runtime condition. Physical credit stays
+    charged until the worker has finished disposing any rejected result.
+    """
+
+    def __init__(self, record, function, accept, dispose):
+        self.runtime = record.runtime
+        self.record = record
+        self.function, self.accept, self.dispose = function, accept, dispose
+        self.returned_to_owner = Event()
+        self.adopted = False
+        self.received = False
+        self.work_started = False
+        self.submission_failed = False
+
+    def submit(self, executor):
+        try:
+            physical = executor.submit(self.physical_work)
+        except BaseException as exc:
+            with self.runtime._condition:
+                self.submission_failed = True
+                self.runtime._finish(self.record, error=exc)
+                if not self.work_started:
+                    self.receive(None, exc)
+            return _PENDING
+        try:
+            physical.add_done_callback(self.completed)
+        except BaseException as exc:
+            self.runtime._finish(self.record, error=exc)
+            if physical.cancel():
+                # No worker will discharge a cancellation before execution.
+                # A callback installed before an interrupted registration may
+                # also deliver it; receive claims the obligation exactly once.
+                self.receive(None, exc)
+        return _PENDING
+
+    def completed(self, future):
+        with _entered('worker', self.record):
+            try:
+                value, error = future.result(), None
+            except BaseException as exc:
+                value, error = None, exc
+            self.receive(value, error)
+
+    def receive(self, value, error):
+        with self.runtime._condition:
+            if self.received:
+                return
+            self.received = True
+            if not self.runtime._closing:
+                self.runtime._enqueue_locked(
+                    self.record, lambda: self.returned(value, error),
+                    retain_on_close=True)
+                queued = True
+            else:
+                queued = False
+        if queued and error is None:
+            # Only the short native result transition is awaited. Neither
+            # application callback delivery nor notification progress is
+            # part of this handoff.
+            self.returned_to_owner.wait()
+        # Keep physical ownership until adoption or disposal completes,
+        # including results rejected by a closed owner mailbox.
+        try:
+            if error is None and not self.adopted:
+                self.dispose(value)
+        except BaseException:
+            log.exception('Error disposing late management result')
+        finally:
+            with self.runtime._condition:
+                self.record.physical -= 1
+                self.runtime._release_locked(self.record)
+
+    def returned(self, value, error):
+        try:
+            with self.runtime._condition:
+                if self.runtime._closing or self.record.handler_done:
+                    return
+                if error is not None:
+                    self.runtime._finish(self.record, error=error)
+                else:
+                    try:
+                        accepted = self.accept(value)
+                    except BaseException as exc:
+                        self.runtime._finish(self.record, error=exc)
+                    else:
+                        self.adopted = True
+                        self.runtime._finish(self.record, accepted)
+        finally:
+            self.returned_to_owner.set()
+
+    def physical_work(self):
+        with self.runtime._condition:
+            if self.submission_failed:
+                # submit() can queue a callable before raising. Its
+                # reservation was retired only if execution never began.
+                return None
+            self.work_started = True
+        with _entered('worker', self.record):
+            try:
+                value = self.function()
+            except BaseException as exc:
+                self.receive(None, exc)
+                raise
+            else:
+                # Hand off before completing the executor Future. A late
+                # callback registration can run inline on C/P, but by then
+                # this worker already owns adoption/disposal responsibility.
+                self.receive(value, None)
+                return value
+
+
 class _LifetimeHandle:
     def __init__(self, runtime):
         self.runtime = runtime
@@ -629,109 +743,8 @@ class ManagementRuntime:
                     'result reservation')
             record.physical = 1
             self._condition.notify_all()
-        returned_to_owner = Event()
-        adopted = False
-        received = False
-        work_started = False
-        submission_failed = False
-
-        def completed(future):
-            with _entered('worker', record):
-                try:
-                    value, error = future.result(), None
-                except BaseException as exc:
-                    value, error = None, exc
-                receive(value, error)
-
-        def receive(value, error):
-            nonlocal received
-            with self._condition:
-                if received:
-                    return
-                received = True
-                if not self._closing:
-                    self._enqueue_locked(
-                        record, lambda: returned(value, error),
-                        retain_on_close=True)
-                    queued = True
-                else:
-                    queued = False
-            if queued and error is None:
-                # Only the short native result transition is awaited. Neither
-                # application callback delivery nor notification progress is
-                # part of this handoff.
-                returned_to_owner.wait()
-            # Keep physical ownership until adoption or disposal completes,
-            # including results rejected by a closed owner mailbox.
-            try:
-                if error is None and not adopted:
-                    dispose(value)
-            except BaseException:
-                log.exception('Error disposing late management result')
-            finally:
-                with self._condition:
-                    record.physical -= 1
-                    self._release_locked(record)
-
-        def returned(value, error):
-            nonlocal adopted
-            try:
-                with self._condition:
-                    if self._closing or record.handler_done:
-                        return
-                    if error is not None:
-                        self._finish(record, error=error)
-                    else:
-                        try:
-                            accepted = accept(value)
-                        except BaseException as exc:
-                            self._finish(record, error=exc)
-                        else:
-                            adopted = True
-                            self._finish(record, accepted)
-            finally:
-                returned_to_owner.set()
-
-        def physical_work():
-            nonlocal work_started
-            with self._condition:
-                if submission_failed:
-                    # submit() can queue a callable before raising. Its
-                    # reservation was retired only if execution never began.
-                    return None
-                work_started = True
-            with _entered('worker', record):
-                try:
-                    value = function()
-                except BaseException as exc:
-                    receive(None, exc)
-                    raise
-                else:
-                    # Hand off before completing the executor Future. A late
-                    # callback registration can run inline on C/P, but by then
-                    # this worker already owns adoption/disposal responsibility.
-                    receive(value, None)
-                    return value
-
-        try:
-            physical = executor.submit(physical_work)
-        except BaseException as exc:
-            with self._condition:
-                submission_failed = True
-                self._finish(record, error=exc)
-                if not work_started:
-                    receive(None, exc)
-            return _PENDING
-        try:
-            physical.add_done_callback(completed)
-        except BaseException as exc:
-            self._finish(record, error=exc)
-            if physical.cancel():
-                # No worker will discharge a cancellation before execution.
-                # A callback installed before an interrupted registration may
-                # also deliver it; receive claims the obligation exactly once.
-                receive(None, exc)
-        return _PENDING
+        return _PhysicalAttempt(record, function, accept, dispose).submit(
+            executor)
 
     def notify(self, callback, *, wait=False, timeout=None, budget='ordinary'):
         self._check_pid()
