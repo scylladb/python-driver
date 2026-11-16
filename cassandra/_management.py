@@ -460,8 +460,7 @@ class ManagementRuntime:
                         raise
                     self._threads.append(thread)
             except BaseException:
-                self._closing = True
-                self._condition.notify_all()
+                self._begin_close_locked()
                 # Started threads exit once this startup lock is released.
                 raise
 
@@ -1092,47 +1091,51 @@ class ManagementRuntime:
             assert_can_wait()
         with self._condition:
             self._check_pid()
-            if not self._closing:
-                self._closing = True
-                for record in tuple(self._records):
-                    self._finish(record, error=ManagementClosed(
-                        'Management lifetime ended'))
-                for record, _ in self._notifications:
-                    record.notification = False
-                    self._release_locked(record)
-                self._notifications.clear()
-                def retained_results(queue):
-                    retained = deque()
-                    for item in queue:
-                        if item[2]:
-                            retained.append(item)
-                        else:
-                            item[0].mailbox_pending -= 1
-                            self._release_locked(item[0])
-                    return retained
-                self._cluster = retained_results(self._cluster)
-                for pool, queue in tuple(self._pools.items()):
-                    retained = retained_results(queue)
-                    if retained or pool in self._active_pools:
-                        self._pools[pool] = retained
-                    else:
-                        del self._pools[pool]
-                self._ready = deque(pool for pool in self._ready
-                                    if pool in self._pools)
-                self._keys.clear()
-                self._health.clear()
-                for handle in self._lifetimes:
-                    handle.closed.set()
-                self._lifetimes.clear()
-                self._condition.notify_all()
-            self.closed.set()
-            self._maybe_finalized_locked()
+            self._begin_close_locked()
         if wait and execution_context() not in ('callback', 'worker'):
             self.closed.wait()
         return self.closed
 
+    def _begin_close_locked(self):
+        if self._closing:
+            return
+        self._closing = True
+        for record in tuple(self._records):
+            self._finish(record, error=ManagementClosed(
+                'Management lifetime ended'))
+        for record, _ in self._notifications:
+            record.notification = False
+            self._release_locked(record)
+        self._notifications.clear()
+        def retained_results(queue):
+            retained = deque()
+            for item in queue:
+                if item[2]:
+                    retained.append(item)
+                else:
+                    item[0].mailbox_pending -= 1
+                    self._release_locked(item[0])
+            return retained
+        self._cluster = retained_results(self._cluster)
+        for pool, queue in tuple(self._pools.items()):
+            retained = retained_results(queue)
+            if retained or pool in self._active_pools:
+                self._pools[pool] = retained
+            else:
+                del self._pools[pool]
+        self._ready = deque(pool for pool in self._ready
+                            if pool in self._pools)
+        self._keys.clear()
+        self._health.clear()
+        for handle in self._lifetimes:
+            handle.closed.set()
+        self._lifetimes.clear()
+        self._condition.notify_all()
+        self.closed.set()
+        self._maybe_finalized_locked()
+
     def _maybe_finalized_locked(self):
-        if (self._closing and not self._records and
+        if (self.closed.is_set() and not self._records and
                 not self._cleanup_obligations
                 and self._exited == len(self._threads)
                 and not self._finalizing):

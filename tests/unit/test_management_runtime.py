@@ -585,6 +585,81 @@ def test_start_failure_and_repeated_close_leave_no_threads(
         assert all(not thread.is_alive() for thread in manager._threads)
 
 
+@pytest.mark.parametrize('failed_phase', [1, 2, 3, 4])
+@pytest.mark.parametrize('failure_point', ['construct', 'before', 'after'])
+@pytest.mark.parametrize('startup_error', [RuntimeError, KeyboardInterrupt])
+def test_start_failure_retires_registered_lifetimes(
+        monkeypatch, failed_phase, failure_point, startup_error):
+    import cassandra._management as management
+
+    finalized = []
+    manager = ManagementRuntime(Dispatcher(), on_finalized=lambda done: (
+        finalized.append((manager.closed.is_set(), handle.closed.is_set(),
+                          manager.counts()['close'])), done()))
+    handle = manager.register_lifetime()
+    real_start = Thread.start
+    constructed = []
+    failure = startup_error('startup interrupted')
+
+    def construct(*args, **kwargs):
+        phase = len(constructed) + 1
+        if phase == failed_phase and failure_point == 'construct':
+            raise failure
+        thread = Thread(*args, **kwargs)
+        constructed.append(thread)
+        return thread
+
+    def start(thread):
+        if len(constructed) == failed_phase:
+            if failure_point == 'before':
+                raise failure
+            real_start(thread)
+            raise failure
+        real_start(thread)
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(management, 'Thread', construct)
+        patcher.setattr(Thread, 'start', start)
+        with pytest.raises(startup_error) as caught:
+            manager.start()
+    assert caught.value is failure
+    assert handle.closed.is_set()
+    assert manager.closed.is_set()
+    # Startup failure must retire the lifetime without a subsequent close.
+    manager.join(5)
+    for _ in range(3):
+        assert manager.close() is manager.closed
+    assert finalized == [(True, True, 0)]
+    assert not manager._lifetimes
+    assert all(not thread.is_alive() for thread in manager._threads)
+
+
+def test_delivery_failure_reentering_close_waits_for_lifetime_retirement():
+    from cassandra._management import ManagementDeliveryFailed
+
+    finalized = []
+    def reject(callback):
+        # The outer close has begun, but its retirement is still in progress.
+        assert manager._closing and not manager.closed.is_set()
+        raise RuntimeError('reactor failed')
+
+    manager = ManagementRuntime(reject, on_finalized=lambda done: (
+        finalized.append((manager.closed.is_set(), handle.closed.is_set(),
+                          manager.counts())), done()))
+    handle = manager.register_lifetime()
+    # Hold admission in the mailbox so close publishes the terminal state.
+    manager._started = True
+    future = manager.submit(lambda record: pytest.fail('shutdown work ran'))
+    future.add_done_callback(lambda future: pytest.fail('delivery ran'))
+    manager.close()
+    manager.join(5)
+    manager.close()
+    assert isinstance(manager.completion_error, ManagementDeliveryFailed)
+    assert len(finalized) == 1
+    closed, retired, counts = finalized[0]
+    assert closed and retired and all(value == 0 for value in counts.values())
+
+
 @pytest.mark.parametrize('bootstrap_pending', [False, True])
 def test_start_interruption_after_launch_tracks_the_runner(
         monkeypatch, bootstrap_pending):
