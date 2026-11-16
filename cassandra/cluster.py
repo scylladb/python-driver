@@ -719,7 +719,10 @@ class ProfileManager(object):
         if not self.pools_allowed:
             return
         for p in self.profiles.values():
-            p.load_balancing_policy.on_down(host)
+            try:
+                p.load_balancing_policy.on_down(host)
+            except Exception:
+                log.exception("Error in load balancing policy down handler for host %s", host)
             if host._is_removed:
                 return
 
