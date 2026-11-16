@@ -1422,3 +1422,210 @@ def test_asyncore_fatal_timer_failure_is_visible_and_drains(monkeypatch, caplog,
         if loop._thread is not None:
             loop._thread.join(5)
             assert not loop._thread.is_alive()
+
+
+@contextmanager
+def paused_native_start(monkeypatch, module, failure):
+    """Create a real native thread, then interrupt start before bootstrap."""
+    native_entered, bootstrap, retired = Event(), Event(), Event()
+    threads = []
+    thread_class = module.Thread
+    class PendingBootstrap(thread_class):
+        def _bootstrap(self):
+            native_entered.set()
+            assert bootstrap.wait(20)
+            try:
+                super()._bootstrap()
+            finally:
+                retired.set()
+        def start(self):
+            wait = self._started.wait
+            def interrupted_wait(timeout=None):
+                assert native_entered.wait(5)
+                assert not self._started.is_set()
+                raise failure('native launch preceded bootstrap')
+            self._started.wait = interrupted_wait
+            try:
+                super().start()
+            finally:
+                self._started.wait = wait
+    def factory(*args, **kwargs):
+        thread = PendingBootstrap(*args, **kwargs) if not threads else thread_class(*args, **kwargs)
+        threads.append(thread)
+        return thread
+    monkeypatch.setattr(module, 'Thread', factory)
+    try:
+        yield native_entered, bootstrap, retired, threads
+    finally:
+        bootstrap.set()
+        if threads:
+            assert threads[0]._started.wait(5)
+            threads[0].join(5)
+            assert not threads[0].is_alive()
+
+
+@pytest.mark.parametrize('reactor', ['libev', 'asyncore'])
+@pytest.mark.parametrize('failure', [KeyboardInterrupt, SystemExit])
+def test_bootstrap_pending_runner_cannot_enter_replacement(monkeypatch, reactor, failure):
+    module = reactor_module(reactor)
+    if reactor == 'asyncore':
+        monkeypatch.setattr(module, '_dispatcher_map', {})
+    loop = getattr(module, {'libev': 'LibevLoop', 'asyncore': 'AsyncoreLoop'}[reactor])()
+    entered, release, delivered = Event(), Event(), Event()
+    rejected, obsolete_entries = [], []
+    run = loop._run_loop
+    with paused_native_start(monkeypatch, module, failure) as (native_entered, bootstrap, retired, threads):
+        def observed_run():
+            if current_thread() is threads[0]:
+                # The baseline reaches this boundary. Never let a negative
+                # control enter ev_run concurrently with the real replacement.
+                obsolete_entries.append(current_thread())
+                return
+            run()
+        monkeypatch.setattr(loop, '_run_loop', observed_run)
+        def hold():
+            entered.set()
+            assert release.wait(10)
+        try:
+            with pytest.raises(failure, match='native launch preceded bootstrap'):
+                loop.call_soon(lambda: rejected.append(True))
+            assert native_entered.is_set()
+            assert not threads[0]._started.is_set()
+            assert not threads[0].is_alive()
+            assert loop._thread is None
+            assert loop._started is False
+            assert not loop._management_callbacks
+            loop.call_soon(hold)
+            assert entered.wait(5)
+            replacement = loop._thread
+            assert replacement is threads[1]
+            assert replacement.is_alive()
+            if reactor == 'asyncore':
+                acquired = loop._loop_lock.acquire(False)
+                if acquired:
+                    loop._loop_lock.release()
+                assert not acquired
+            bootstrap.set()
+            assert retired.wait(5)
+            threads[0].join(5)
+            assert not threads[0].is_alive()
+            assert obsolete_entries == [], 'obsolete native runner reached its reactor body'
+            assert loop._thread is replacement
+            assert loop._started is True
+            if reactor == 'libev':
+                assert loop._runner_exited is False
+            else:
+                assert not loop._management_failed
+            assert rejected == []
+            loop.call_soon(delivered.set)
+            release.set()
+            assert delivered.wait(5)
+        finally:
+            release.set()
+            bootstrap.set()
+            if reactor == 'libev':
+                loop._cleanup_unpublished()
+            else:
+                loop._cleanup()
+            for thread in threads[1:]:
+                thread.join(5)
+                assert not thread.is_alive()
+
+
+@pytest.mark.parametrize('reactor', ['libev', 'asyncore'])
+@pytest.mark.parametrize('failure', [KeyboardInterrupt, SystemExit])
+def test_bootstrap_pending_runner_cannot_enter_disposed_candidate(monkeypatch, reactor, failure):
+    module = reactor_module(reactor)
+    if reactor == 'asyncore':
+        monkeypatch.setattr(module, '_dispatcher_map', {})
+    name = {'libev': 'LibevLoop', 'asyncore': 'AsyncoreLoop'}[reactor]
+    connection = getattr(module, {'libev': 'LibevConnection', 'asyncore': 'AsyncoreConnection'}[reactor])
+    loop_class = getattr(module, name)
+    candidates, obsolete_entries = [], []
+    def candidate():
+        loop = loop_class()
+        candidates.append(loop)
+        # Record the unsafe boundary without touching already-disposed native
+        # fields in the baseline. The production entry must reject it first.
+        monkeypatch.setattr(loop, '_run_loop', lambda: obsolete_entries.append(current_thread()))
+        return loop
+    monkeypatch.setattr(module, '_global_loop', None)
+    monkeypatch.setattr(module, name, candidate)
+    with paused_native_start(monkeypatch, module, failure) as (native_entered, bootstrap, retired, threads):
+        try:
+            with pytest.raises(failure, match='native launch preceded bootstrap'):
+                connection.initialize_reactor()
+            loop = candidates[0]
+            assert native_entered.is_set()
+            assert not threads[0]._started.is_set()
+            assert module._global_loop is None
+            assert loop._thread is None
+            assert loop._started is False
+            assert loop._shutdown
+            assert loop._cleanup_started
+            assert not loop._management_callbacks
+            if reactor == 'libev':
+                fields = ('_loop', '_preparer', '_loop_timer', '_management_keeper', '_notifier')
+                assert all(getattr(loop, name) is None for name in fields)
+                assert loop._runner_exited is False
+            else:
+                assert loop._loop_dispatcher.write_fd is None
+                assert not loop._management_failed
+            bootstrap.set()
+            assert retired.wait(5)
+            threads[0].join(5)
+            assert not threads[0].is_alive()
+            assert obsolete_entries == [], 'obsolete native runner entered after candidate disposal'
+            assert loop._thread is None
+            assert loop._started is False
+            if reactor == 'libev':
+                assert all(getattr(loop, name) is None for name in fields)
+                assert loop._runner_exited is False
+            else:
+                assert not loop._management_failed
+        finally:
+            bootstrap.set()
+            for loop in candidates:
+                if reactor == 'libev':
+                    loop._cleanup_unpublished()
+                else:
+                    loop._cleanup()
+
+
+@pytest.mark.parametrize('reactor', ['libev', 'asyncore'])
+@pytest.mark.parametrize('failure', [KeyboardInterrupt, SystemExit])
+def test_start_interrupted_after_bootstrap_preserves_current_runner(monkeypatch, reactor, failure):
+    module = reactor_module(reactor)
+    if reactor == 'asyncore':
+        monkeypatch.setattr(module, '_dispatcher_map', {})
+    loop = getattr(module, {'libev': 'LibevLoop', 'asyncore': 'AsyncoreLoop'}[reactor])()
+    thread_class = module.Thread
+    threads, rejected = [], []
+    delivered = Event()
+    class InterruptedStart(thread_class):
+        def start(self):
+            super().start()
+            assert self._started.is_set()
+            assert self.is_alive()
+            raise failure('bootstrap already completed')
+    def factory(*args, **kwargs):
+        thread = InterruptedStart(*args, **kwargs) if not threads else thread_class(*args, **kwargs)
+        threads.append(thread)
+        return thread
+    monkeypatch.setattr(module, 'Thread', factory)
+    try:
+        with pytest.raises(failure, match='bootstrap already completed'):
+            loop.call_soon(lambda: rejected.append(True))
+        assert loop._thread is threads[0]
+        assert rejected == []
+        loop.call_soon(delivered.set)
+        assert delivered.wait(5)
+        assert rejected == []
+    finally:
+        if reactor == 'libev':
+            loop._cleanup_unpublished()
+        else:
+            loop._cleanup()
+        for thread in threads:
+            thread.join(5)
+            assert not thread.is_alive()
