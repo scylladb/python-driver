@@ -27,8 +27,9 @@ export CASS_DRIVER_NO_CYTHON=1
 # every affected module (and, for the Cython-only modules with no .py
 # fallback like row_parser, HAVE_CYTHON would stay True off a stale .so,
 # defeating CASS_DRIVER_NO_CYTHON entirely). Candidates are built from the
-# exact list of optionally-cythonized module names (setup.py's
-# cython_candidates) plus the *current* interpreter's own EXTENSION_SUFFIXES,
+# exact list of optionally-cythonized .py module names (setup.py's
+# cython_candidates), all .pyx modules, and the *current* interpreter's
+# EXTENSION_SUFFIXES,
 # then only deleted if that exact file exists -- unlike a generic endswith()
 # scan, this can't match a foreign-ABI build of the same module (e.g.
 # cluster.cpython-311-...so when the current interpreter is 3.12) or a
@@ -41,11 +42,13 @@ export CASS_DRIVER_NO_CYTHON=1
 # only.
 uv run python -c "
 import importlib.machinery, pathlib
-candidates = ['cluster', 'concurrent', 'connection', 'cqltypes', 'metadata',
-              'pool', 'protocol', 'query', 'util', 'shard_info']
+package = pathlib.Path('cassandra')
+candidates = {'cluster', 'concurrent', 'connection', 'cqltypes', 'metadata',
+              'pool', 'protocol', 'query', 'util', 'shard_info'}
+candidates.update(path.stem for path in package.glob('*.pyx'))
 for name in candidates:
     for suffix in importlib.machinery.EXTENSION_SUFFIXES:
-        path = pathlib.Path('cassandra') / (name + suffix)
+        path = package / (name + suffix)
         if path.exists():
             path.unlink()
 " || exit 1
