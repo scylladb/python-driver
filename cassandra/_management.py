@@ -61,6 +61,12 @@ def execution_context():
     return getattr(_context, 'kind', None)
 
 
+def _callback_runtime():
+    """Identify L even when capture retirement has no live record."""
+    if execution_context() == 'callback':
+        return getattr(_context, 'runtime', None)
+
+
 def assert_can_wait():
     if execution_context() in ('cluster', 'pool', 'bridge'):
         raise ManagementContextError(
@@ -110,14 +116,17 @@ class _FutureCondition(Condition):
 
 
 @contextmanager
-def _entered(kind, record=None):
+def _entered(kind, record=None, runtime=None):
     previous = (getattr(_context, 'kind', None),
-                getattr(_context, 'record', None))
+                getattr(_context, 'record', None),
+                getattr(_context, 'runtime', None))
     _context.kind, _context.record = kind, record
+    _context.runtime = (record.runtime if record is not None else
+                        runtime if runtime is not None else previous[2])
     try:
         yield
     finally:
-        _context.kind, _context.record = previous
+        _context.kind, _context.record, _context.runtime = previous
 
 
 @dataclass(frozen=True)
@@ -200,9 +209,7 @@ class OperationFuture(Future):
 
     def _assert_can_wait(self):
         assert_can_wait()
-        current = getattr(_context, 'record', None)
-        if (execution_context() == 'callback' and current is not None and
-                current.runtime is self._record.runtime and
+        if (_callback_runtime() is self._record.runtime and
                 self._record.envelope.kind == 'notification'):
             raise ManagementContextError(
                 'Notification wait would block its own callback lane')
@@ -683,9 +690,7 @@ class ManagementRuntime:
                 if not wait:
                     raise ManagementOverloaded(
                         'Management admission capacity exhausted')
-                current = getattr(_context, 'record', None)
-                if (execution_context() == 'callback' and
-                        current is not None and current.runtime is self and
+                if (_callback_runtime() is self and
                         budget == 'ordinary'):
                     raise ManagementContextError(
                         'Callback admission cannot wait behind its own credit')
@@ -828,9 +833,7 @@ class ManagementRuntime:
         """Reserve one L aggregate and a bounded prerequisite window."""
         self._check_pid()
         assert_can_wait()
-        current = getattr(_context, 'record', None)
-        if (execution_context() != 'callback' or current is None or
-                current.runtime is not self):
+        if _callback_runtime() is not self:
             yield 'ordinary'
             return
         with self._condition:
@@ -871,10 +874,13 @@ class ManagementRuntime:
             # An already pending removal is terminal for this incarnation.
             if slot.removed and not removed:
                 return True
+            retired = (slot.apply, slot.notification)
             slot.apply, slot.notification, slot.removed = (
                 apply, notification, removed)
             self._condition.notify_all()
-            return True
+        # Replacing captures can invoke application finalizers.
+        del retired
+        return True
 
     def take_refresh_demand(self):
         self.assert_owner()
@@ -885,7 +891,8 @@ class ManagementRuntime:
     def unregister_health(self, incarnation):
         self._check_pid()
         with self._condition:
-            self._health.pop(id(incarnation), None)
+            retired = self._health.pop(id(incarnation), None)
+        del retired
 
     def register_lifetime(self):
         """Return a caller-owned handle for an active lifetime."""
@@ -921,13 +928,13 @@ class ManagementRuntime:
 
     def _delivery_failed_locked(self, record, error):
         for future in chain(record.futures, record.foreign_futures):
-            self._retire_callbacks_locked(future._delivery.fail(error))
+            self._retire_captures_locked(future._delivery.fail(error))
 
-    def _retire_callbacks_locked(self, callbacks):
-        if callbacks:
+    def _retire_captures_locked(self, captures):
+        if captures:
             # Last captures can run arbitrary finalizers. Keep them off owners
             # and retain cleanup until the callback lane drops them.
-            self._callback_garbage.append(callbacks)
+            self._callback_garbage.append(captures)
             self._cleanup_obligations += 1
             self._condition.notify_all()
 
@@ -1052,13 +1059,13 @@ class ManagementRuntime:
                     future._delivery.record = future._record
         record.foreign_futures.clear()
         if isinstance(record.handler, _Notification):
-            self._retire_callbacks_locked(record.handler.callbacks)
+            self._retire_captures_locked(record.handler.callbacks)
         record.handler = None
         self._condition.notify_all()
         self._maybe_finalized_locked()
 
     def _run(self, kind, target):
-        with _entered(kind):
+        with _entered(kind, runtime=self):
             try:
                 target()
             finally:
@@ -1152,7 +1159,7 @@ class ManagementRuntime:
                     garbage = None
                     record, callback = self._notifications.popleft()
             if garbage is not None:
-                with _entered('callback'):
+                with _entered('callback', runtime=self):
                     try:
                         garbage.clear()
                     finally:
@@ -1214,7 +1221,7 @@ class ManagementRuntime:
             self._finish(record, error=ManagementClosed(
                 'Management lifetime ended'))
         for record, callback in self._notifications:
-            self._retire_callbacks_locked([callback])
+            self._retire_captures_locked([callback])
             record.notification = False
             self._release_locked(record)
         self._notifications.clear()
@@ -1237,6 +1244,7 @@ class ManagementRuntime:
         self._ready = deque(pool for pool in self._ready
                             if pool in self._pools)
         self._keys.clear()
+        self._retire_captures_locked(list(self._health.values()))
         self._health.clear()
         for handle in self._lifetimes:
             handle.closed.set()
@@ -1357,9 +1365,7 @@ class _CompatibilityCall:
 
     def __init__(self, runtime):
         self.runtime = runtime
-        current = getattr(_context, 'record', None)
-        self.budget = ('aggregate' if execution_context() == 'callback' and
-                       current is not None and current.runtime is runtime
+        self.budget = ('aggregate' if _callback_runtime() is runtime
                        else 'ordinary')
         self.record = None
 

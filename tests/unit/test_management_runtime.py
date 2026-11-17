@@ -653,21 +653,25 @@ def test_start_failure_retires_registered_lifetimes(
             raise failure
         real_start(thread)
 
-    with monkeypatch.context() as patcher:
-        patcher.setattr(management, 'Thread', construct)
-        patcher.setattr(Thread, 'start', start)
-        with pytest.raises(startup_error) as caught:
-            manager.start()
-    assert caught.value is failure
-    assert handle.closed.is_set()
-    assert manager.closed.is_set()
-    # Startup failure must retire the lifetime without a subsequent close.
-    manager.join(5)
-    for _ in range(3):
-        assert manager.close() is manager.closed
-    assert finalized == [(True, True, 0)]
-    assert not manager._lifetimes
-    assert all(not thread.is_alive() for thread in manager._threads)
+    try:
+        with monkeypatch.context() as patcher:
+            patcher.setattr(management, 'Thread', construct)
+            patcher.setattr(Thread, 'start', start)
+            with pytest.raises(startup_error) as caught:
+                manager.start()
+        assert caught.value is failure
+        assert handle.closed.is_set()
+        assert manager.closed.is_set()
+        # Startup failure must retire the lifetime without a subsequent close.
+        manager.join(5)
+        for _ in range(3):
+            assert manager.close() is manager.closed
+        assert finalized == [(True, True, 0)]
+        assert not manager._lifetimes
+        assert all(not thread.is_alive() for thread in manager._threads)
+    finally:
+        manager.close()
+        manager.join(5)
 
 
 def test_delivery_failure_reentering_close_waits_for_lifetime_retirement():
@@ -2610,6 +2614,115 @@ def test_notification_capture_retires_on_callback_lane_outside_lock(stage):
         assert calls == ([True] if stage == 'normal' else [])
         assert observed == [('callback', False),
                             9 if stage == 'normal' else True]
+    finally:
+        resume.set()
+        manager.close()
+        manager.join(5)
+        for probe in probes:
+            probe.join(5)
+            assert not probe.is_alive()
+    assert all(value == 0 for value in assert_runtime_counts(manager).values())
+
+
+@pytest.mark.skipif(platform.python_implementation() != 'CPython',
+                    reason='Requires synchronous reference destruction')
+@pytest.mark.parametrize('mode', ['result', 'exception', 'wait', 'as_completed',
+                                 'admission'])
+def test_open_notification_retirement_guards_same_lane_waits(mode):
+    manager = ManagementRuntime(Dispatcher())
+    entered, resume, retired = Event(), Event(), Event()
+    observed, nested = [], []
+    class Callback:
+        def __call__(self):
+            pytest.fail('superseded notification ran')
+
+        def __del__(self):
+            try:
+                manager.limit = 1
+                nested.append(manager.notify(lambda: 7))
+                try:
+                    if mode == 'result':
+                        nested[0].result(2)
+                    elif mode == 'exception':
+                        nested[0].exception(2)
+                    elif mode == 'wait':
+                        wait(nested, timeout=2)
+                    elif mode == 'as_completed':
+                        next(as_completed(nested, timeout=2))
+                    else:
+                        manager.submit(lambda record: 1, wait=True, timeout=2)
+                except ManagementContextError:
+                    observed.append(True)
+                except BaseException as exc:
+                    observed.append(type(exc))
+                else:
+                    observed.append(False)
+                try:
+                    with manager.synchronous_reentry() as budget:
+                        observed.append((budget, manager.submit(
+                            lambda record: 9, budget=budget).result(2)))
+                except BaseException as exc:
+                    observed.append(type(exc))
+            finally:
+                retired.set()
+
+    def block(record):
+        entered.set()
+        assert resume.wait(5)
+    try:
+        manager.submit(block)
+        assert entered.wait(5)
+        future = manager.notify(Callback())
+        manager.supersede(future)
+        resume.set()
+        assert retired.wait(5)
+        assert observed == [True, ('reentry', 9)]
+        assert nested[0].result(5) == 7
+    finally:
+        resume.set()
+        manager.close()
+        manager.join(5)
+    assert all(value == 0 for value in assert_runtime_counts(manager).values())
+
+
+@pytest.mark.skipif(platform.python_implementation() != 'CPython',
+                    reason='Requires synchronous reference destruction')
+@pytest.mark.parametrize('action', ['replace', 'unregister', 'close'])
+def test_health_capture_retirement_releases_outside_runtime_lock(action):
+    manager = ManagementRuntime(Dispatcher())
+    entered, resume, retired = Event(), Event(), Event()
+    incarnation = object()
+    observed, probes = [], []
+    class Callback:
+        def __call__(self):
+            pytest.fail('retired health notification ran')
+
+        def __del__(self):
+            observed.append(manager._condition._is_owned())
+            progressed = Event()
+            probe = Thread(target=lambda: (manager.counts(), progressed.set()))
+            probes.append(probe)
+            probe.start()
+            probe.join(2)
+            observed.append(progressed.is_set())
+            retired.set()
+
+    def block(record):
+        entered.set()
+        assert resume.wait(5)
+    try:
+        manager.register_health(incarnation)
+        manager.submit(block)
+        assert entered.wait(5)
+        assert manager.observe_negative(incarnation, lambda: None, Callback())
+        if action == 'replace':
+            assert manager.observe_negative(incarnation, lambda: None)
+        elif action == 'unregister':
+            manager.unregister_health(incarnation)
+        else:
+            manager.close()
+        assert retired.wait(5)
+        assert observed == [False, True]
     finally:
         resume.set()
         manager.close()
