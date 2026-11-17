@@ -1127,13 +1127,14 @@ class ManagementRuntime:
     def _run_notifications(self):
         while True:
             with self._condition:
-                while (not self._notifications and not self._callback_garbage
-                       and not self._closing):
+                while not self._notifications and not self._callback_garbage:
+                    # A deferred delivery can still fail after close. Keep L
+                    # available until every possible producer has retired.
+                    if self._closing and not self._records:
+                        return
                     self._condition.wait()
                 if self._callback_garbage:
                     garbage = self._callback_garbage.popleft()
-                elif self._closing:
-                    return
                 else:
                     garbage = None
                     record, callback = self._notifications.popleft()

@@ -1773,7 +1773,8 @@ def test_interrupted_compatibility_attachment_retains_work_until_completion(
 
 
 @pytest.mark.parametrize('pool', [None, 'logical-pool'])
-@pytest.mark.parametrize('ending', ['normal', 'close', 'fatal'])
+@pytest.mark.parametrize(
+    'ending', ['normal', 'close', 'fatal', 'close_fatal'])
 def test_owner_callback_handoff_yields_reactor_while_caller_callback_runs(
         runtime, monkeypatch, pool, ending):
     from cassandra._management import ManagementDeliveryFailed
@@ -1783,6 +1784,13 @@ def test_owner_callback_handoff_yields_reactor_while_caller_callback_runs(
     with manager._condition:
         assert manager._condition.wait_for(lambda: old._record.released, 5)
     entered, resume, io_progress = Event(), Event(), Event()
+    callback_parked = Event()
+    condition_wait = manager._condition.wait
+    def observe_wait(timeout=None):
+        if execution_context() == 'callback' and manager._closing:
+            callback_parked.set()
+        return condition_wait(timeout)
+    monkeypatch.setattr(manager._condition, 'wait', observe_wait)
     calls = []
     def caller_callback(future):
         calls.append(('caller-enter', execution_context()))
@@ -1806,9 +1814,16 @@ def test_owner_callback_handoff_yields_reactor_while_caller_callback_runs(
         assert not reactor.is_alive()
         assert calls == [('caller-enter', None)]
         assert manager.counts()['ordinary'] == 1
-        if ending == 'close':
+        if ending in ('close', 'close_fatal'):
             manager.close()
             assert not manager.finalized.is_set()
+            if ending == 'close_fatal':
+                # L must remain available for disposal if the deferred batch
+                # loses its completion service only after shutdown begins.
+                assert callback_parked.wait(5)
+                def reject(ticket):
+                    raise RuntimeError('reactor lost after close')
+                monkeypatch.setattr(manager, '_dispatch', reject)
         elif ending == 'fatal':
             def reject(ticket):
                 raise RuntimeError('validated reactor lost during handoff')
@@ -1830,11 +1845,16 @@ def test_owner_callback_handoff_yields_reactor_while_caller_callback_runs(
         assert not caller.is_alive() and not reactor.is_alive()
     dispatch.drain()
     expected = [('caller-enter', None), ('caller-exit', None)]
-    if ending != 'fatal':
+    if ending not in ('fatal', 'close_fatal'):
         expected.append(('owner', 'bridge'))
     assert calls == expected
     assert manager.counts()['ordinary'] == 0
     assert not old._delivery.waiters
+    if ending == 'close_fatal':
+        manager.join(5)
+        assert isinstance(old._delivery.error, ManagementDeliveryFailed)
+        assert not manager._callback_garbage
+        assert all(value == 0 for value in assert_runtime_counts(manager).values())
 
 
 @pytest.mark.parametrize('one_record', [False, True])
