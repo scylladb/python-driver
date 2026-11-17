@@ -2,6 +2,7 @@ from collections import deque
 from concurrent.futures import (
     Future, ThreadPoolExecutor, as_completed, wait, TimeoutError)
 from threading import Barrier, Event, Lock, Thread, get_ident
+import platform
 
 import pytest
 
@@ -687,6 +688,10 @@ def test_delivery_failure_reentering_close_waits_for_lifetime_retirement():
     future = manager.submit(lambda record: pytest.fail('shutdown work ran'))
     future.add_done_callback(lambda future: pytest.fail('delivery ran'))
     manager.close()
+    assert not manager.finalized.is_set()
+    # This controlled runtime has no launched lanes; drain retained callback
+    # references using the same lane loop before waiting for finalization.
+    manager._run_notifications()
     manager.join(5)
     manager.close()
     assert isinstance(manager.completion_error, ManagementDeliveryFailed)
@@ -2358,6 +2363,9 @@ def test_delivered_callbacks_release_captured_objects_outside_locks(
                 register(index)
         assert future.result(5) == 7
         assert all(reference() is not None for reference in references)
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: future._record.delivery_ticket is not None, 5)
         dispatch.drain()
     else:
         future = manager.submit(lambda record: 7)
@@ -2464,3 +2472,59 @@ def test_caller_drain_defers_to_owner_adopted_before_claim(
         resume.set()
         caller.join(5)
         assert not caller.is_alive()
+
+
+@pytest.mark.skipif(platform.python_implementation() != 'CPython',
+                    reason='Requires synchronous reference destruction')
+def test_failed_delivery_releases_captures_on_callback_lane_outside_locks():
+    import gc
+    import weakref
+
+    dispatch = Dispatcher()
+    manager = ManagementRuntime(dispatch)
+    observed, probes = [], []
+    released, entered, cleanup_release = Event(), Event(), Event()
+    class Payload:
+        def __del__(self):
+            observed.append((execution_context(),
+                             future._condition._is_owned(),
+                             manager._condition._is_owned()))
+            probe = Thread(target=lambda: (manager.counts(), released.set()))
+            probes.append(probe)
+            probe.start()
+            probe.join(2)
+            observed.append(released.is_set())
+            entered.set()
+            observed.append(cleanup_release.wait(5))
+
+    def reject(ticket):
+        raise RuntimeError('reactor failed')
+    manager._dispatch = reject
+    try:
+        with manager._condition:
+            future = manager.submit(lambda record: 7)
+            payload = Payload()
+            reference = weakref.ref(payload)
+            future.add_done_callback(lambda future, payload=payload: None)
+            del payload
+        assert future.result(5) == 7
+        assert entered.wait(5)
+        manager.close()
+        assert not manager.finalized.is_set()
+        assert assert_runtime_counts(manager)['close'] == 1
+        cleanup_release.set()
+        manager.join(5)
+        gc.collect()
+        assert reference() is None
+        assert observed == [('callback', False, False), True, True]
+        assert released.is_set()
+        assert not manager._callback_garbage
+        assert all(value == 0 for value in assert_runtime_counts(manager).values())
+    finally:
+        cleanup_release.set()
+        manager.close()
+        dispatch.drain()
+        manager.join(5)
+        for probe in probes:
+            probe.join(5)
+            assert not probe.is_alive()

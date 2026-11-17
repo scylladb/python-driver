@@ -260,8 +260,10 @@ class _CallbackDelivery:
     def fail(self, error):
         with self.future._condition:
             self.error = error
+            retired = self.future._done_callbacks[:]
             self.future._done_callbacks.clear()
             self.cursor = 0
+            return retired
 
     def add(self, fn):
         if self.error is not None:
@@ -546,6 +548,7 @@ class ManagementRuntime:
         self._ready = deque()
         self._active_pools = set()
         self._notifications = deque()
+        self._callback_garbage = deque()
         self._records = set()
         self._keys = {}
         self._pool_credits = {}
@@ -909,7 +912,13 @@ class ManagementRuntime:
 
     def _delivery_failed_locked(self, record, error):
         for future in chain(record.futures, record.foreign_futures):
-            future._delivery.fail(error)
+            retired = future._delivery.fail(error)
+            if retired:
+                # Last captures can run arbitrary finalizers. Keep them off
+                # owners and retain cleanup until the callback lane drops them.
+                self._callback_garbage.append(retired)
+                self._cleanup_obligations += 1
+        self._condition.notify_all()
 
     def _queue_delivery_locked(self, record):
         if record.delivery:
@@ -1118,11 +1127,26 @@ class ManagementRuntime:
     def _run_notifications(self):
         while True:
             with self._condition:
-                while not self._notifications and not self._closing:
+                while (not self._notifications and not self._callback_garbage
+                       and not self._closing):
                     self._condition.wait()
-                if self._closing:
+                if self._callback_garbage:
+                    garbage = self._callback_garbage.popleft()
+                elif self._closing:
                     return
-                record, callback = self._notifications.popleft()
+                else:
+                    garbage = None
+                    record, callback = self._notifications.popleft()
+            if garbage is not None:
+                with _entered('callback'):
+                    try:
+                        garbage.clear()
+                    finally:
+                        garbage = None
+                        with self._condition:
+                            self._cleanup_obligations -= 1
+                            self._maybe_finalized_locked()
+                continue
             with _entered('callback', record):
                 try:
                     value = callback()
