@@ -16,7 +16,7 @@ import unittest
 
 from cassandra.application_info import ApplicationInfo
 from tests.integration import (TestCluster, get_client_options, use_single_node, remove_cluster,
-                               xfail_scylla_version_lt)
+                               requires_scylla, xfail_scylla_version_lt)
 
 
 def setup_module():
@@ -27,6 +27,7 @@ def teardown_module():
     remove_cluster()
 
 
+@requires_scylla
 @xfail_scylla_version_lt(reason='scylladb/scylla-enterprise#5467 - system.client_options is not yet supported',
                          scylla_version="2026.1.0")
 class ApplicationInfoTest(unittest.TestCase):

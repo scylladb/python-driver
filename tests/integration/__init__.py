@@ -409,6 +409,7 @@ lessthancass30 = unittest.skipUnless(CASSANDRA_VERSION < Version('3.0'), 'Cassan
 # 1. unittest doesn't skip setUpClass when used on class and we need it sometimes
 # 2. unittest doesn't have conditional xfail, and I prefer to use pytest than custom decorator
 # 3. unittest doesn't have a reason argument, so you don't see the reason in pytest report
+requires_scylla = pytest.mark.skipif(SCYLLA_VERSION is None, reason='Requires ScyllaDB')
 requires_collection_indexes = pytest.mark.skipif(SCYLLA_VERSION is not None and Version(get_scylla_version(SCYLLA_VERSION)) < Version('5.2'),
                                               reason='Scylla supports collection indexes from 5.2 onwards')
 requires_custom_indexes = pytest.mark.skipif(SCYLLA_VERSION is not None,
