@@ -24,7 +24,7 @@ from cassandra.policies import (ConstantReconnectionPolicy,
                                 ConstantSpeculativeExecutionPolicy, FallthroughRetryPolicy)
 from tests.driver_config_schema import validate_report
 from tests.integration import (TestCluster, get_client_options, use_single_node, remove_cluster,
-                               xfail_scylla_version_lt)
+                               requires_scylla, xfail_scylla_version_lt)
 
 
 def setup_module():
@@ -164,6 +164,7 @@ def _reported_config(cluster):
     return validate_report(reports[0])
 
 
+@requires_scylla
 @xfail_scylla_version_lt(reason='scylladb/scylla-enterprise#5467 - system.client_options is not yet supported',
                          scylla_version="2026.1.0")
 class DriverConfigReportingTest(unittest.TestCase):
