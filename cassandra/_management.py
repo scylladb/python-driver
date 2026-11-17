@@ -65,6 +65,7 @@ def _callback_runtime():
     """Identify L even when capture retirement has no live record."""
     if execution_context() == 'callback':
         return getattr(_context, 'runtime', None)
+    return None
 
 
 def assert_can_wait():

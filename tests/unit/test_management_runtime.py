@@ -665,7 +665,8 @@ def test_start_failure_retires_registered_lifetimes(
         # Startup failure must retire the lifetime without a subsequent close.
         manager.join(5)
         for _ in range(3):
-            assert manager.close() is manager.closed
+            closed = manager.close()
+            assert closed is manager.closed
         assert finalized == [(True, True, 0)]
         assert not manager._lifetimes
         assert all(not thread.is_alive() for thread in manager._threads)
