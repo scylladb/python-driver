@@ -21,6 +21,7 @@ import importlib.util
 from pathlib import Path
 from statistics import median
 import sys
+from threading import Event, get_ident
 from time import perf_counter_ns
 
 
@@ -42,11 +43,24 @@ def load_runtime(source):
 def sample(module, size, snapshots):
     deliveries = deque()
     manager = module.ManagementRuntime(deliveries.append, limit=size + 1)
-    manager.start()
+    ready, idle = Event(), set()
+    condition_wait = manager._condition.wait
+    def await_work(timeout=None):
+        # All runners enter this hook under the runtime condition. Thread.start
+        # alone can return before their initial context setup has finished.
+        idle.add(get_ident())
+        if len(idle) == len(manager._threads):
+            ready.set()
+        return condition_wait(timeout)
+    manager._condition.wait = await_work
     try:
+        manager.start()
+        if not ready.wait(5):
+            raise RuntimeError('Management runners did not become idle')
         def retain(record):
             return module._PENDING
         with manager._condition:
+            manager._condition.wait = condition_wait
             started = perf_counter_ns()
             for _ in range(size):
                 manager.submit(retain)
@@ -61,6 +75,7 @@ def sample(module, size, snapshots):
         snapshot_ns = perf_counter_ns() - started
         return admission_ns / size, snapshot_ns / snapshots
     finally:
+        manager._condition.wait = condition_wait
         manager.close()
         while deliveries:
             deliveries.popleft()()
