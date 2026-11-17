@@ -399,6 +399,23 @@ class _Record:
         self.released = False
 
 
+class _Notification:
+    """Transfer a callback from native admission to the callback lane."""
+
+    def __init__(self, callback):
+        self.callbacks = [callback]
+
+    def __call__(self, record):
+        runtime = record.runtime
+        with runtime._condition:
+            if runtime._closing or record.handler_done or record.released:
+                return _PENDING
+            record.notification = True
+            runtime._notifications.append((record, self.callbacks.pop()))
+            runtime._condition.notify_all()
+        return _PENDING
+
+
 class _PhysicalAttempt:
     """Own one worker-to-owner handoff through adoption or disposal.
 
@@ -803,16 +820,8 @@ class ManagementRuntime:
 
     def notify(self, callback, *, wait=False, timeout=None, budget='ordinary'):
         self._check_pid()
-        def admit(record):
-            with self._condition:
-                if self._closing or record.handler_done or record.released:
-                    return _PENDING
-                record.notification = True
-                self._notifications.append((record, callback))
-                self._condition.notify_all()
-            return _PENDING
-        return self.submit(admit, wait=wait, timeout=timeout, budget=budget,
-                           kind='notification')
+        return self.submit(_Notification(callback), wait=wait, timeout=timeout,
+                           budget=budget, kind='notification')
 
     @contextmanager
     def synchronous_reentry(self):
@@ -912,13 +921,15 @@ class ManagementRuntime:
 
     def _delivery_failed_locked(self, record, error):
         for future in chain(record.futures, record.foreign_futures):
-            retired = future._delivery.fail(error)
-            if retired:
-                # Last captures can run arbitrary finalizers. Keep them off
-                # owners and retain cleanup until the callback lane drops them.
-                self._callback_garbage.append(retired)
-                self._cleanup_obligations += 1
-        self._condition.notify_all()
+            self._retire_callbacks_locked(future._delivery.fail(error))
+
+    def _retire_callbacks_locked(self, callbacks):
+        if callbacks:
+            # Last captures can run arbitrary finalizers. Keep them off owners
+            # and retain cleanup until the callback lane drops them.
+            self._callback_garbage.append(callbacks)
+            self._cleanup_obligations += 1
+            self._condition.notify_all()
 
     def _queue_delivery_locked(self, record):
         if record.delivery:
@@ -1040,6 +1051,8 @@ class ManagementRuntime:
                 if future._delivery.record is record:
                     future._delivery.record = future._record
         record.foreign_futures.clear()
+        if isinstance(record.handler, _Notification):
+            self._retire_callbacks_locked(record.handler.callbacks)
         record.handler = None
         self._condition.notify_all()
         self._maybe_finalized_locked()
@@ -1200,7 +1213,8 @@ class ManagementRuntime:
         for record in tuple(self._records):
             self._finish(record, error=ManagementClosed(
                 'Management lifetime ended'))
-        for record, _ in self._notifications:
+        for record, callback in self._notifications:
+            self._retire_callbacks_locked([callback])
             record.notification = False
             self._release_locked(record)
         self._notifications.clear()

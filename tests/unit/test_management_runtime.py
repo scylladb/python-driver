@@ -2548,3 +2548,73 @@ def test_failed_delivery_releases_captures_on_callback_lane_outside_locks():
         for probe in probes:
             probe.join(5)
             assert not probe.is_alive()
+
+
+@pytest.mark.skipif(platform.python_implementation() != 'CPython',
+                    reason='Requires synchronous reference destruction')
+@pytest.mark.parametrize('stage', ['normal', 'queued', 'unadmitted'])
+def test_notification_capture_retires_on_callback_lane_outside_lock(stage):
+    manager = ManagementRuntime(Dispatcher())
+    entered, resume, retired = Event(), Event(), Event()
+    observed, calls, probes = [], [], []
+    class Callback:
+        def __call__(self):
+            calls.append(True)
+            entered.set()
+            assert resume.wait(5)
+            return 7
+
+        def __del__(self):
+            observed.append((execution_context(),
+                             manager._condition._is_owned()))
+            if stage == 'normal':
+                try:
+                    observed.append(manager.submit(lambda record: 9).result(2))
+                except BaseException as exc:
+                    observed.append(type(exc))
+            else:
+                progressed = Event()
+                probe = Thread(target=lambda: (manager.counts(),
+                                               progressed.set()))
+                probes.append(probe)
+                probe.start()
+                probe.join(2)
+                observed.append(progressed.is_set())
+            retired.set()
+
+    def block(*args):
+        entered.set()
+        assert resume.wait(5)
+    try:
+        if stage == 'queued':
+            manager.notify(block)
+            assert entered.wait(5)
+        elif stage == 'unadmitted':
+            manager.submit(block)
+            assert entered.wait(5)
+        future = manager.notify(Callback())
+        if stage == 'normal':
+            assert entered.wait(5)
+        if stage != 'unadmitted':
+            # Fence admission before releasing L or pruning its queue.
+            assert manager.submit(lambda record: 1).result(5) == 1
+        if stage != 'normal':
+            manager.close()
+        resume.set()
+        if stage == 'normal':
+            assert future.result(5) == 7
+        else:
+            with pytest.raises(ManagementClosed):
+                future.result(5)
+        assert retired.wait(5)
+        assert calls == ([True] if stage == 'normal' else [])
+        assert observed == [('callback', False),
+                            9 if stage == 'normal' else True]
+    finally:
+        resume.set()
+        manager.close()
+        manager.join(5)
+        for probe in probes:
+            probe.join(5)
+            assert not probe.is_alive()
+    assert all(value == 0 for value in assert_runtime_counts(manager).values())
