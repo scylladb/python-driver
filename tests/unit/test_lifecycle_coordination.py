@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from concurrent.futures import CancelledError, Future
+from concurrent.futures import CancelledError, Future, wait as wait_futures
 from threading import Barrier, Event, Lock, RLock, Thread, get_ident
 from unittest.mock import Mock, patch
 
@@ -352,6 +352,8 @@ def test_readiness_reconciles_newly_eligible_pools_at_full_capacity(
     host.set_down()
     manager = cluster._lifecycle._ensure_runtime()
     eligible, published = Event(), Event()
+    started, release, returned, fence = Event(), Event(), Event(), Event()
+    errors = []
     cluster.profile_manager.distance.side_effect = lambda current: (
         HostDistance.LOCAL if current is host or
         (current is other and eligible.is_set()) else HostDistance.IGNORED)
@@ -369,7 +371,7 @@ def test_readiness_reconciles_newly_eligible_pools_at_full_capacity(
         assert current is host and host.is_up
         eligible.set()
         # Readiness owns at least the last ordinary credit during fanout.
-        manager.limit = 1
+        manager.limit = manager.reentry_window = 1
         published.set()
     cluster.register_listener(Mock(**{'on_' + event: ready}))
     constructed = []
@@ -378,11 +380,34 @@ def test_readiness_reconciles_newly_eligible_pools_at_full_capacity(
                     _membership_lock=RLock())
         pool._lock_usable_connection.return_value = nullcontext(True)
         constructed.append(pool)
+        if current is other:
+            started.set()
+            assert release.wait(15), 'test did not release pool creation'
         return pool
-    with patch('cassandra.cluster.HostConnection', side_effect=construct):
+
+    def deliver():
         try:
             getattr(cluster, 'on_' + event)(host)
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            returned.set()
+
+    caller = Thread(target=deliver, daemon=True)
+    with patch('cassandra.cluster.HostConnection', side_effect=construct):
+        caller.start()
+        try:
             assert published.wait(5)
+            assert started.wait(5)
+            assert returned.wait(5), 'readiness blocked on reserved admission'
+            assert not errors
+            manager.notify(fence.set, wait=True, timeout=5).result(5)
+            assert fence.is_set()
+            with manager._condition:
+                assert manager._reentry_credits == 1
+                assert any(slot[1] is not None and slot[3] == 'reentry'
+                           for _, slot in manager._health.values())
+            release.set()
             with manager._condition:
                 assert manager._condition.wait_for(
                     lambda: all(other in s._pools for s in sessions)
@@ -393,7 +418,232 @@ def test_readiness_reconciles_newly_eligible_pools_at_full_capacity(
             assert len(constructed) == 4
             assert not host._currently_handling_node_up
         finally:
+            release.set()
             cluster.shutdown()
+            caller.join(5)
+            assert not caller.is_alive()
+
+
+@pytest.mark.parametrize('event', ['up', 'add'])
+@pytest.mark.parametrize('finish', ['ready', 'remove', 'shutdown'])
+def test_callback_pool_fanout_retains_unadmitted_work(
+        topology, monkeypatch, event, finish):
+    from contextlib import nullcontext
+    from cassandra._management import execution_context
+    cluster, _ = topology
+    coordinator = cluster._lifecycle
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    host.set_down()
+    manager = coordinator._ensure_runtime()
+    manager.limit = manager.reentry_window = 1
+    cluster.profile_manager.distance.side_effect = lambda current: (
+        HostDistance.LOCAL if current is host else HostDistance.IGNORED)
+    cluster.control_connection.on_up = Mock()
+    cluster.control_connection.on_add = Mock()
+    cluster.control_connection.on_remove = Mock()
+    started, release, returned, fence = Event(), Event(), Event(), Event()
+    errors, constructed, origins = [], [], []
+    sessions = [new_session_with_pool_state() for _ in range(2)]
+    for session in sessions:
+        session.cluster = cluster
+        session._management_runtime = manager
+        session._profile_manager = cluster.profile_manager
+        session._initial_connect_futures = set()
+        session.keyspace = None
+        cluster.sessions.add(session)
+    listener = Mock()
+    cluster.register_listener(listener)
+    submit = type(sessions[0])._submit_pool_creation_work
+
+    def observe_submission(self, *args, **kwargs):
+        origins.append((execution_context(), manager.counts()['ordinary']))
+        return submit(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(sessions[0]), '_submit_pool_creation_work',
+                        observe_submission)
+
+    def construct(current, *args, **kwargs):
+        pool = Mock(host=current, is_shutdown=False, _keyspace=None,
+                    _membership_lock=RLock())
+        pool._lock_usable_connection.return_value = nullcontext(True)
+        constructed.append(pool)
+        started.set()
+        assert release.wait(15), 'test did not release physical pool creation'
+        return pool
+
+    def deliver():
+        try:
+            getattr(cluster, 'on_' + event)(host)
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            returned.set()
+
+    monkeypatch.setattr('cassandra.cluster.HostConnection', construct)
+    caller = Thread(target=deliver, daemon=True)
+    stopper = None
+    caller.start()
+    try:
+        assert started.wait(5)
+        assert returned.wait(5), (
+            'internal fanout blocked the notification lane')
+        assert not errors
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: manager._credits == 0, 5)
+            assert manager._reentry_credits == 1
+            assert any(slot[1] is not None and slot[3] == 'reentry'
+                       for _, slot in manager._health.values())
+        deferred_session, = [session for session in sessions
+                             if session._pool_intents[host]._deferred_work]
+        deferred = deferred_session._pool_intents[host]
+        assert not deferred.completion.done()
+        manager.notify(fence.set).result(5)
+        assert fence.is_set(), 'unrelated notification waited for pool work'
+        assert origins == [('callback', 1), ('callback', 1)]
+        cluster.profile_manager.on_down.assert_not_called()
+
+        # New claims replace the retained submission but share its completion.
+        # Cancelling one exposed proxy must not discard another caller's work.
+        repeats = []
+
+        def renew():
+            for _ in range(2):
+                repeats.append(deferred_session.add_or_renew_pool(
+                    host, is_host_addition=(event == 'add')))
+
+        manager.notify(renew).result(5)
+        cancelled_callbacks = []
+        repeats[0].add_done_callback(lambda future: cancelled_callbacks.append(
+            wait_futures([future], timeout=0)))
+        assert repeats[0].cancel()
+        assert cancelled_callbacks[0].done == {repeats[0]}
+        assert not cancelled_callbacks[0].not_done
+        done, pending = wait_futures(repeats, timeout=0)
+        assert done == {repeats[0]}
+        assert pending == {repeats[1]}
+        assert not repeats[1].done()
+        with manager._condition:
+            key = deferred._completion
+            assert manager._health[id(key)][0] is key
+            assert sum(slot[3] == 'reentry'
+                       for _, slot in manager._health.values()) == 1
+        if finish == 'remove':
+            cluster.remove_host(host, refresh_nodes=False)
+            listener.on_remove.assert_called_once_with(host)
+            assert deferred.completion.result(5) is False
+        elif finish == 'shutdown':
+            stopper = Thread(target=cluster.shutdown, daemon=True)
+            stopper.start()
+            assert deferred.completion.result(5) is None
+        release.set()
+        if finish == 'ready':
+            with manager._condition:
+                assert manager._condition.wait_for(
+                    lambda: not manager._reentry_credits and
+                    not manager._credits and host.is_up and
+                    not host._currently_handling_node_up, 5)
+            assert all(host in session._pools for session in sessions)
+            assert len(constructed) == 2
+            assert repeats[1].result(5) is True
+            getattr(listener, 'on_' + event).assert_called_once_with(host)
+            cluster.profile_manager.on_down.assert_not_called()
+        else:
+            caller.join(5)
+            if stopper is not None:
+                stopper.join(5)
+                assert not stopper.is_alive()
+            with manager._condition:
+                assert manager._condition.wait_for(
+                    lambda: not manager._reentry_credits, 5)
+            assert all(host not in session._pools for session in sessions)
+            assert len(constructed) == 1
+            constructed[0].shutdown.assert_called_once_with()
+            assert repeats[1].result(5) is (
+                None if finish == 'shutdown' else False)
+        done, pending = wait_futures([repeats[1]], timeout=5)
+        assert done == {repeats[1]} and not pending
+        assert manager.high_waters['reentry'] == 1
+    finally:
+        release.set()
+        caller.join(5)
+        if stopper is not None:
+            stopper.join(5)
+            assert not stopper.is_alive()
+        assert not caller.is_alive()
+
+
+@pytest.mark.parametrize('supersession', ['host', 'pool'])
+def test_deferred_pool_retry_uses_current_host_and_pool_lifetime(
+        topology, monkeypatch, supersession):
+    from contextlib import nullcontext
+    from cassandra._management import compatibility_work
+    from cassandra.policies import SimpleConvictionPolicy
+    from cassandra.pool import Host
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    manager = cluster._lifecycle._ensure_runtime()
+    manager.limit = manager.reentry_window = 1
+    session = new_session_with_pool_state()
+    session.cluster = cluster
+    session._management_runtime = manager
+    session._profile_manager = cluster.profile_manager
+    session._initial_connect_futures = set()
+    session.keyspace = None
+    cluster.sessions.add(session)
+    cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+    physical = Future()
+    completions, constructed = [], []
+
+    def hold_capacity():
+        with compatibility_work(manager) as attach:
+            attach(physical)
+
+    def construct(current, *args, **kwargs):
+        pool = Mock(host=current, is_shutdown=False, _keyspace=None,
+                    _membership_lock=RLock())
+        pool._lock_usable_connection.return_value = nullcontext(True)
+        constructed.append(pool)
+        return pool
+
+    monkeypatch.setattr('cassandra.cluster.HostConnection', construct)
+    try:
+        manager.notify(hold_capacity).result(5)
+        manager.notify(lambda: completions.append(
+            session.add_or_renew_pool(host, False)),
+            wait=True, timeout=5).result(5)
+        old_intent = session._pool_intents[host]
+        assert old_intent._deferred_work
+        current = host
+        if supersession == 'host':
+            current = Host(DefaultEndPoint('192.168.2.2'),
+                           SimpleConvictionPolicy, host_id=host.host_id)
+            current.set_up()
+            cluster.metadata.remove_host(host)
+            cluster.metadata.add_or_return_host(current)
+        session.remove_pool(host)
+        assert completions[0].result(5) is False
+        manager.notify(lambda: completions.append(
+            session.add_or_renew_pool(current, False)),
+            wait=True, timeout=5).result(5)
+        new_intent = session._pool_intents[current]
+        assert (new_intent.pool_lifecycle_token is not
+                old_intent.pool_lifecycle_token)
+        assert new_intent._completion is not old_intent._completion
+        assert new_intent._deferred_work
+        with manager._condition:
+            assert id(old_intent._completion) not in manager._health
+        physical.set_result(True)
+        assert completions[1].result(5) is True
+        assert len(constructed) == 1
+        assert constructed[0].host is current
+        assert session._pools[current] is constructed[0]
+        assert completions[0].result(5) is False
+        assert manager.high_waters['reentry'] == 1
+    finally:
+        if not physical.done():
+            physical.set_result(False)
+        cluster.shutdown()
 
 
 @pytest.fixture
@@ -953,6 +1203,30 @@ def test_queued_addition_checks_identity_at_delivery(topology):
         assert old._is_removed
     callback.assert_not_called()
     assert cluster.metadata.get_host_by_host_id(old.host_id) is replacement
+
+
+@pytest.mark.parametrize(
+    'method', ['_submit_reconnect', 'submit_reconciliation'])
+@pytest.mark.parametrize('race', [False, True])
+def test_closed_coordinator_discards_reconnect_and_reconciliation(
+        topology, monkeypatch, method, race):
+    cluster, _ = topology
+    coordinator = cluster._lifecycle
+    callback = Mock()
+    if race:
+        ensure = coordinator._ensure_runtime
+
+        def close_before_start():
+            coordinator.close()
+            return ensure()
+
+        monkeypatch.setattr(coordinator, '_ensure_runtime', close_before_start)
+    else:
+        coordinator.close()
+    argument = (callback if method == '_submit_reconnect' else
+                Mock(_reconcile_pools=callback))
+    assert getattr(coordinator, method)(argument) is None
+    callback.assert_not_called()
 
 
 def test_retirement_during_readiness_reset_cannot_mark_host_ready(topology):
@@ -3101,7 +3375,8 @@ def test_negative_producer_survives_full_ordinary_admission(
         future.result(5)
     with manager._condition:
         assert manager._condition.wait_for(
-            lambda: id(host) not in manager._health, 5), 'idle host slot retained'
+            lambda: id(host) not in manager._health, 5), (
+            'idle host slot retained')
 
 
 def test_deferred_observation_replacement_keeps_latest_causal_order(topology):
@@ -3130,6 +3405,52 @@ def test_deferred_observation_replacement_keeps_latest_causal_order(topology):
     active.result(5)
     assert complete.wait(5)
     assert observed == [('dc2', 'rack2')]
+
+
+def test_async_down_follows_older_retained_host_observation(topology):
+    cluster, _ = topology
+    coordinator = cluster._lifecycle
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    manager = coordinator._ensure_runtime()
+    manager.limit = 2
+    lane_entered, lane_release = Event(), Event()
+    owner_entered, owner_release = Event(), Event()
+    positive, negative = Event(), Event()
+    order = []
+    active = owner = None
+    cluster._start_reconnector = Mock()
+    cluster.control_connection.on_down = Mock()
+    cluster.profile_manager.on_down.side_effect = lambda current: (
+        order.append('down'), negative.set())
+    try:
+        active = manager.notify(
+            lambda: (lane_entered.set(), lane_release.wait(5)))
+        assert lane_entered.wait(5)
+        owner = manager.submit(
+            lambda record: (owner_entered.set(), owner_release.wait(5)))
+        assert owner_entered.wait(5)
+        coordinator.submit_observation(
+            host, 'location', lambda: (order.append('older'), positive.set()),
+            wait=False)
+        assert id(host) in coordinator._pending_observations
+        lane_release.set()
+        active.result(5)
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: manager._credits == 1, 5)
+        assert cluster.on_down(host, False)
+        owner_release.set()
+        owner.result(5)
+        assert positive.wait(5)
+        assert negative.wait(5)
+        assert order == ['older', 'down']
+    finally:
+        lane_release.set()
+        owner_release.set()
+        manager.close()
+        futures = [future for future in (active, owner) if future is not None]
+        _, pending = wait_futures(futures, timeout=5)
+        assert not pending
 
 
 def test_deferred_positive_observation_follows_admitted_events(topology):
@@ -3210,7 +3531,8 @@ def test_transaction_readiness_never_waits_inside_notification_handler(
     from cassandra._management import execution_context
     class GuardedEvent(Event):
         def wait(self, timeout=None):
-            assert execution_context() != 'callback', 'handler waited for transaction caller'
+            assert execution_context() != 'callback', (
+                'handler waited for transaction caller')
             return super().wait(timeout)
     coordinator = LifecycleCoordinator()
     manager = coordinator._ensure_runtime()
@@ -3259,11 +3581,20 @@ def test_unknown_host_overload_is_explicit(topology):
 
 
 @pytest.mark.parametrize('race', [False, True])
-def test_coordinator_close_cannot_leave_first_runtime_open(monkeypatch, race):
+@pytest.mark.parametrize('custom', [False, True])
+def test_coordinator_close_cannot_leave_first_runtime_open(
+        monkeypatch, race, custom):
     from cassandra import _lifecycle
     from cassandra._management import ManagementClosed
-    coordinator = LifecycleCoordinator()
-    entered, release, closing, closure_claimed = Event(), Event(), Event(), Event()
+    class CustomLifetime:
+        is_shutdown = False
+        connection_class = type('CustomConnection', (), {})
+        metadata = Mock(all_hosts=Mock(return_value=()))
+
+    lifetime = CustomLifetime() if custom else None
+    coordinator = LifecycleCoordinator(lifetime)
+    entered, release, closing, closure_claimed = (
+        Event(), Event(), Event(), Event())
     original_idle_set = coordinator._idle.set
     def idle_set():
         if coordinator._closed:
@@ -3271,12 +3602,14 @@ def test_coordinator_close_cannot_leave_first_runtime_open(monkeypatch, race):
         original_idle_set()
     coordinator._idle.set = idle_set
     original_channel = _lifecycle.ReactorChannel
-    created, outcomes = [], []
+    created, channels, outcomes = [], [], []
     def channel(*args, **kwargs):
         if race:
             entered.set()
             assert release.wait(5)
-        return original_channel(*args, **kwargs)
+        result = original_channel(*args, **kwargs)
+        channels.append(result)
+        return result
     original_start = _lifecycle.ManagementRuntime.start
     def start(runtime):
         if runtime not in created:
@@ -3320,6 +3653,9 @@ def test_coordinator_close_cannot_leave_first_runtime_open(monkeypatch, race):
         assert created[0].finalized.is_set()
         assert created[0].closed.is_set()
         assert coordinator._runtime is None
+        if custom:
+            assert len(channels) == 1
+            assert not channels[0]._fallback._thread.is_alive()
     finally:
         release.set()
         starter.join(5)
@@ -3367,8 +3703,10 @@ def test_failed_async_handoff_releases_concurrent_drain():
     coordinator = LifecycleCoordinator()
     manager = coordinator._ensure_runtime()
     entered, reject, waiting, finished = Event(), Event(), Event(), Event()
-    callback_entered, release_callback, callback_ran = Event(), Event(), Event()
-    active = manager.notify(lambda: (callback_entered.set(), release_callback.wait(5)))
+    callback_entered, release_callback, callback_ran = (
+        Event(), Event(), Event())
+    active = manager.notify(
+        lambda: (callback_entered.set(), release_callback.wait(5)))
     assert callback_entered.wait(5)
     class RejectingExecutor:
         def submit(self, callback):
@@ -3420,7 +3758,8 @@ def test_async_submission_from_active_delivery_reuses_drainer():
     submitter.start()
     try:
         submitter.join(2)
-        assert not submitter.is_alive(), 'nested asynchronous admission lost its active drainer'
+        assert not submitter.is_alive(), (
+            'nested asynchronous admission lost its active drainer')
         assert order == ['outer', 'inner']
         executor.submit.assert_called_once_with(coordinator._drain_async)
         assert not coordinator._events
@@ -3442,7 +3781,8 @@ def test_actual_listener_sync_wrappers_finish_at_full_ordinary_capacity(
     cluster.executor = ThreadPoolExecutor(1)
     session = new_session_with_pool_state()
     session.cluster = cluster
-    session.execute = lambda statement: cluster.executor.submit(lambda: None).result(5)
+    session.execute = lambda statement: (
+        cluster.executor.submit(lambda: None).result(5))
     session._initial_connect_futures = set()
     session.shutdown = Mock()
     session._default_consistency_level = None
@@ -3498,7 +3838,8 @@ def test_actual_sync_refresh_waits_for_admission_before_side_effects(
         return original_wait(timeout)
     monkeypatch.setattr(manager._condition, 'wait', observe_admission_wait)
     control = cluster.control_connection.refresh_node_list_and_token_map
-    cluster.control_connection.refresh_node_list_and_token_map = Mock(return_value=True)
+    cluster.control_connection.refresh_node_list_and_token_map = (
+        Mock(return_value=True))
     def caller():
         caller_id.append(get_ident())
         cluster.refresh_nodes()
@@ -3508,7 +3849,9 @@ def test_actual_sync_refresh_waits_for_admission_before_side_effects(
     try:
         assert waiting.wait(5), 'caller never attempted blocked admission'
         assert not finished.is_set()
-        cluster.control_connection.refresh_node_list_and_token_map.assert_not_called()
+        (
+            cluster.control_connection.refresh_node_list_and_token_map
+            .assert_not_called())
         # Admission waits without retaining locks required by owner
         # publication.
         with cluster._lifecycle.transaction(drain=False), cluster._lock:
@@ -3516,7 +3859,9 @@ def test_actual_sync_refresh_waits_for_admission_before_side_effects(
         gate.set()
         held.result(5)
         assert finished.wait(5)
-        cluster.control_connection.refresh_node_list_and_token_map.assert_called_once_with(False)
+        (
+            cluster.control_connection.refresh_node_list_and_token_map
+            .assert_called_once_with(False))
     finally:
         gate.set()
         thread.join(5)
@@ -3661,8 +4006,10 @@ def test_managed_cluster_shutdown_defers_initial_pool_wait_and_retains_cleanup(
             if context == 'io':
                 cluster.connection_class._management_dispatch(shutdown)
             else:
-                manager.submit(shutdown, pool=object() if context == 'pool' else None)
-            assert returned.wait(5), 'shutdown waited on invoking execution context'
+                manager.submit(
+                    shutdown, pool=object() if context == 'pool' else None)
+            assert returned.wait(5), (
+                'shutdown waited on invoking execution context')
             assert cluster.is_shutdown
             assert manager.closed.is_set()
             assert not manager.finalized.is_set()
@@ -3670,6 +4017,8 @@ def test_managed_cluster_shutdown_defers_initial_pool_wait_and_retains_cleanup(
         finally:
             release.set()
         manager.join(5)
+        done, pending = wait_futures([initial], timeout=5)
+        assert done == {initial} and not pending
     assert session.is_shutdown
     candidate.shutdown.assert_called_once_with()
     assert cluster.executor._shutdown
@@ -3821,7 +4170,87 @@ def test_deferred_callbacks_release_idle_host_retention(topology):
         release.set()
 
 
-def test_new_location_joins_older_retained_batch_before_native_promotion(topology):
+@pytest.mark.parametrize(
+    'delivery', ['ordinary', 'deferred', 'reconciliation'])
+def test_lifecycle_delivery_failure_logs_and_releases_active_state(
+        topology, caplog, delivery):
+    cluster, _ = topology
+    coordinator = cluster._lifecycle
+    manager = coordinator._ensure_runtime()
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    entered, release, failed, following = Event(), Event(), Event(), Event()
+    order = []
+
+    def fail():
+        assert coordinator.delivering
+        with coordinator._lock:
+            assert coordinator._active_event and coordinator._draining
+            assert not coordinator._idle.is_set()
+        order.append('failed')
+        failed.set()
+        raise RuntimeError('lifecycle callback failed')
+
+    def follow():
+        order.append('following')
+        following.set()
+
+    active = None
+    try:
+        if delivery == 'ordinary':
+            with coordinator.transaction(drain=False):
+                coordinator.submit(fail)
+                coordinator.submit(follow)
+            drain_lifecycle(coordinator)
+        else:
+            manager.limit = 1
+            active = manager.notify(lambda: (entered.set(), release.wait(5)))
+            assert entered.wait(5)
+            if delivery == 'deferred':
+                coordinator.submit_observation(host, 'readiness', fail)
+                coordinator.submit_observation(host, 'location', follow)
+                assert len(coordinator._pending_observations[id(host)][1]) == 2
+                owner = host
+            else:
+                owner = Mock(_reconcile_pools=fail)
+                coordinator.submit_reconciliation(owner)
+                assert manager._health[id(owner)][1][1] is not None
+            release.set()
+        assert failed.wait(5)
+        if delivery == 'reconciliation':
+            # Wait for the failed retained record to release its credit before
+            # admitting another ordinary notification into the one-slot lane.
+            with manager._condition:
+                assert manager._condition.wait_for(
+                    lambda: not manager._records, 5)
+            with coordinator.transaction(drain=False):
+                coordinator.submit(follow)
+            drain_lifecycle(coordinator)
+        assert following.wait(5)
+        with manager._condition:
+            assert manager._condition.wait_for(lambda: not manager._records, 5)
+        drain_lifecycle(coordinator)
+        assert order == ['failed', 'following']
+        assert 'lifecycle callback failed' in caplog.text
+        expected = {
+            'ordinary': 'Error delivering host lifecycle notification',
+            'deferred': 'Error delivering deferred lifecycle observation',
+            'reconciliation': 'Error delivering session pool reconciliation',
+        }[delivery]
+        assert expected in caplog.text
+        with coordinator._lock:
+            assert not coordinator._active_event and not coordinator._draining
+            assert coordinator._idle.is_set()
+        if delivery != 'ordinary':
+            with manager._condition:
+                assert id(owner) not in manager._health
+    finally:
+        release.set()
+        if active is not None:
+            active.result(5)
+
+
+def test_new_location_joins_older_retained_batch_before_native_promotion(
+        topology):
     cluster, _ = topology
     coordinator = cluster._lifecycle
     host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
@@ -3857,7 +4286,8 @@ def test_native_callback_with_spare_capacity_does_not_join_its_child():
     completed = Event()
     outer = manager.notify(lambda: coordinator.submit(completed.set))
     try:
-        assert completed.wait(5), 'native callback waited for its own queued child'
+        assert completed.wait(5), (
+            'native callback waited for its own queued child')
         outer.result(5)
     finally:
         coordinator.close()
@@ -3911,7 +4341,8 @@ def test_completion_producers_retain_demand_at_full_capacity(
             assert all(manager._health[id(session)][1][1] is not None
                        for session in sessions)
         release.set()
-        assert completed.wait(5), 'completed work lost its lifecycle continuation'
+        assert completed.wait(5), (
+            'completed work lost its lifecycle continuation')
         if producer == 'preparation':
             assert host._lifecycle_preparation is None
             assert not host._currently_handling_node_up
@@ -3975,7 +4406,8 @@ def test_pool_completion_frees_only_executor_worker_before_listener_connect(
             [work], lambda results: cluster._on_up_pools_completed(
                 host, results, generation), host=host)
         release.set()
-        assert completed.wait(5), 'completion callback retained the only worker'
+        assert completed.wait(5), (
+            'completion callback retained the only worker')
         assert len(results) == 1
         work.result(5)
     finally:
@@ -4043,7 +4475,8 @@ def test_first_connect_does_not_join_shutdown_listener_under_cluster_lock(
     thread = Thread(target=connect, daemon=True)
     thread.start()
     try:
-        assert completed.wait(5), 'ADD listener could not acquire Cluster._lock'
+        assert completed.wait(5), (
+            'ADD listener could not acquire Cluster._lock')
         assert returned.wait(5), 'first connect could not finish'
         assert cluster.is_shutdown
         assert all(isinstance(error, DriverException) for error in errors)
@@ -4095,7 +4528,8 @@ def test_first_connect_policy_reentry_does_not_compete_with_waiter(
     try:
         assert entered.wait(5)
         threads[1].start()
-        assert all(event.wait(5) for event in finished), 'setup lock retained admission'
+        assert all(event.wait(5) for event in finished), (
+            'setup lock retained admission')
         assert not errors
         cluster.control_connection.refresh_schema.assert_called_once()
     finally:
@@ -4112,13 +4546,40 @@ def test_later_deferred_batch_follows_intervening_admission(topology):
     manager = coordinator._ensure_runtime()
     manager.limit = 3
     entered, release, completed = Event(), Event(), Event()
-    physical = [Future(), Future()]
+
+    class ControlledFuture(Future):
+        def __init__(self):
+            super().__init__()
+            self.registered = Event()
+
+        def add_done_callback(self, callback):
+            super().add_done_callback(callback)
+            self.registered.set()
+
+    physical = [ControlledFuture(), ControlledFuture()]
     class ControlledExecutor:
         def submit(self, function):
             return physical.pop(0)
     executor = ControlledExecutor()
     # Preserve the actual physical results independently of the work queue.
     results = tuple(physical)
+
+    def complete_physical(future):
+        errors = []
+        def complete():
+            try:
+                future.set_result(None)
+            except BaseException as exc:
+                errors.append(exc)
+        thread = Thread(target=complete, daemon=True)
+        thread.start()
+        thread.join(5)
+        if thread.is_alive():
+            manager.close()
+            thread.join(5)
+        assert not thread.is_alive(), 'physical result handoff did not finish'
+        assert not errors
+
     active = manager.notify(lambda: (entered.set(), release.wait(5)))
     order = []
     try:
@@ -4126,6 +4587,7 @@ def test_later_deferred_batch_follows_intervening_admission(topology):
         work = [manager.submit(
                     lambda r: manager.work(r, executor, lambda: None))
                 for _ in range(2)]
+        assert all(result.registered.wait(5) for result in results)
         with manager._condition:
             assert manager._condition.wait_for(
                 lambda: all(f._record.physical for f in work), 5)
@@ -4133,12 +4595,12 @@ def test_later_deferred_batch_follows_intervening_admission(topology):
             host, 'readiness', lambda: order.append('A'))
         with manager._condition:
             first_delivery = manager._health[id(host)][1][1]
-        results[0].set_result(None)
+        complete_physical(results[0])
         with manager._condition:
             assert manager._condition.wait_for(
                 lambda: any(item[1] is first_delivery
                             for item in manager._notifications), 5)
-        results[1].set_result(None)
+        complete_physical(results[1])
         work[1].result(5)
         with manager._condition:
             assert manager._condition.wait_for(
@@ -4151,12 +4613,15 @@ def test_later_deferred_batch_follows_intervening_admission(topology):
         drain_lifecycle(coordinator)
         assert completed.wait(5)
         assert order == ['A', 'C', 'B']
+        active.result(5)
     finally:
         release.set()
+        # Failed setup can precede completion callback registration on C.
+        # Close first so registration cannot wait on its own owner handoff.
+        manager.close()
         for result in results:
             if not result.done():
-                result.set_result(None)
-        active.result(5)
+                complete_physical(result)
 
 
 def test_distinct_failed_pool_recovery_slots_survive_overload(topology):
@@ -4247,7 +4712,8 @@ def test_profile_addition_waits_before_registration_and_allows_policy_reentry(
             assert 'eligible' not in cluster.profile_manager.profiles
             gate.set()
             held.result(5)
-            assert finished.wait(5), 'profile addition or nested refresh stalled'
+            assert finished.wait(5), (
+                'profile addition or nested refresh stalled')
             assert not errors
             assert 'eligible' in cluster.profile_manager.profiles
             assert len(session._pools) == len(cluster.metadata.all_hosts())
@@ -4271,7 +4737,8 @@ def test_managed_shutdown_closes_control_before_queued_executor_cleanup(
     def wait_for_responses(*args, **kwargs):
         assert kwargs.get('timeout') is None
         entered.set()
-        assert socket_closed.wait(5), 'control cleanup stayed behind its reader'
+        assert socket_closed.wait(5), (
+            'control cleanup stayed behind its reader')
         return responses
     def close():
         original_close()
@@ -4361,7 +4828,8 @@ def test_async_drainer_releases_only_executor_before_listener_connect(
     handoff = coordinator.submit_async(cluster.executor, listener)
     try:
         handoff.result(5)
-        assert completed.wait(5), 'executor drainer joined its own dependent listener'
+        assert completed.wait(5), (
+            'executor drainer joined its own dependent listener')
     finally:
         coordinator.close()
 
@@ -4419,7 +4887,8 @@ def test_closed_session_old_pool_aggregate_cannot_replace_current_up(topology):
         old_second.set_result(True)
         assert not completed.is_set()
         release.set()
-        assert completed.wait(5), 'stale aggregate erased current UP completion'
+        assert completed.wait(5), (
+            'stale aggregate erased current UP completion')
         with manager._condition:
             assert manager._condition.wait_for(
                 lambda: not host._currently_handling_node_up, timeout=5)
@@ -4496,8 +4965,10 @@ def test_profile_pool_timeout_bounds_physical_admission(topology, caller):
                 thread = Thread(target=add_profile, daemon=True)
                 thread.start()
             assert entered.wait(5)
-            assert completed.wait(3), 'pool timeout waited for physical capacity'
-            assert len(errors) == 1 and isinstance(errors[0], OperationTimedOut)
+            assert completed.wait(3), (
+                'pool timeout waited for physical capacity')
+            assert len(errors) == 1 and isinstance(
+                errors[0], OperationTimedOut)
             assert errors[0].timeout == 1
             assert manager._reentry_credits == (
                 manager.reentry_window if caller == 'listener' else 0)
@@ -4559,7 +5030,8 @@ def test_connect_reacquires_admission_outside_setup_lock(
             try:
                 notification.result(5)
             except ManagementClosed:
-                pass  # Shutdown can close its delivery receipt before retirement.
+                # Shutdown can close its delivery receipt before retirement.
+                pass
         cluster.shutdown()
 
 
@@ -4704,7 +5176,8 @@ def test_session_reconciliation_survives_retained_host_removal(topology):
         physical.set_result(None)
         assert manager._health[id(session)][1][1] is not None
         release.set()
-        assert completed.wait(5), 'removed host suppressed Session reconciliation'
+        assert completed.wait(5), (
+            'removed host suppressed Session reconciliation')
         session.update_created_pools.assert_called_once_with()
     finally:
         release.set()
@@ -4924,7 +5397,8 @@ def test_profile_pool_budget_excludes_policy_phase_readmission(
         assert occupied.wait(3)
         finish_policy.set()
         assert waiting.wait(3)
-        assert not returned.wait(0.1), 'policy readmission consumed pool budget'
+        assert not returned.wait(0.1), (
+            'policy readmission consumed pool budget')
         release.set()
         assert returned.wait(3)
         assert not errors
@@ -4973,3 +5447,150 @@ def test_application_shutdown_does_not_join_active_lifecycle_callback(
             assert not caller.is_alive()
         coordinator.close()
         manager.join(5)
+
+
+def test_completed_pool_retry_chain_retires_after_repeated_eligibility_changes(
+        topology):
+    from cassandra._management import compatibility_work
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    manager = cluster._lifecycle._ensure_runtime()
+    manager.limit = manager.reentry_window = 1
+    session = new_session_with_pool_state()
+    session.cluster = cluster
+    session._management_runtime = manager
+    session._profile_manager = cluster.profile_manager
+    session._initial_connect_futures = set()
+    session.submit = Mock(side_effect=AssertionError('capacity is occupied'))
+    cluster.sessions.add(session)
+    physical = Future()
+
+    def hold_capacity():
+        with compatibility_work(manager) as attach:
+            attach(physical)
+
+    try:
+        manager.notify(hold_capacity).result(5)
+        previous = None
+        for _ in range(4):
+            cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+            manager.notify(lambda: session.update_created_pools(hosts=[host]),
+                           wait=True, timeout=5).result(5)
+            intent = session._pool_intents[host]
+            assert intent._deferred_work
+            assert intent._completion is not previous
+            assert not intent.completion.done()
+            with manager._condition:
+                assert id(intent._completion) in manager._health
+            cluster.profile_manager.distance.return_value = (
+                HostDistance.IGNORED)
+            manager.notify(lambda: session.update_created_pools(hosts=[host]),
+                           wait=True, timeout=5).result(5)
+            assert intent.completion.result(5) is True
+            with manager._condition:
+                assert id(intent._completion) not in manager._health
+                assert not any(slot[3] == 'reentry'
+                               for _, slot in manager._health.values())
+                assert manager._reentry_credits == 1
+            previous = intent._completion
+        session.submit.assert_not_called()
+    finally:
+        if not physical.done():
+            physical.set_result(False)
+        cluster.shutdown()
+
+
+def test_session_shutdown_does_not_join_retained_reconciliation(topology):
+    from cassandra._management import compatibility_work
+    cluster, _ = topology
+    coordinator = cluster._lifecycle
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    other = cluster.metadata.get_host_by_host_id(HOST_ID_1)
+    host.set_down()
+    manager = coordinator._ensure_runtime()
+    manager.limit = manager.reentry_window = 1
+    session = new_session_with_pool_state()
+    session.cluster = cluster
+    session._management_runtime = manager
+    session._profile_manager = cluster.profile_manager
+    session._initial_connect_futures = set()
+    cluster.sessions.add(session)
+    cluster.control_connection.on_up = Mock()
+    physical = Future()
+    occupied, release_lane, entered, release_policy = (
+        Event(), Event(), Event(), Event())
+    produced, returned = Event(), Event()
+    errors = []
+
+    def distance(current):
+        if current is other:
+            entered.set()
+            assert release_policy.wait(10), 'test did not release policy'
+        return HostDistance.LOCAL if current is host else HostDistance.IGNORED
+
+    cluster.profile_manager.distance.side_effect = distance
+
+    def hold_capacity():
+        with compatibility_work(manager) as attach:
+            attach(physical)
+
+    def produce():
+        try:
+            cluster.on_up(host)
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            produced.set()
+
+    def shutdown():
+        try:
+            session.shutdown()
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            returned.set()
+
+    producer = Thread(target=produce, daemon=True)
+    caller = Thread(target=shutdown, daemon=True)
+    try:
+        manager.notify(hold_capacity).result(5)
+        producer.start()
+        assert produced.wait(5)
+        assert not errors
+        intent = session._pool_intents[host]
+        assert intent._deferred_work and not intent.completion.done()
+        active = manager.notify(
+            lambda: (occupied.set(), release_lane.wait(10)),
+            wait=True, timeout=5)
+        assert occupied.wait(5)
+        coordinator.submit_reconciliation(session)
+        with manager._condition:
+            assert manager._health[id(session)][1][1] is not None
+        release_lane.set()
+        assert entered.wait(5)
+        with manager._condition:
+            # Admit the result behind the active retained reconciliation.
+            manager.limit = 2
+        caller.start()
+        assert returned.wait(3), 'Session shutdown joined retained callback'
+        assert not errors
+        assert intent.completion.result(5) is None
+        assert not coordinator.closed
+        assert not release_policy.is_set()
+        release_policy.set()
+        active.result(5)
+        await_lifecycle(coordinator)
+        with manager._condition:
+            assert id(session) not in manager._health
+    finally:
+        release_lane.set()
+        release_policy.set()
+        if producer.ident is not None:
+            producer.join(5)
+        if caller.ident is not None:
+            caller.join(5)
+        if not physical.done():
+            physical.set_result(False)
+        cluster.shutdown()
+        assert not producer.is_alive()
+        assert not caller.is_alive()
