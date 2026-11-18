@@ -317,7 +317,7 @@ class _CallbackDelivery:
                 if not terminal:
                     return
                 if not target.released:
-                    target.runtime._queue_delivery_locked(target)
+                    target.runtime._queue_delivery_locked(target, self.future)
                     return
             # Released callbacks share a caller-side drainer; a concurrent
             # registrant may leave its callback to the active drainer.
@@ -817,6 +817,11 @@ class ManagementRuntime:
         self._finish(future._record,
                      error=ManagementSuperseded('Operation superseded'))
 
+    def _complete_compatibility_locked(self, record):
+        self._finish(record)
+        record.physical -= 1
+        self._release_locked(record)
+
     def work(self, record, executor, function, *, accept=lambda value: value,
              dispose=lambda value: None):
         """Reserve result delivery before physical work, on C/P only.
@@ -939,7 +944,7 @@ class ManagementRuntime:
     def _schedule_callbacks(self, future):
         with self._condition:
             record = future._record
-            self._queue_delivery_locked(record)
+            self._queue_delivery_locked(record, future)
 
     def _delivery_failed_locked(self, record, error):
         for future in chain(record.futures, record.foreign_futures):
@@ -953,13 +958,15 @@ class ManagementRuntime:
             self._capture_obligations += 1
             self._condition.notify_all()
 
-    def _queue_delivery_locked(self, record):
+    def _queue_delivery_locked(self, record, future=None):
         if record.delivery:
             return
+        futures = ((future,) if future is not None else
+                   chain(record.futures, record.foreign_futures))
         if not any(
                 future.done() and
                 future._delivery.pending
-                for future in chain(record.futures, record.foreign_futures)):
+                for future in futures):
             return
         if self.completion_error is not None:
             self._delivery_failed_locked(record, self.completion_error)
@@ -1075,6 +1082,8 @@ class ManagementRuntime:
         record.foreign_futures.clear()
         if isinstance(record.handler, _Notification):
             self._retire_captures_locked(record.handler.callbacks)
+        elif record.handler is not None:
+            self._retire_captures_locked([record.handler])
         record.handler = None
         self._condition.notify_all()
         self._maybe_finalized_locked()
@@ -1428,9 +1437,7 @@ class _CompatibilityCall:
         if record is not None:
             self.runtime._check_pid()
             with self.runtime._condition:
-                self.runtime._finish(record)
-                record.physical -= 1
-                self.runtime._release_locked(record)
+                self.runtime._complete_compatibility_locked(record)
 
 
 @contextmanager
@@ -1494,9 +1501,7 @@ def compatibility_work(runtime):
             if completed:
                 return
             completed = True
-            runtime._finish(record)
-            record.physical -= 1
-            runtime._release_locked(record)
+            runtime._complete_compatibility_locked(record)
 
     def attach(work):
         nonlocal attached

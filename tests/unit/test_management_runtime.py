@@ -1,7 +1,7 @@
 from collections import deque
 from concurrent.futures import (
     Future, ThreadPoolExecutor, as_completed, wait, TimeoutError)
-from threading import Barrier, Event, Lock, Thread, get_ident
+from threading import Barrier, Event, Lock, Thread, current_thread, get_ident
 import platform
 
 import pytest
@@ -92,6 +92,72 @@ def runtime(monkeypatch):
             finally:
                 runtime.join(5)
     assert all(value == 0 for value in assert_runtime_counts(runtime).values())
+
+
+def test_coalesced_cancellation_bookkeeping_is_linear(monkeypatch):
+    manager = ManagementRuntime(Dispatcher(), limit=64)
+    done_checks = 0
+    done = management.OperationFuture.done
+    def counted_done(future):
+        nonlocal done_checks
+        done_checks += 1
+        return done(future)
+    try:
+        futures = [manager.submit(lambda record: management._PENDING,
+                                  key='shared') for _ in range(64)]
+        assert futures[0]._record.started.wait(5)
+        monkeypatch.setattr(management.OperationFuture, 'done', counted_done)
+        for future in futures:
+            assert future.cancel()
+        assert done_checks <= 2 * len(futures)
+    finally:
+        manager.close()
+        manager.join(5)
+
+
+@pytest.mark.skipif(platform.python_implementation() != 'CPython',
+                    reason='Requires synchronous reference destruction')
+@pytest.mark.parametrize('pool', [None, 'pool'])
+def test_handler_captures_retire_on_callback_lane_outside_locks(pool):
+    manager = ManagementRuntime(Dispatcher())
+    observed, probes = [], []
+    entered, released, cleanup_release = Event(), Event(), Event()
+    class Payload:
+        def __del__(self):
+            observed.append((execution_context(),
+                             manager._condition._is_owned()))
+            probe = Thread(target=lambda: (manager.counts(), released.set()),
+                           daemon=True)
+            probes.append(probe)
+            probe.start()
+            probe.join(2)
+            observed.append(released.is_set())
+            entered.set()
+            if released.is_set():
+                observed.append(cleanup_release.wait(5))
+
+    try:
+        with manager._condition:
+            payload = Payload()
+            future = manager.submit(lambda record, payload=payload: 7,
+                                    pool=pool)
+            del payload
+        assert future.result(5) == 7
+        assert entered.wait(5)
+        assert observed == [('callback', False), True]
+        manager.close()
+        assert not manager.finalized.is_set()
+        assert manager.counts()['close'] == 0
+        cleanup_release.set()
+        manager.join(5)
+        assert observed == [('callback', False), True, True]
+    finally:
+        cleanup_release.set()
+        manager.close()
+        manager.join(5)
+        for probe in probes:
+            probe.join(5)
+            assert not probe.is_alive()
 
 
 def test_fifo_one_owner_and_exception_progress(runtime):
@@ -554,7 +620,7 @@ def test_completed_executor_future_does_not_dispose_on_registering_owner(
                 return physical
         future = manager.submit(lambda record: manager.work(
             record, ClosingExecutor(), lambda: resource,
-            dispose=lambda value: disposal_threads.append(get_ident())))
+            dispose=lambda value: disposal_threads.append(current_thread())))
         with pytest.raises(ManagementClosed):
             future.result(5)
         # Shutdown publishes the native Future before executor submission has
@@ -562,8 +628,7 @@ def test_completed_executor_future_does_not_dispose_on_registering_owner(
         assert completed.wait(5)
     manager.join(5)
     assert len(disposal_threads) == 1
-    assert disposal_threads[0] not in {
-        thread.ident for thread in manager._threads}
+    assert disposal_threads[0] not in manager._threads
     assert manager.counts()['ordinary'] == 0
 
 
@@ -585,9 +650,12 @@ def test_interrupted_physical_callback_registration_releases_once(
         record, PendingExecutor(), lambda: pytest.fail('cancelled work ran')))
     with pytest.raises(KeyboardInterrupt, match='registration interrupted'):
         future.result(5)
-    assert manager.submit(lambda record: 25).result(5) == 25
+    second = manager.submit(lambda record: 25)
+    assert second.result(5) == 25
     assert physical.cancelled()
     with manager._condition:
+        assert manager._condition.wait_for(
+            lambda: future._record.released and second._record.released, 5)
         assert future._record.physical == 0
         assert manager.counts()['ordinary'] == 0
 
@@ -2273,6 +2341,7 @@ def test_count_snapshots_do_not_enumerate_retained_records():
         manager._records = records
         manager.close()
         dispatch.drain()
+        manager._run_notifications()
         manager.join(5)
     assert all(future.done() for future in futures)
     assert all(value == 0 for value in assert_runtime_counts(manager).values())
@@ -2306,6 +2375,7 @@ def test_shutdown_prunes_handlers_but_retains_result_mailbox_counts(pool):
         manager._release_locked(record)
     assert assert_runtime_counts(manager)['mailbox'] == 0
     dispatch.drain()
+    manager._run_notifications()
     manager.join(5)
     assert results == ['result', 'callback']
     assert all(value == 0 for value in assert_runtime_counts(manager).values())
@@ -2320,6 +2390,8 @@ def test_delivery_counts_retain_active_ticket_after_dispatch_failure(
         first.add_done_callback(
             lambda future: (entered.set(), release.wait(5)))
     assert first.result(5) == 1
+    with manager._condition:
+        assert first._record.delivery_ticket is not None
     reactor = Thread(target=dispatch.drain)
     reactor.start()
     try:
@@ -2479,8 +2551,10 @@ def test_runtime_fixture_reports_owner_counter_failure_without_stranding(
     monkeypatch.setattr(manager, '_observe_counts_locked', inconsistent_counts)
     delivered = []
     try:
-        future = manager.submit(lambda record: 7)
-        future.add_done_callback(lambda done: delivered.append(done.result()))
+        with manager._condition:
+            future = manager.submit(lambda record: 7)
+            future.add_done_callback(
+                lambda done: delivered.append(done.result()))
         assert future.result(5) == 7
         dispatch.drain()
         with pytest.raises(AssertionError, match='mailbox count:'):
@@ -2617,6 +2691,8 @@ def test_retired_foreign_delivery_does_not_retain_later_results(runtime):
         references.append(weakref.ref(following.result()))
         previous = following
     del previous, following
+    # Handler captures retire on L after their records release admission.
+    manager.notify(lambda: None).result(5)
     gc.collect()
     assert all(reference() is None for reference in references)
     assert first._delivery.record is first._record
@@ -2696,10 +2772,13 @@ def test_failed_delivery_releases_captures_on_callback_lane_outside_locks():
             del payload
         assert future.result(5) == 7
         assert entered.wait(5)
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: future._record.released, 5)
         manager.close()
         assert not manager.finalized.is_set()
         assert assert_runtime_counts(manager)['close'] == 0
-        assert manager._capture_obligations == 1
+        assert manager._capture_obligations == 2  # Callback and handler.
         assert manager.high_waters['close'] == 0
         cleanup_release.set()
         manager.join(5)
