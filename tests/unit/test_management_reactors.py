@@ -7,12 +7,16 @@ from collections import deque
 from contextlib import contextmanager
 from concurrent.futures import CancelledError, Future
 from threading import Event, Thread, current_thread, get_ident
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
 from cassandra import DependencyException
 from cassandra._management import (
-    ManagementRuntime, ReactorChannel, execution_context)
+    ManagementContextError, ManagementRuntime, ReactorChannel,
+    execution_context)
+from cassandra.cluster import Cluster, ExecutionProfile, Session
 
 
 def reactor_module(reactor):
@@ -63,7 +67,7 @@ def connection_class(request):
                             'asyncore': 'AsyncoreConnection'}[request.param])
 
 
-def test_idle_reactor_completion_runs_on_io_thread(connection_class):
+def test_idle_reactor_completion_and_raw_io_sync_guard(connection_class):
     channel = ReactorChannel(connection_class)
     for _ in range(3):
         finished = Event()
@@ -71,6 +75,18 @@ def test_idle_reactor_completion_runs_on_io_thread(connection_class):
         def on_io():
             assert execution_context() is None  # Ordinary ResponseFuture context.
             assert connection_class._management_in_context()
+            cluster = SimpleNamespace(connection_class=connection_class,
+                                      _lifecycle=None,
+                                      control_connection=Mock())
+            session = SimpleNamespace(cluster=cluster, execute=Mock())
+            for call in (lambda: Cluster.connect(cluster),
+                         lambda: Cluster.refresh_nodes(cluster),
+                         lambda: Cluster.refresh_schema_metadata(cluster),
+                         lambda: Session.set_keyspace(session, 'ks')):
+                with pytest.raises(ManagementContextError):
+                    call()
+            assert cluster.control_connection.mock_calls == []
+            session.execute.assert_not_called()
             observations.append(get_ident())
             finished.set()
         channel.dispatch(on_io)
@@ -1705,3 +1721,55 @@ def test_start_interrupted_after_bootstrap_preserves_current_runner(monkeypatch,
         for thread in threads:
             thread.join(5)
             assert not thread.is_alive()
+
+
+def test_channel_startup_failure_unwinds_all_management_threads():
+    from cassandra._lifecycle import LifecycleCoordinator
+    class FailingConnection:
+        @classmethod
+        def initialize_reactor(cls):
+            pass
+        @classmethod
+        def _management_in_context(cls):
+            return False
+        @classmethod
+        def _management_dispatch(cls, callback):
+            raise RuntimeError('bridge admission failed')
+    # SimpleNamespace is not weak-referenceable; use an ordinary test lifetime.
+    class Lifetime:
+        pass
+    lifetime = Lifetime()
+    lifetime.connection_class = FailingConnection
+    lifetime.is_shutdown = False
+    coordinator = LifecycleCoordinator(lifetime)
+    import threading
+    before = {thread.ident for thread in threading.enumerate()
+              if thread.name.startswith('cassandra-management-')}
+    with pytest.raises(RuntimeError, match='bridge admission failed'):
+        coordinator._ensure_runtime()
+    assert coordinator._runtime is None
+    after = {thread.ident for thread in threading.enumerate()
+             if thread.name.startswith('cassandra-management-')}
+    assert after == before
+
+
+def test_custom_connection_without_private_hooks_keeps_io_class():
+    from cassandra.connection import Connection
+    class CustomConnection(Connection):
+        initialize_reactor = Mock()
+    cluster = Cluster(connection_class=CustomConnection)
+    try:
+        manager = cluster._lifecycle._ensure_runtime()
+        delivered = Event()
+        receipt = manager.submit(lambda record: True)
+        receipt.add_done_callback(lambda future: delivered.set())
+        assert receipt.result(5) is True
+        assert delivered.wait(5)
+        assert cluster.connection_class is CustomConnection
+        CustomConnection.initialize_reactor.assert_not_called()
+        # A synchronous API can enter its compatibility phase with this class.
+        cluster.add_execution_profile('custom', ExecutionProfile())
+    finally:
+        cluster.shutdown()
+        if cluster._lifecycle._runtime is not None:
+            cluster._lifecycle._runtime.join(5)

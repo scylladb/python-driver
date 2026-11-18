@@ -1192,6 +1192,52 @@ def test_result_reserved_before_close_is_still_disposed(runtime, pool):
         thread.ident for thread in manager._threads}
 
 
+@pytest.mark.parametrize('health_notification', [False, True])
+def test_detached_coordinator_does_not_keep_runtime_threads_alive(
+        health_notification):
+    import gc
+    import weakref
+    from functools import partial
+    from cassandra._lifecycle import LifecycleCoordinator
+    coordinator = LifecycleCoordinator()
+    coordinator.submit(lambda: None)
+    manager = coordinator._runtime
+    reference = weakref.ref(coordinator)
+    release = Event()
+    try:
+        if health_notification:
+            entered, delivered = Event(), Event()
+            def hold():
+                entered.set()
+                assert release.wait(5)
+            def completed(callback):
+                callback()
+                delivered.set()
+            manager.limit = 1
+            manager.notify(hold, wait=True, timeout=5)
+            assert entered.wait(5)
+            incarnation = object()
+            manager.register_health(incarnation)
+            manager.observe_negative(
+                incarnation, None, partial(completed, coordinator.drain))
+            release.set()
+            assert delivered.wait(5)
+        # Lifecycle idle is signalled inside its callback, before the native
+        # notification reservation finishes. A FIFO fence passes the earlier
+        # C admission and L callback frames before testing idle retention.
+        manager.notify(lambda: None, wait=True, timeout=5).result(5)
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: not manager._records, 5)
+        del coordinator
+        gc.collect()
+        assert reference() is None
+        manager.join(5)
+        assert all(not thread.is_alive() for thread in manager._threads)
+    finally:
+        release.set()
+        manager.close()
+        manager.join(5)
 
 
 def test_synchronous_admission_waits_without_allocating_pending_records(
