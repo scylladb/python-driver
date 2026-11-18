@@ -856,6 +856,91 @@ class ControlConnectionTest(unittest.TestCase):
         # the control connection should have slept until it hit the limit
         assert self.time.clock >= self.cluster.max_schema_agreement_wait
 
+    def test_schema_agreement_caps_retry_sleep_by_remaining_budget(self):
+        control = self.control_connection
+        self.cluster.max_schema_agreement_wait = 0.1
+        self.connection.peer_results[1][1][2] = 'b'
+        responses = self.connection.wait_for_responses.return_value
+        get_mismatches = control._get_schema_mismatches
+
+        for query_duration, evaluation_duration, expected_sleep in (
+                (0, 0, 0.1), (0.09, 0, 0.01), (0, 0.09, 0.01),
+                (0.1, 0, None), (0.15, 0, None), (0, 0.1, None)):
+            with self.subTest(query_duration=query_duration,
+                              evaluation_duration=evaluation_duration):
+                clock = FakeTime()
+                control._time = clock
+                self.connection.wait_for_responses.reset_mock()
+
+                def query(*args, **kwargs):
+                    clock.clock += query_duration
+                    return responses
+
+                def evaluate(*args):
+                    clock.clock += evaluation_duration
+                    return get_mismatches(*args)
+
+                self.connection.wait_for_responses.side_effect = query
+                with (
+                    patch.object(clock, 'sleep', wraps=clock.sleep) as sleep,
+                    patch.object(control, '_get_schema_mismatches',
+                                 side_effect=evaluate),
+                ):
+                    assert not control._wait_for_schema_agreement()
+
+                self.connection.wait_for_responses.assert_called_once()
+                query_args = self.connection.wait_for_responses.call_args
+                assert query_args.kwargs['timeout'] == 0.1
+                if expected_sleep is None:
+                    sleep.assert_not_called()
+                else:
+                    sleep.assert_called_once()
+                    assert sleep.call_args.args[0] == pytest.approx(
+                        expected_sleep)
+                assert clock.clock == pytest.approx(
+                    max(0.1, query_duration + evaluation_duration))
+
+    def test_wait_for_schema_agreement_preserves_retry_interval(self):
+        self.connection.peer_results[1][1][2] = 'b'
+        responses = self.connection.wait_for_responses.return_value
+
+        def query(*args, **kwargs):
+            if self.connection.wait_for_responses.call_count == 2:
+                self.connection.peer_results[1][1][2] = 'a'
+            return responses
+
+        self.connection.wait_for_responses.side_effect = query
+        with patch.object(self.time, 'sleep', wraps=self.time.sleep) as sleep:
+            agreed = self.control_connection._wait_for_schema_agreement(
+                wait_time=1)
+            assert agreed
+
+        assert self.connection.wait_for_responses.call_count == 2
+        sleep.assert_called_once_with(0.2)
+        assert self.time.clock == 0.2
+
+    def test_wait_for_schema_agreement_uses_explicit_wait_budget(self):
+        self.cluster.max_schema_agreement_wait = 0.05
+        self.connection.peer_results[1][1][2] = 'b'
+
+        with patch.object(self.time, 'sleep', wraps=self.time.sleep) as sleep:
+            agreed = self.control_connection._wait_for_schema_agreement(
+                wait_time=0.1)
+            assert not agreed
+
+        sleep.assert_called_once_with(0.1)
+        assert self.time.clock == 0.1
+
+    def test_wait_for_schema_agreement_skips_nonpositive_wait_budget(self):
+        for wait_time in (0, -1):
+            with self.subTest(wait_time=wait_time):
+                agreed = self.control_connection._wait_for_schema_agreement(
+                    wait_time=wait_time)
+                assert agreed
+
+        self.connection.wait_for_responses.assert_not_called()
+        assert self.time.clock == 0
+
     def test_wait_for_schema_agreement_skipping(self):
         """
         If rpc_address or schema_version isn't set, the host should be skipped
