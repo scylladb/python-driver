@@ -857,7 +857,7 @@ class TestTabletsRoutingV2Integration:
 
             assert result.response_future.message.routing_statement_index == 0
             tablet, token = self._cached_tablet(bound)
-            # The batch was written at LOCAL_ONE: read at LOCAL_QUORUM, so
+            # The batch was written at LOCAL_QUORUM: read at LOCAL_QUORUM, so
             # the replica that acknowledged it is read too.
             token_query = SimpleStatement(
                 f"SELECT token(pk1, pk2) FROM test_v2.{table} WHERE pk1 = 1 AND pk2 = 2",
@@ -889,7 +889,7 @@ class TestTabletsRoutingV2Integration:
 
         assert result.response_future.message.routing_statement_index == 0
         # The batch wrote the row, so the server can compute its token. It was
-        # written at LOCAL_ONE: read at LOCAL_QUORUM, so the replica that
+        # written at LOCAL_QUORUM: read at LOCAL_QUORUM, so the replica that
         # acknowledged it is read too.
         token_query = SimpleStatement(
             f"SELECT token(pk1, pk2) FROM test_v2.{table} WHERE pk1 = %s AND pk2 = %s",
