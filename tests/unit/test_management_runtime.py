@@ -922,11 +922,13 @@ def test_post_terminal_owner_callbacks_use_current_charged_batch(runtime):
     manager, dispatch = runtime
     old = manager.submit(lambda record: 3)
     assert old.result(5) == 3
+    wait_for_retirement(manager, old)
     calls = []
     def handler(record):
         for i in range(20):
             old.add_done_callback(
                 lambda f, i=i: calls.append((i, execution_context())))
+        assert old._delivery.record is record
         assert calls == []
     current = manager.submit(handler)
     current.result(5)
@@ -2645,9 +2647,12 @@ def test_runtime_fixture_reports_owner_counter_failure_without_stranding(
             manager._mailbox_pending -= 1
     monkeypatch.setattr(manager, '_observe_counts_locked', inconsistent_counts)
     delivered = []
+    def handler(record):
+        manager._observe_counts_locked()
+        return 7
     try:
         with manager._condition:
-            future = manager.submit(lambda record: 7)
+            future = manager.submit(handler)
             future.add_done_callback(
                 lambda done: delivered.append(done.result()))
         assert future.result(5) == 7
@@ -3024,6 +3029,33 @@ def test_open_notification_retirement_guards_same_lane_waits(mode):
         manager.close()
         manager.join(5)
     assert all(value == 0 for value in assert_runtime_counts(manager).values())
+
+
+@pytest.mark.skipif(platform.python_implementation() != 'CPython',
+                    reason='Requires synchronous reference destruction')
+def test_consumed_health_handler_captures_retire_on_callback_lane():
+    manager = ManagementRuntime(Dispatcher())
+    applied, retired = Event(), Event()
+    observed = []
+    class Apply:
+        def __call__(self):
+            applied.set()
+
+        def __del__(self):
+            observed.append((execution_context(),
+                             manager._condition._is_owned()))
+            retired.set()
+
+    try:
+        incarnation = object()
+        manager.register_health(incarnation)
+        assert manager.observe_negative(incarnation, Apply())
+        assert applied.wait(5)
+        assert retired.wait(5)
+        assert observed == [('callback', False)]
+    finally:
+        manager.close()
+        manager.join(5)
 
 
 @pytest.mark.skipif(platform.python_implementation() != 'CPython',

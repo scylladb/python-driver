@@ -1127,11 +1127,15 @@ class ManagementRuntime:
                 health = next((slot for slot in self._health.values()
                                if slot.apply is not None), None)
                 if health is not None:
-                    callback, health.apply = health.apply, None
                     self._sequence += 1
                     record = _Record(
                         self, Envelope(self._sequence, 'health', None,
-                                       self.lifetime, ()), None, None, None)
+                                       self.lifetime, ()), health.apply,
+                        None, None)
+                    health.apply = None
+                    # Keep the apply capture on its record until execution
+                    # retires; the owner stack holds only this adapter.
+                    callback = lambda: record.handler()
                     self._records.add(record)
                     record.executing = True
                     native_health = True
