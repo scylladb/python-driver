@@ -18,6 +18,9 @@ Compatibility Changes
   failure applies to truthy values other than ``Host`` instances passed as
   ``host=`` to ``Session.execute()`` or ``Session.execute_async()``. Asynchronous
   calls deliver the error through their ``ResponseFuture`` (#1164).
+* ``Session.prepare()`` now uses ``client_protocol_handler`` to decode PREPARE
+  responses. Custom handlers must support PREPARE responses as well as query
+  execution responses. Internal trace lookups retain the built-in decoder.
 
 Removed
 -------
@@ -42,6 +45,18 @@ Removed
 
 Bug Fixes
 ---------
+* Harden prepared-result metadata caching against concurrent schema/client decoder
+  changes. Cached metadata, ids, and decoder provenance are published atomically;
+  UDT descriptors are isolated by registered Python class; UDT registration
+  invalidates cached ids before publishing mapping changes; and futures refresh
+  their request snapshot before fetching another page or after re-prepare.
+  Metadata getters return defensive list copies.
+* Restrict ``skip_meta`` to immutable snapshots of built-in protocol handlers.
+  A Session keeps using the immutable configuration it captured, while modified
+  built-in handlers and custom handlers cannot create an eligible snapshot and
+  continue to receive full result metadata.
+* Restore an evicted prepared-statement cache entry through the Cluster's
+  lock-protected ``add_prepared()`` path during UNPREPARED recovery.
 * Schema metadata reads no longer fail with ``AttributeError`` when a later
   page of a system table query fails with an expected error, such as
   ``InvalidRequest`` for a missing table. Paging stops and the rows already
