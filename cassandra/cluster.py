@@ -54,6 +54,7 @@ from cassandra import (ConsistencyLevel, AuthenticationFailed, OperationTimedOut
                        SchemaTargetType, DriverException, ProtocolVersion,
                        UnresolvableContactPoints, DependencyException, InvalidRequest)
 from cassandra import _lifecycle
+from cassandra._management import _notify_cancelled
 from cassandra.auth import _proxy_execute_key, PlainTextAuthProvider
 from cassandra.client_routes import ClientRoutesChangeType, ClientRoutesConfig, _ClientRoutesHandler
 from cassandra.connection import (ClientRoutesEndPointFactory, ConnectionException, ConnectionShutdown,
@@ -151,13 +152,16 @@ _NOT_SET = object()
 
 
 def _cancel_and_notify(future):
-    # A bare Future's cancel() doesn't wake concurrent.futures.wait() callers;
-    # only set_running_or_notify_cancel() does (executors call it themselves).
     if future.cancel():
-        try:
-            future.set_running_or_notify_cancel()
-        except RuntimeError:
-            pass  # already notified
+        _notify_cancelled(future)
+
+
+class _PoolIntentFuture(Future):
+    """Notify wait() callers before delivering proxy cancellation callbacks."""
+
+    def _invoke_callbacks(self):
+        _notify_cancelled(self)
+        super()._invoke_callbacks()
 
 
 class _PoolIntentCompletion(object):
@@ -178,7 +182,7 @@ class _PoolIntentCompletion(object):
         with self._lock:
             if self._done:
                 return None
-            completion = Future()
+            completion = _PoolIntentFuture()
             self._owner = owner
             self._waiters.append(completion)
             return completion
@@ -189,7 +193,7 @@ class _PoolIntentCompletion(object):
 
     def new_waiter(self):
         with self._lock:
-            completion = Future()
+            completion = _PoolIntentFuture()
             if not self._done:
                 self._waiters.append(completion)
                 return completion
@@ -281,7 +285,7 @@ class _PoolIntent(object):
     """
     __slots__ = ('host', 'pool_lifecycle_token', 'distance',
                  'completion', '_completion', '_completion_owner',
-                 '_creation_generation', '_creation_pool')
+                 '_creation_generation', '_creation_pool', '_deferred_work')
 
     def __init__(self, host, pool_lifecycle_token, completion=None):
         self.host = host
@@ -289,6 +293,7 @@ class _PoolIntent(object):
         self.distance = _NOT_SET
         self._creation_generation = _NOT_SET
         self._creation_pool = _NOT_SET
+        self._deferred_work = False
         self._completion_owner = object()
         if completion is None:
             completion = _PoolIntentCompletion()
@@ -1912,7 +1917,8 @@ class Cluster(object):
         self.profile_manager.profiles[name] = profile
         self._populate_execution_profile(profile)
         try:
-            with _lifecycle.compatibility_timeout(pool_wait_timeout) as remaining:
+            with _lifecycle.compatibility_timeout(
+                    pool_wait_timeout) as remaining:
                 futures = set()
                 for session in tuple(self.sessions):
                     self._set_default_dbaas_consistency(session)
@@ -2140,9 +2146,9 @@ class Cluster(object):
         from I/O contexts reported by the connection class. Applications
         should catch that public base exception. Built-in connection
         classes report their I/O context. Custom classes without
-        management hooks use a separate completion channel, which cannot
-        identify their I/O callbacks. Do not call blocking management
-        APIs from those custom I/O callbacks.
+        management hooks use an owned serial completion channel that stops
+        after runtime cleanup. It cannot identify their I/O callbacks. Do
+        not call blocking management APIs from those custom I/O callbacks.
         """
         reject_late_connect = False
         shutdown_rejected_cluster = False
@@ -2287,7 +2293,8 @@ class Cluster(object):
         """Finish cleanup after shutdown has been claimed under ``self._lock``."""
 
         self._lifecycle.close()
-        if self._lifecycle.delivering or _lifecycle.execution_context() is not None:
+        if (self._lifecycle.delivering or
+                _lifecycle.execution_context() is not None):
             wait_for_executor = False
 
         if self._idle_heartbeat:
@@ -2380,7 +2387,7 @@ class Cluster(object):
             for session in tuple(self.sessions):
                 if not self._lifecycle.readiness_is_current(host, generation):
                     return
-                self._reconcile_session_pools(session)
+                session.update_created_pools()
         finally:
             self._lifecycle.finish_up(host, generation)
 
@@ -2874,8 +2881,7 @@ class Cluster(object):
                                 host, addition_token):
                             return
                         try:
-                            self._reconcile_session_pools(
-                                session,
+                            session.update_created_pools(
                                 excluded_host=host,
                                 hosts=reconciliation_hosts)
                         except Exception:
@@ -2936,13 +2942,7 @@ class Cluster(object):
         for session in tuple(self.sessions):
             if not self._lifecycle.readiness_is_current(host, generation):
                 return
-            self._reconcile_session_pools(session)
-
-    def _reconcile_session_pools(self, session, **kwargs):
-        """Admit readiness reconciliation through its callback work window."""
-        runtime = self._lifecycle._ensure_runtime()
-        with _lifecycle.compatibility_call(runtime):
-            return session.update_created_pools(**kwargs)
+            session.update_created_pools()
 
     def _notify_pending_add(self, host, generation):
         if not self._lifecycle.claim_addition_notification(host, generation):
@@ -3381,9 +3381,11 @@ class Cluster(object):
                     failed()
             with self._lifecycle.transaction(drain=False), host.lock:
                 if (not self._lifecycle.is_current(host) or
-                        getattr(host, '_lifecycle_preparation', None) is not token):
+                        getattr(host, '_lifecycle_preparation', None)
+                        is not token):
                     return
-                self._lifecycle.submit_observation(host, 'preparation', deliver)
+                self._lifecycle.submit_observation(
+                    host, 'preparation', deliver)
             self._lifecycle.drain(wait=current_thread() not in worker_threads)
 
         try:
@@ -4342,7 +4344,11 @@ class Session(object):
                 if pool_generations is not None:
                     pool_generations.clear()
                 pool_intents = self._pool_intents
+                deferred_intents = ()
                 if pool_intents is not None:
+                    deferred_intents = tuple(
+                        intent for intent in pool_intents.values()
+                        if intent._deferred_work)
                     pool_intents.clear()
                 initial_connect_futures = tuple(
                     getattr(self, '_initial_connect_futures', ()))
@@ -4355,6 +4361,11 @@ class Session(object):
         if cleanup is not None:
             _lifecycle.retry_cleanup(self.cluster, self)
             return
+
+        # No physical job owns these results yet. Release their waiters even
+        # when closing the runtime has already discarded retained retries.
+        for intent in deferred_intents:
+            intent.complete_result(None)
 
         cleanup = partial(self._finish_shutdown, initial_connect_work,
                           initial_connect_futures)
@@ -4427,10 +4438,12 @@ class Session(object):
                 return fn(*args, **kwargs)
 
         try:
-            with _lifecycle.compatibility_work(self._management_runtime) as attach:
+            with _lifecycle.compatibility_work(
+                    self._management_runtime) as attach:
                 with self._lock:
                     work_future = self.submit(work)
                     submitted = work_future is not None
+                    intent._deferred_work = False
                     add_done_callback = (
                         getattr(work_future, 'add_done_callback', None)
                         if work_future is not None else None)
@@ -4442,18 +4455,70 @@ class Session(object):
                         work_items[completion] = work_future
                 attach(work_future)
                 if callable(add_done_callback):
-                    add_done_callback(partial(self._pool_creation_work_done, completion))
                     add_done_callback(partial(
-                        _lifecycle.physical_completion, intent.complete_from_work))
+                        self._pool_creation_work_done, completion))
+                    add_done_callback(partial(
+                        _lifecycle.physical_completion,
+                        intent.complete_from_work))
                 else:
                     intent.complete_result(work_future)
         except Exception as exc:
+            if (not submitted and
+                    isinstance(exc, _lifecycle.ManagementOverloaded) and
+                    _lifecycle.callback_on(self._management_runtime)):
+                return self._defer_pool_creation_work(intent, fn, args, kwargs)
             # Once accepted, work owns the shared intent's result. A timeout
             # while reacquiring a phase belongs only to the synchronous caller.
             if not submitted:
                 intent.complete_exception(exc)
             raise
         return work_future
+
+    def _defer_pool_creation_work(self, intent, fn, args, kwargs):
+        """Retain internal fanout without waiting on the callback lane."""
+        runtime = self._management_runtime
+        with self._lock:
+            current = (not self.is_shutdown and
+                       self._pool_intents_locked().get(intent.host) is intent)
+            register_waiter = not intent._deferred_work
+            if current:
+                intent._deferred_work = True
+        if not current:
+            intent.complete_result(None if self.is_shutdown else False)
+            return intent.completion
+
+        # Superseding claims share this completion identity. Retain the latest
+        # submission per chain rather than growing an overflow list per call.
+        key = intent._completion
+
+        def retry():
+            try:
+                with self._lock:
+                    current = (not self.is_shutdown and
+                               self._pool_intents_locked().get(intent.host)
+                               is intent)
+                if current:
+                    self._submit_pool_creation_work(
+                        intent, fn, *args, **kwargs)
+                else:
+                    intent.complete_result(None if self.is_shutdown else False)
+            except Exception:
+                # Submission itself settles unaccepted failures. Once a job
+                # starts, its physical completion retains the actual result.
+                log.exception('Error retrying retained pool creation')
+            finally:
+                runtime.unregister_health(key, only_if_idle=True)
+
+        retained = runtime.observe_negative(
+            key, None, retry, register=True, admission_budget='reentry')
+        if register_waiter:
+            # This private proxy cannot be cancelled by an API caller.
+            intent.new_completion_waiter().add_done_callback(
+                lambda future: runtime.unregister_health(key))
+        if not retained:
+            intent.complete_exception(_lifecycle.ManagementClosed(
+                'Management lifetime ended before pool admission'))
+        return intent.completion
 
     def _pool_creation_work_done(self, completion, work_future):
         with self._lock:
@@ -4473,6 +4538,8 @@ class Session(object):
         completion = current_intent._completion if same_host else None
         intent = _PoolIntent(
             host, pool_lifecycle_token, completion=completion)
+        if same_host and intent._completion is completion:
+            intent._deferred_work = current_intent._deferred_work
         pool_intents[host] = intent
         return intent
 
@@ -4940,12 +5007,8 @@ class Session(object):
             if session is None:
                 return
             try:
-                admission = (_lifecycle.compatibility_call(session._management_runtime)
-                             if session._management_runtime is not None
-                             else nullcontext())
-                with admission:
-                    futures = session.update_created_pools(
-                        hosts=(host,), _expected_pool=failed_pool)
+                futures = session.update_created_pools(
+                    hosts=(host,), _expected_pool=failed_pool)
             except Exception:
                 log.exception("Error recovering session pool for %s", host)
                 retry()
@@ -5212,10 +5275,7 @@ class Session(object):
                 lambda f: self.cluster._lifecycle.submit_reconciliation(self))
 
     def _reconcile_pools(self):
-        runtime = self._management_runtime
-        with (_lifecycle.compatibility_call(runtime) if runtime is not None
-              else nullcontext()):
-            self.update_created_pools()
+        self.update_created_pools()
 
     def on_remove(self, host, trigger_reconciliation=True):
         """Remove this host's pool and optionally reconcile remaining pools."""

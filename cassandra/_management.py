@@ -60,10 +60,28 @@ def execution_context():
     return getattr(_context, 'kind', None)
 
 
+def callback_on(runtime):
+    """Whether this thread is delivering a notification for this runtime."""
+    record = getattr(_context, 'record', None)
+    return (execution_context() == 'callback' and record is not None and
+            record.runtime is runtime)
+
+
 def assert_can_wait():
     if execution_context() in ('cluster', 'pool', 'bridge'):
         raise ManagementContextError(
             'Blocking management call on an owner or reactor')
+
+
+def _notify_cancelled(future):
+    """Wake bulk waiters for a Future cancelled without an executor.
+
+    Future.cancel() leaves this executor-owned transition pending. Keep the
+    private state access here so repeated notifications remain harmless.
+    """
+    with future._condition:
+        if future._state == 'CANCELLED':
+            future.set_running_or_notify_cancel()
 
 
 def _future_access(method):
@@ -194,9 +212,7 @@ class OperationFuture(Future):
 
     def _assert_can_wait(self):
         assert_can_wait()
-        current = getattr(_context, 'record', None)
-        if (execution_context() == 'callback' and current is not None and
-                current.runtime is self._record.runtime and
+        if (callback_on(self._record.runtime) and
                 self._record.envelope.kind == 'notification'):
             raise ManagementContextError(
                 'Notification wait would block its own callback lane')
@@ -206,10 +222,7 @@ class OperationFuture(Future):
         self._record.runtime._check_pid()
         cancelled = super().cancel()
         if cancelled:
-            # Future.cancel() alone leaves concurrent.futures.wait() asleep.
-            with self._condition:
-                if self._state == 'CANCELLED':
-                    self.set_running_or_notify_cancel()
+            _notify_cancelled(self)
         return cancelled
 
     @_future_access
@@ -407,6 +420,7 @@ class ManagementRuntime:
         self._cleanup_callbacks = set()
         self._finalizing = False
         self._on_finalized = on_finalized
+        self._join_completion = None
         self._on_failure = on_failure
         self._health = {}
         self._unknown_refresh = None
@@ -508,10 +522,7 @@ class ManagementRuntime:
                 if not wait:
                     raise ManagementOverloaded(
                         'Management admission capacity exhausted')
-                current = getattr(_context, 'record', None)
-                if (execution_context() == 'callback' and
-                        current is not None and current.runtime is self and
-                        budget == 'ordinary'):
+                if callback_on(self) and budget == 'ordinary':
                     raise ManagementContextError(
                         'Callback admission cannot wait behind its own credit')
                 remaining = (None if deadline is None
@@ -761,9 +772,7 @@ class ManagementRuntime:
         """Reserve one L aggregate and a bounded prerequisite window."""
         self._check_pid()
         assert_can_wait()
-        current = getattr(_context, 'record', None)
-        if (execution_context() != 'callback' or current is None or
-                current.runtime is not self):
+        if not callback_on(self):
             yield 'ordinary'
             return
         with self._condition:
@@ -787,24 +796,29 @@ class ManagementRuntime:
             if self._closing:
                 raise ManagementClosed('Management lifetime is closed')
             self._health.setdefault(
-                id(incarnation), (incarnation, [None, None, False]))
+                id(incarnation),
+                (incarnation, [None, None, False, 'ordinary']))
             self._observe_counts_locked()
 
     def observe_negative(self, incarnation, apply, notification=None,
-                         removed=False, register=False, coalesce=None):
+                         removed=False, register=False, coalesce=None,
+                         admission_budget='ordinary'):
         """Apply incarnation health despite ordinary admission load.
 
         Verified owners may register their slot atomically with an observation.
         A coalescer only merges with a notification still awaiting admission;
         it runs under the admission lock and must not block or acquire locks.
         """
+        if admission_budget not in ('ordinary', 'reentry'):
+            raise ManagementContextError('Unknown retained admission budget')
         self._check_pid()
         with self._condition:
             if self._closing:
                 return False
             if register:
                 self._health.setdefault(
-                    id(incarnation), (incarnation, [None, None, False]))
+                    id(incarnation),
+                    (incarnation, [None, None, False, 'ordinary']))
             entry = self._health.get(id(incarnation))
             slot = (entry[1] if entry is not None and entry[0] is incarnation
                     else None)
@@ -816,7 +830,7 @@ class ManagementRuntime:
                 return True
             if coalesce is not None:
                 notification = coalesce(slot[1])
-            slot[:] = [apply, notification, removed]
+            slot[:] = [apply, notification, removed, admission_budget]
             self._observe_counts_locked()
             self._condition.notify_all()
             return True
@@ -1003,7 +1017,8 @@ class ManagementRuntime:
                 # before this runner can make finalization possible. Cleanup
                 # can then retain its obligation without locking inversion.
                 with self._condition:
-                    failed = self._on_failure if self.completion_error else None
+                    failed = (self._on_failure if self.completion_error
+                              else None)
                     if failed is not None:
                         self._on_failure = None
                 try:
@@ -1018,8 +1033,12 @@ class ManagementRuntime:
 
     def _health_ready(self):
         return any(slot[0] is not None or
-                   (slot[1] is not None and self._capacity(None, 'ordinary'))
+                   self._retained_notification_ready(slot)
                    for _, slot in self._health.values())
+
+    def _retained_notification_ready(self, slot):
+        return (slot[1] is not None and self._capacity(None, 'ordinary') and
+                self._capacity(None, slot[3]))
 
     def _run_cluster(self):
         while True:
@@ -1040,9 +1059,9 @@ class ManagementRuntime:
                     self._records.add(record)
                     native_health = True
                 else:
-                    pending = next((slot for _, slot in self._health.values()
-                                    if slot[1] is not None and
-                                    self._capacity(None, 'ordinary')), None)
+                    pending = next(
+                        (slot for _, slot in self._health.values()
+                         if self._retained_notification_ready(slot)), None)
                     if pending is not None:
                         notification, pending[1] = pending[1], None
                         self.notify(notification)
@@ -1211,31 +1230,97 @@ class ManagementRuntime:
         for thread in self._threads:
             if thread is not current_thread():
                 thread.join(timeout)
+        if self._join_completion is not None:
+            self._join_completion(timeout)
+
+
+class _CompletionChannel:
+    """Own serial completion dispatch when custom socket I/O has no hooks."""
+
+    def __init__(self):
+        self._condition = Condition()
+        self._callbacks = deque()
+        self._closing = self._stopped = False
+        self._completed = []
+        self._thread = Thread(target=self._run,
+                              name='cassandra-management-completion',
+                              daemon=True)
+        try:
+            self._thread.start()
+        except BaseException:
+            # Even an interrupted native launch must eventually retire.
+            self.close()
+            if self._thread.ident is not None:
+                self._thread.join(5)
+            raise
+
+    def dispatch(self, callback):
+        with self._condition:
+            if self._closing:
+                raise ManagementClosed('Management completion channel closed')
+            self._callbacks.append(callback)
+            self._condition.notify()
+
+    def close(self, completed=lambda: None):
+        with self._condition:
+            stopped = self._stopped
+            if not stopped:
+                self._completed.append(completed)
+                self._closing = True
+                self._condition.notify_all()
+        if stopped:
+            completed()
+
+    def join(self, timeout=None):
+        if self._thread is current_thread():
+            raise ManagementContextError('Cannot join own completion channel')
+        self._thread.join(timeout)
+        if self._thread.is_alive():
+            raise TimeoutError()
+
+    def _run(self):
+        while True:
+            with self._condition:
+                while not self._callbacks and not self._closing:
+                    self._condition.wait()
+                if not self._callbacks:
+                    self._stopped = True
+                    completed, self._completed = self._completed, []
+                    break
+                callback = self._callbacks.popleft()
+            try:
+                callback()
+            except BaseException:
+                log.exception('Error dispatching management completion')
+            finally:
+                callback = None
+        for callback in completed:
+            callback()
 
 
 class ReactorChannel:
-    """Borrow dispatch without owning the process-global I/O service.
+    """Borrow built-in dispatch or own a custom-class completion channel.
 
     Libev holds its I/O runner live until the final admitted delivery
     drains; thread startup failures consequently precede runtime
     admission. Closing one channel releases only its borrow, never
-    another Cluster's reactor.
+    another Cluster's reactor. Classes without management hooks get a serial
+    dispatcher owned by this channel, which drains and stops on closure.
     """
 
     def __init__(self, connection_class):
+        self._closed = False
+        self._release = None
+        self._fallback = None
         dispatch = getattr(connection_class, '_management_dispatch', None)
         in_context = getattr(connection_class, '_management_in_context', None)
         if dispatch is None or in_context is None:
-            # Third-party Connection subclasses need not implement these
-            # private hooks. Borrow a separate management completion channel
-            # while leaving their socket I/O and reactor class unchanged.
-            from cassandra.io.asyncioreactor import AsyncioConnection
-            connection_class = AsyncioConnection
-            dispatch = connection_class._management_dispatch
-            in_context = connection_class._management_in_context
-        self._closed = False
+            # This channel owns only completion delivery, never custom I/O.
+            self._fallback = _CompletionChannel()
+            self._dispatch = self._fallback.dispatch
+            self._release = self._fallback.close
+            return
         self._dispatch = dispatch
-        self._release = None
         connection_class.initialize_reactor()
         borrow = getattr(connection_class, '_management_borrow', None)
         if borrow is not None:
@@ -1248,13 +1333,17 @@ class ReactorChannel:
                     'Management reactor channel startup did not complete')
 
     def dispatch(self, callback):
-        if self._closed:
+        dispatch = self._dispatch
+        if self._closed or dispatch is None:
             raise ManagementClosed('Management completion channel detached')
-        self._dispatch(callback)
+        dispatch(callback)
 
     def close(self, completed=lambda: None):
         if self._closed:
-            completed()
+            if self._fallback is None:
+                completed()
+            else:
+                self._fallback.close(completed)
             return
         self._closed = True
         release, self._release = self._release, None
@@ -1263,6 +1352,10 @@ class ReactorChannel:
             completed()
         else:
             release(completed)
+
+    def join(self, timeout=None):
+        if self._fallback is not None:
+            self._fallback.join(timeout)
 
 
 def assert_synchronous_api(connection_class):
@@ -1303,10 +1396,7 @@ class _CompatibilityCall:
 
     def __init__(self, runtime):
         self.runtime = runtime
-        current = getattr(_context, 'record', None)
-        self.budget = ('aggregate' if execution_context() == 'callback' and
-                       current is not None and current.runtime is runtime
-                       else 'ordinary')
+        self.budget = 'aggregate' if callback_on(runtime) else 'ordinary'
         self.record = None
         self.locked = 0
         self.deadline = None
@@ -1356,8 +1446,8 @@ def compatibility_call(runtime):
     if previous is not None and previous.runtime is runtime:
         # A synchronous request listener is still part of the calling phase.
         # Reserving another ordinary record can wait on our own reservation.
-        # A caught policy failure can leave the shared phase released.
-        # Restore its admission before reuse in that case.
+        # Failed readmission or an interrupted policy can leave the phase
+        # released. Restore its admission before reusing the calling stack.
         if previous.record is None:
             previous.acquire()
         yield
@@ -1404,7 +1494,8 @@ def compatibility_timeout(timeout):
     call = getattr(_context, 'call', None)
     deadline = None if timeout is None else time.monotonic() + timeout
     def remaining():
-        return None if deadline is None else max(0, deadline - time.monotonic())
+        return (None if deadline is None
+                else max(0, deadline - time.monotonic()))
     if call is None:
         yield remaining
         return
@@ -1427,20 +1518,31 @@ def policy_call(method):
             return method(*args, **kwargs)
         call.release()
         _context.call = None
+        error = None
         try:
             result = method(*args, **kwargs)
+        except BaseException as exc:
+            error = exc
+            raise
         finally:
             _context.call = call
-            # Restore the outer phase even if user policy raises.
-            # A listener may catch it and let its admitted caller continue.
-            call.acquire()
+            if error is None:
+                call.acquire()
+            elif isinstance(error, Exception):
+                # A listener may catch a policy error and continue the outer
+                # phase. Attempt restoration, preserving the original error
+                # if ordinary readmission fails. A new interrupt propagates.
+                try:
+                    call.acquire()
+                except Exception:
+                    pass
         return result
     return call_policy
 
 
 @contextmanager
 def compatibility_work(runtime):
-    """Charge physical work, using bounded private capacity under setup."""
+    """Charge physical work, waiting only inside a compatibility call."""
     if runtime is None:
         # Internal tests construct bare Sessions with __new__, without a
         # registered production lifetime or management admission contract.
@@ -1449,9 +1551,7 @@ def compatibility_work(runtime):
     assert_can_wait()
     call = getattr(_context, 'call', None)
     same_call = call is not None and call.runtime is runtime
-    current = getattr(_context, 'record', None)
-    callback_origin = (execution_context() == 'callback' and
-                       current is not None and current.runtime is runtime)
+    callback_origin = callback_on(runtime)
     budget = ('reentry' if callback_origin or (same_call and
               (call.budget == 'aggregate' or call.locked)) else 'ordinary')
     if same_call and budget == 'ordinary':
@@ -1460,7 +1560,7 @@ def compatibility_work(runtime):
         call.release()
     future = (call.admit(budget) if same_call else
               runtime.submit(lambda record: _PENDING, budget=budget,
-                             wait=callback_origin, reserve=1))
+                             reserve=1))
     record = future._record
     attached = False
     completed = False

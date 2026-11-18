@@ -14,7 +14,8 @@ import pytest
 
 from cassandra import DependencyException
 from cassandra._management import (
-    ManagementContextError, ManagementRuntime, ReactorChannel, execution_context)
+    ManagementContextError, ManagementRuntime, ReactorChannel,
+    execution_context)
 from cassandra.cluster import Cluster, ExecutionProfile, Session
 
 
@@ -75,7 +76,8 @@ def test_idle_reactor_completion_and_raw_io_sync_guard(connection_class):
             assert execution_context() is None  # Ordinary ResponseFuture context.
             assert connection_class._management_in_context()
             cluster = SimpleNamespace(connection_class=connection_class,
-                                      _lifecycle=None, control_connection=Mock())
+                                      _lifecycle=None,
+                                      control_connection=Mock())
             session = SimpleNamespace(cluster=cluster, execute=Mock())
             for call in (lambda: Cluster.connect(cluster),
                          lambda: Cluster.refresh_nodes(cluster),
@@ -1771,3 +1773,110 @@ def test_custom_connection_without_private_hooks_keeps_io_class():
         cluster.shutdown()
         if cluster._lifecycle._runtime is not None:
             cluster._lifecycle._runtime.join(5)
+
+
+def test_custom_completion_channel_closes_after_accepted_callbacks_drain():
+    from cassandra._management import ManagementClosed
+
+    class CustomConnection:
+        pass
+
+    channel = ReactorChannel(CustomConnection)
+    entered, release, closed = Event(), Event(), Event()
+    runners, delivered = [], []
+
+    def first():
+        runners.append(current_thread())
+        entered.set()
+        assert release.wait(5)
+
+    try:
+        channel.dispatch(first)
+        assert entered.wait(5)
+        channel.dispatch(lambda: delivered.append(True))
+        channel.close(closed.set)
+        assert not closed.is_set(), (
+            'channel finalized before callbacks drained')
+        with pytest.raises(ManagementClosed):
+            channel.dispatch(lambda: None)
+        release.set()
+        assert closed.wait(5)
+        channel.join(5)
+        assert delivered == [True]
+        assert all(not runner.is_alive() for runner in runners)
+    finally:
+        release.set()
+        channel.close()
+        channel.join(5)
+
+
+@pytest.mark.parametrize('failure', [KeyboardInterrupt, SystemExit])
+def test_custom_channel_interrupted_native_launch_retires_runner(
+        monkeypatch, failure):
+    from cassandra import _management
+
+    class CustomConnection:
+        pass
+
+    with paused_native_start(monkeypatch, _management, failure) as state:
+        native_entered, bootstrap, retired, threads = state
+        with pytest.raises(failure, match='native launch preceded bootstrap'):
+            ReactorChannel(CustomConnection)
+        assert native_entered.is_set()
+        assert not threads[0]._started.is_set()
+        bootstrap.set()
+        assert retired.wait(5)
+        threads[0].join(5)
+        assert not threads[0].is_alive()
+
+
+def test_custom_runtime_closes_from_own_dispatcher_independently(monkeypatch):
+    from cassandra.connection import Connection
+    from cassandra.io.asyncioreactor import AsyncioConnection
+
+    class CustomConnection(Connection):
+        pass
+
+    initialize = Mock(side_effect=AssertionError('global asyncio started'))
+    monkeypatch.setattr(AsyncioConnection, 'initialize_reactor', initialize)
+    clusters = []
+    managers = []
+    entered, release, returned = Event(), Event(), Event()
+    errors = []
+    try:
+        for _ in range(2):
+            cluster = Cluster(connection_class=CustomConnection)
+            clusters.append(cluster)
+            managers.append(cluster._lifecycle._ensure_runtime())
+        channel = managers[0]._dispatch.__self__
+
+        def close():
+            entered.set()
+            try:
+                assert release.wait(5)
+                clusters[0].shutdown()
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                returned.set()
+
+        channel.dispatch(close)
+        assert entered.wait(5)
+        delivered = Event()
+        channel.dispatch(delivered.set)
+        release.set()
+        assert returned.wait(5)
+        assert not errors
+        managers[0].join(5)
+        assert delivered.is_set()
+        assert not channel._fallback._thread.is_alive()
+        assert managers[1].submit(lambda record: True).result(5) is True
+        other = managers[1]._dispatch.__self__
+        assert other._fallback._thread.is_alive()
+        initialize.assert_not_called()
+    finally:
+        release.set()
+        for cluster in clusters:
+            cluster.shutdown()
+        for manager in managers:
+            manager.join(5)
