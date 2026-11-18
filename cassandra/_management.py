@@ -1,7 +1,16 @@
-# Copyright ScyllaDB, Inc.
+# Copyright 2026 ScyllaDB, Inc.
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
-# You may obtain a copy at http://www.apache.org/licenses/LICENSE-2.0
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Bounded management execution contexts.
 
@@ -400,6 +409,7 @@ class _Record:
         self.mailbox_pending = 0
         self.started = Event()
         self.handler_done = False
+        self.executing = False
         self.delivery = False
         self.delivery_ticket = None
         self.delivery_again = False
@@ -590,6 +600,7 @@ class ManagementRuntime:
         self._threads = []
         self._exited = 0
         self._cleanup_obligations = 0
+        self._capture_obligations = 0
         self._finalizing = False
         self._on_finalized = on_finalized
         self._health = {}
@@ -692,7 +703,7 @@ class ManagementRuntime:
                     raise ManagementOverloaded(
                         'Management admission capacity exhausted')
                 if (_callback_runtime() is self and
-                        budget == 'ordinary'):
+                        budget in ('ordinary', 'aggregate')):
                     raise ManagementContextError(
                         'Callback admission cannot wait behind its own credit')
                 remaining = (None if deadline is None
@@ -739,6 +750,7 @@ class ManagementRuntime:
     def _dequeue_locked(self, queue):
         entry = queue.popleft()
         self._account_mailbox_locked(entry.record, -1)
+        entry.record.executing = True
         return entry
 
     def _set_delivery_locked(self, record, active):
@@ -768,14 +780,15 @@ class ManagementRuntime:
             if outcome is _PENDING:
                 return
         except BaseException as exc:
-            self._finish(record, error=exc)
+            if not self._finish(record, error=exc):
+                log.exception('Error in retired management handler')
         else:
             self._finish(record, outcome)
 
     def _finish(self, record, result=None, error=None):
         with self._condition:
             if record.handler_done:
-                return
+                return False
             record.handler_done = True
             record.started.set()
             if record.key is not None:
@@ -797,6 +810,7 @@ class ManagementRuntime:
                             future._publishing = False
             self._queue_delivery_locked(record)
             self._release_locked(record)
+            return True
 
     def supersede(self, future):
         self._check_pid()
@@ -936,7 +950,7 @@ class ManagementRuntime:
             # Last captures can run arbitrary finalizers. Keep them off owners
             # and retain cleanup until the callback lane drops them.
             self._callback_garbage.append(captures)
-            self._cleanup_obligations += 1
+            self._capture_obligations += 1
             self._condition.notify_all()
 
     def _queue_delivery_locked(self, record):
@@ -1031,7 +1045,7 @@ class ManagementRuntime:
 
     def _release_locked(self, record):
         if (record.released or not record.handler_done or record.physical or
-                record.mailbox_pending):
+                record.mailbox_pending or record.executing):
             return
         # Coalesced waiters share physical work, but private native completion
         # must release its own window independently of ordinary callback debt.
@@ -1097,6 +1111,7 @@ class ManagementRuntime:
                         self, Envelope(self._sequence, 'health', None,
                                        self.lifetime, ()), None, None, None)
                     self._records.add(record)
+                    record.executing = True
                     native_health = True
                 else:
                     pending = next((slot for slot in self._health.values()
@@ -1143,7 +1158,12 @@ class ManagementRuntime:
             try:
                 callback()
             except BaseException as exc:
-                self._finish(record, error=exc)
+                if not self._finish(record, error=exc):
+                    log.exception('Error in retired management continuation')
+            finally:
+                with self._condition:
+                    record.executing = False
+                    self._release_locked(record)
 
     def _run_notifications(self):
         while True:
@@ -1166,13 +1186,14 @@ class ManagementRuntime:
                     finally:
                         garbage = None
                         with self._condition:
-                            self._cleanup_obligations -= 1
+                            self._capture_obligations -= 1
                             self._maybe_finalized_locked()
                 continue
             with _entered('callback', record):
                 try:
                     value = callback()
                 except BaseException as exc:
+                    log.exception('Error in management notification callback')
                     self._finish(record, error=exc)
                 else:
                     self._finish(record, value)
@@ -1186,7 +1207,11 @@ class ManagementRuntime:
             record = callback = value = None
 
     def retain_cleanup(self):
-        """Retain one cleanup obligation independently of load."""
+        """Retain one explicit cleanup obligation in the ``close`` count.
+
+        Callback-capture retirement is tracked separately and does not change
+        this count's units or its high-water sampling points.
+        """
         self._check_pid()
         with self._condition:
             if self._finalizing:
@@ -1204,6 +1229,12 @@ class ManagementRuntime:
         return release
 
     def close(self, wait=False):
+        """Retire admission and return its already-set ``closed`` event.
+
+        ``wait`` retains the synchronous-context check; retirement completes
+        before this method returns. Use :meth:`join` to wait for cleanup,
+        callback delivery and runner termination.
+        """
         self._check_pid()
         if wait:
             assert_can_wait()
@@ -1257,6 +1288,7 @@ class ManagementRuntime:
     def _maybe_finalized_locked(self):
         if (self.closed.is_set() and not self._records and
                 not self._cleanup_obligations
+                and not self._capture_obligations
                 and self._exited == len(self._threads)
                 and not self._finalizing):
             self._finalizing = True
@@ -1275,20 +1307,25 @@ class ManagementRuntime:
         assert_can_wait()
         if execution_context() in ('callback', 'worker'):
             raise ManagementContextError('Cannot join own management resource')
+        deadline = None if timeout is None else time.monotonic() + timeout
         if not self.finalized.wait(timeout):
             raise TimeoutError()
         for thread in self._threads:
             if thread is not current_thread():
-                thread.join(timeout)
+                remaining = (None if deadline is None else
+                             max(0, deadline - time.monotonic()))
+                thread.join(remaining)
+                if thread.is_alive():
+                    raise TimeoutError()
 
 
 class ReactorChannel:
     """Borrow dispatch without owning the process-global I/O service.
 
-    Libev holds its I/O runner live until the final admitted delivery
-    drains; thread startup failures consequently precede runtime
-    admission. Closing one channel releases only its borrow, never
-    another Cluster's reactor.
+    The libev adapter supplied by the later reactor integration must keep its
+    I/O runner live until the final admitted delivery drains. Its startup must
+    finish before runtime admission. Closing one channel releases only its
+    borrow, never another Cluster's reactor.
     """
 
     def __init__(self, connection_class):

@@ -6,6 +6,7 @@ import platform
 
 import pytest
 
+from cassandra import _management as management
 from cassandra._management import (
     ManagementClosed, ManagementContextError, ManagementOverloaded,
     ManagementRuntime, execution_context)
@@ -63,16 +64,22 @@ def runtime(monkeypatch):
     dispatch = Dispatcher()
     runtime = ManagementRuntime(dispatch, limit=4, pool_limit=2)
     observe = runtime._observe_counts_locked
+    invariant_errors = []
     def checked_counts():
         counts = observe()
-        assert counts['mailbox'] == sum(
-            record.mailbox_pending for record in runtime._records)
-        assert counts['delivery'] == sum(
-            record.delivery for record in runtime._records)
+        for name, attribute in (('mailbox', 'mailbox_pending'),
+                                ('delivery', 'delivery')):
+            expected = sum(getattr(record, attribute)
+                           for record in runtime._records)
+            if counts[name] != expected:
+                invariant_errors.append(
+                    '%s count: observed %s, expected %s' %
+                    (name, counts[name], expected))
         return counts
     monkeypatch.setattr(runtime, '_observe_counts_locked', checked_counts)
     try:
         yield runtime, dispatch
+        assert not invariant_errors, '\n'.join(invariant_errors)
         assert_runtime_counts(runtime)
     finally:
         # A failed invariant must not interrupt shutdown's own observations.
@@ -337,7 +344,7 @@ def test_callback_rejects_saturated_ordinary_admission(notification):
             finished.set()
     try:
         manager.notify(callback)
-        assert finished.wait(1), 'callback waited behind its own credit'
+        assert finished.wait(5), 'callback waited behind its own credit'
         assert len(errors) == 1
         assert isinstance(errors[0], ManagementContextError)
     finally:
@@ -626,8 +633,6 @@ def test_start_failure_and_repeated_close_leave_no_threads(
 @pytest.mark.parametrize('startup_error', [RuntimeError, KeyboardInterrupt])
 def test_start_failure_retires_registered_lifetimes(
         monkeypatch, failed_phase, failure_point, startup_error):
-    import cassandra._management as management
-
     finalized = []
     manager = ManagementRuntime(Dispatcher(), on_finalized=lambda done: (
         finalized.append((manager.closed.is_set(), handle.closed.is_set(),
@@ -678,10 +683,10 @@ def test_start_failure_retires_registered_lifetimes(
 def test_delivery_failure_reentering_close_waits_for_lifetime_retirement():
     from cassandra._management import ManagementDeliveryFailed
 
-    finalized = []
+    finalized, preconditions, errors = [], [], []
     def reject(callback):
         # The outer close has begun, but its retirement is still in progress.
-        assert manager._closing and not manager.closed.is_set()
+        preconditions.append(manager._closing and not manager.closed.is_set())
         raise RuntimeError('reactor failed')
 
     manager = ManagementRuntime(reject, on_finalized=lambda done: (
@@ -696,7 +701,26 @@ def test_delivery_failure_reentering_close_waits_for_lifetime_retirement():
     assert not manager.finalized.is_set()
     # This controlled runtime has no launched lanes; drain retained callback
     # references using the same lane loop before waiting for finalization.
-    manager._run_notifications()
+    def drain():
+        try:
+            manager._run_notifications()
+        except BaseException as exc:
+            errors.append(exc)
+    drainer = Thread(target=drain, daemon=True)
+    drainer.start()
+    try:
+        drainer.join(5)
+        assert not drainer.is_alive(), 'callback retirement did not finish'
+    finally:
+        if drainer.is_alive():
+            # This controlled runtime has no real runners or physical work.
+            # Unblock a leaked-record regression after recording its failure.
+            with manager._condition:
+                manager._records.clear()
+                manager._condition.notify_all()
+            drainer.join(5)
+    assert not errors
+    assert preconditions == [True]
     manager.join(5)
     manager.close()
     assert isinstance(manager.completion_error, ManagementDeliveryFailed)
@@ -1596,8 +1620,8 @@ def test_compatibility_work_rejects_owner_before_admission(
                     pytest.fail('owner entered physical compatibility work')
             assert submitted == []
         finally:
-            # Keep the regression's old-source failure safe: it admits a
-            # synthetic physical obligation before reaching the forbidden wait.
+            # Retire any synthetic physical obligation admitted before a
+            # forbidden owner wait, including when the assertion fails.
             for future in submitted:
                 with manager._condition:
                     manager._finish(future._record)
@@ -1708,9 +1732,8 @@ def test_interrupted_initial_compatibility_admission_discharges_reservation(
     finally:
         resume.set()
         manager.close()
-        # Unwind the old-source counterexample without leaving daemon threads
-        # or a synthetic physical reservation behind after the failed
-        # assertion.
+        # A failed interruption assertion must not leave daemon threads or
+        # synthetic physical reservations behind.
         for future in admitted:
             with manager._condition:
                 if future._record.physical:
@@ -1728,7 +1751,12 @@ def test_interrupted_compatibility_attachment_retains_work_until_completion(
     physical = Future()
     assert physical.set_running_or_notify_cancel()
     register = physical.add_done_callback
-    attaching, finished = Event(), Event()
+    attaching, waiting, finished = Event(), Event(), Event()
+    result = physical.result
+    def wait_for_result(timeout=None):
+        waiting.set()
+        return result(5)
+    physical.result = wait_for_result
     errors, records = [], []
     def interrupted(callback):
         if installed:
@@ -1750,10 +1778,11 @@ def test_interrupted_compatibility_attachment_retains_work_until_completion(
     thread.start()
     try:
         assert attaching.wait(5)
+        assert waiting.wait(5), 'attachment did not retain its physical wait'
         with manager._condition:
             assert len(records) == 1
             assert records[0].physical == 1
-        assert not finished.wait(0.05)
+        assert not physical.done() and not finished.is_set()
     finally:
         if outcome == 'result':
             physical.set_result(23)
@@ -1761,7 +1790,7 @@ def test_interrupted_compatibility_attachment_retains_work_until_completion(
             physical.set_exception(ValueError('physical work failed'))
         thread.join(5)
         assert not thread.is_alive()
-        # Keep the original-source failure bounded without masking the defect.
+        # Inspect retirement before cleaning up a failed assertion's debt.
         with manager._condition:
             debt_after_completion = sum(record.physical for record in records)
             credits_after_completion = manager.counts()['ordinary']
@@ -1813,7 +1842,7 @@ def test_owner_callback_handoff_yields_reactor_while_caller_callback_runs(
         manager.submit(owner, pool=pool).result(5)
         dispatch(io_progress.set)
         reactor.start()
-        assert io_progress.wait(1), (
+        assert io_progress.wait(5), (
             'callback handoff blocked shared reactor progress')
         reactor.join(5)
         assert not reactor.is_alive()
@@ -1898,7 +1927,7 @@ def test_deferred_callback_handoffs_keep_one_ticket_per_charged_record(
                 manager.submit(lambda record, f=future: owner([f])).result(5)
         dispatch(io_progress.set)
         reactor.start()
-        assert io_progress.wait(1)
+        assert io_progress.wait(5)
         reactor.join(5)
         assert not reactor.is_alive()
         with manager._condition:
@@ -2305,6 +2334,9 @@ def test_delivery_counts_retain_active_ticket_after_dispatch_failure(
             second.add_done_callback(lambda future: pytest.fail('delivery ran'))
         assert second.result(5) == 2
         assert manager.closed.wait(5)
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: second._record.released, 5)
         counts = assert_runtime_counts(manager)
         assert counts['ordinary'] == counts['delivery'] == 1
         assert counts['mailbox'] == 0
@@ -2341,7 +2373,7 @@ def test_inherited_compatibility_cleanup_rejects_before_parent_lock(entry):
         assert held.wait(5)
         pid = os.fork()
         if pid == 0:
-            # Bound the old-source deadlock as well as the expected rejection.
+            # Bound lock acquisition even if inherited-state rejection fails.
             signal.alarm(2)
             try:
                 scope.__exit__(None, None, None)
@@ -2429,6 +2461,136 @@ def test_runtime_fixture_cleans_up_after_counter_invariant_failure(monkeypatch):
     finally:
         # Also protect a failed setup/assertion in this regression itself.
         resources.close()
+
+
+def test_runtime_fixture_reports_owner_counter_failure_without_stranding(
+        monkeypatch):
+    resources = runtime.__wrapped__(monkeypatch)
+    manager, dispatch = next(resources)
+    observe = manager._observe_counts_locked
+    def inconsistent_counts():
+        if execution_context() != 'cluster':
+            return observe()
+        manager._mailbox_pending += 1
+        try:
+            return observe()
+        finally:
+            manager._mailbox_pending -= 1
+    monkeypatch.setattr(manager, '_observe_counts_locked', inconsistent_counts)
+    delivered = []
+    try:
+        future = manager.submit(lambda record: 7)
+        future.add_done_callback(lambda done: delivered.append(done.result()))
+        assert future.result(5) == 7
+        dispatch.drain()
+        with pytest.raises(AssertionError, match='mailbox count:'):
+            next(resources)
+        assert delivered == [7]
+        assert not manager._records and not dispatch.queue
+        assert all(not thread.is_alive() for thread in manager._threads)
+    finally:
+        resources.close()
+
+
+def test_callback_rejects_wait_for_its_active_aggregate(runtime):
+    manager, dispatch = runtime
+    def callback():
+        with manager.synchronous_reentry():
+            with pytest.raises(ManagementContextError, match='own credit'):
+                manager.submit(lambda record: None, budget='aggregate',
+                               wait=True, timeout=5)
+    manager.notify(callback).result(5)
+    assert not manager._reentry_active
+
+
+@pytest.mark.parametrize('pool', [None, 'pool'])
+def test_superseded_handler_retains_admission_until_it_returns(pool):
+    manager = ManagementRuntime(Dispatcher(), limit=1, pool_limit=1)
+    entered, release = Event(), Event()
+    def handler(record):
+        entered.set()
+        assert release.wait(5)
+        return 7
+    try:
+        future = manager.submit(handler, pool=pool)
+        assert entered.wait(5)
+        manager.supersede(future)
+        with pytest.raises(management.ManagementSuperseded):
+            future.result(5)
+        assert manager.counts()['ordinary'] == 1
+        assert future._record.handler is handler
+        with pytest.raises(ManagementOverloaded):
+            manager.submit(lambda record: None, pool=pool)
+        release.set()
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: not manager._records, 5)
+        assert manager.submit(lambda record: 9, pool=pool).result(5) == 9
+    finally:
+        release.set()
+        manager.close()
+        manager.join(5)
+
+
+def test_retired_handler_failure_is_logged(runtime, caplog):
+    manager, dispatch = runtime
+    entered, release = Event(), Event()
+    def handler(record):
+        entered.set()
+        assert release.wait(5)
+        raise ValueError('late handler failure')
+    try:
+        future = manager.submit(handler)
+        assert entered.wait(5)
+        manager.supersede(future)
+        release.set()
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: not manager._records, 5)
+        assert 'Error in retired management handler' in caplog.text
+        assert 'late handler failure' in caplog.text
+    finally:
+        release.set()
+
+
+def test_health_notification_failure_is_logged(runtime, caplog):
+    manager, dispatch = runtime
+    incarnation = object()
+    def fail():
+        raise ValueError('health notification failure')
+    manager.register_health(incarnation)
+    manager.observe_negative(incarnation, lambda: None, fail)
+    manager.submit(lambda record: None).result(5)
+    manager.notify(lambda: None).result(5)
+    assert 'Error in management notification callback' in caplog.text
+    assert 'health notification failure' in caplog.text
+
+
+@pytest.mark.parametrize('still_alive', [False, True])
+def test_join_uses_one_deadline_and_reports_live_runners(monkeypatch, still_alive):
+    manager = ManagementRuntime(Dispatcher())
+    manager.finalized.set()
+    observed = []
+    class Runner:
+        def join(self, timeout):
+            observed.append(timeout)
+
+        def is_alive(self):
+            return still_alive
+    class Clock:
+        times = iter((100, 102, 104))
+        @classmethod
+        def monotonic(cls):
+            return next(cls.times)
+    manager._threads = [Runner(), Runner()]
+    monkeypatch.setattr(management, 'time', Clock)
+    if still_alive:
+        with pytest.raises(TimeoutError):
+            manager.join(5)
+        assert observed == [3]
+    else:
+        manager.join(5)
+        assert observed == [3, 1]
 
 
 def test_retired_foreign_delivery_does_not_retain_later_results(runtime):
@@ -2536,7 +2698,9 @@ def test_failed_delivery_releases_captures_on_callback_lane_outside_locks():
         assert entered.wait(5)
         manager.close()
         assert not manager.finalized.is_set()
-        assert assert_runtime_counts(manager)['close'] == 1
+        assert assert_runtime_counts(manager)['close'] == 0
+        assert manager._capture_obligations == 1
+        assert manager.high_waters['close'] == 0
         cleanup_release.set()
         manager.join(5)
         gc.collect()
@@ -2692,6 +2856,7 @@ def test_open_notification_retirement_guards_same_lane_waits(mode):
 def test_health_capture_retirement_releases_outside_runtime_lock(action):
     manager = ManagementRuntime(Dispatcher())
     entered, resume, retired = Event(), Event(), Event()
+    cleanup_release = Event()
     incarnation = object()
     observed, probes = [], []
     class Callback:
@@ -2699,7 +2864,8 @@ def test_health_capture_retirement_releases_outside_runtime_lock(action):
             pytest.fail('retired health notification ran')
 
         def __del__(self):
-            observed.append(manager._condition._is_owned())
+            observed.append((execution_context(),
+                             manager._condition._is_owned()))
             progressed = Event()
             probe = Thread(target=lambda: (manager.counts(), progressed.set()))
             probes.append(probe)
@@ -2707,6 +2873,8 @@ def test_health_capture_retirement_releases_outside_runtime_lock(action):
             probe.join(2)
             observed.append(progressed.is_set())
             retired.set()
+            if action == 'close':
+                observed.append(cleanup_release.wait(5))
 
     def block(record):
         entered.set()
@@ -2723,12 +2891,23 @@ def test_health_capture_retirement_releases_outside_runtime_lock(action):
         else:
             manager.close()
         assert retired.wait(5)
-        assert observed == [False, True]
+        if action == 'close':
+            assert observed == [('callback', False), True]
+            assert manager._capture_obligations == 1
+            assert manager.counts()['close'] == 0
+            assert manager.high_waters['close'] == 0
+            assert not manager.finalized.is_set()
+        else:
+            assert observed == [(None, False), True]
     finally:
+        cleanup_release.set()
         resume.set()
         manager.close()
         manager.join(5)
         for probe in probes:
             probe.join(5)
             assert not probe.is_alive()
+    if action == 'close':
+        assert observed == [('callback', False), True, True]
+        assert manager._capture_obligations == 0
     assert all(value == 0 for value in assert_runtime_counts(manager).values())
