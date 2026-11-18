@@ -1200,11 +1200,24 @@ def test_detached_coordinator_does_not_keep_runtime_threads_alive(
     from functools import partial
     from cassandra._lifecycle import LifecycleCoordinator
     coordinator = LifecycleCoordinator()
-    coordinator.submit(lambda: None)
-    manager = coordinator._runtime
+    manager = coordinator._ensure_runtime()
     reference = weakref.ref(coordinator)
-    release = Event()
+    release, returned = Event(), Event()
+    errors = []
+
+    def submit():
+        try:
+            coordinator.submit(lambda: None)
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            returned.set()
+
+    caller = Thread(target=submit, daemon=True)
     try:
+        caller.start()
+        assert returned.wait(5), 'initial lifecycle delivery did not finish'
+        assert not errors
         if health_notification:
             entered, delivered = Event(), Event()
             def hold():
@@ -1237,7 +1250,10 @@ def test_detached_coordinator_does_not_keep_runtime_threads_alive(
     finally:
         release.set()
         manager.close()
+        if caller.ident is not None:
+            caller.join(5)
         manager.join(5)
+        assert not caller.is_alive()
 
 
 def test_synchronous_admission_waits_without_allocating_pending_records(
@@ -1867,6 +1883,8 @@ def test_policy_phase_restores_admission_after_policy_exit(
                 policy()
             if outcome == 'rejected_reacquire':
                 assert call.record is None
+            elif outcome == 'base_error':
+                assert call.record is None
             else:
                 assert call.record is not None
                 assert call.record is not original
@@ -1927,6 +1945,99 @@ def test_policy_phase_waits_for_its_native_sentinel_frame(monkeypatch):
             manager.close()
             manager.join(5)
     assert not caller.is_alive()
+
+
+@pytest.mark.parametrize('failure', [ValueError, KeyboardInterrupt])
+def test_policy_error_survives_failed_phase_readmission(runtime, failure):
+    from cassandra import _management
+    manager, _ = runtime
+    error = failure('original policy failure')
+
+    @_management.policy_call
+    def policy():
+        manager.limit = 0
+        raise error
+
+    with _management.compatibility_call(manager):
+        with _management.compatibility_timeout(0):
+            with pytest.raises(failure) as raised:
+                policy()
+        assert raised.value is error
+        manager.limit = 4
+        # A caller that catches the error must readmit its next phase.
+        with _management.compatibility_call(manager):
+            assert manager.counts()['ordinary'] == 1
+
+
+@pytest.mark.parametrize('failure', [KeyboardInterrupt, SystemExit])
+def test_interrupt_during_policy_error_readmission_propagates(
+        runtime, monkeypatch, failure):
+    from cassandra import _management
+    manager, _ = runtime
+    caller = get_ident()
+    error = failure('readmission interrupted')
+    waited = []
+    original_wait = manager._condition.wait
+
+    def interrupt_wait(timeout=None):
+        if get_ident() == caller:
+            waited.append(timeout)
+            raise error
+        return original_wait(timeout)
+
+    @_management.policy_call
+    def policy():
+        manager.limit = 0
+        raise ValueError('policy failed')
+
+    monkeypatch.setattr(manager._condition, 'wait', interrupt_wait)
+    try:
+        with _management.compatibility_call(manager):
+            call = _management._context.call
+            with pytest.raises(failure) as raised:
+                policy()
+            assert raised.value is error
+            assert _management._context.call is call
+            assert call.record is None
+        assert waited == [None]
+        assert getattr(_management._context, 'call', None) is None
+        assert manager.counts()['ordinary'] == 0
+    finally:
+        manager.limit = 4
+
+
+def test_policy_interrupt_does_not_wait_for_phase_readmission(runtime):
+    from cassandra import _management
+    manager, _ = runtime
+    interrupted, returned = Event(), Event()
+    error = KeyboardInterrupt('policy interrupted')
+    errors = []
+
+    @_management.policy_call
+    def policy():
+        manager.limit = 0
+        interrupted.set()
+        raise error
+
+    def invoke():
+        try:
+            with _management.compatibility_call(manager):
+                policy()
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            returned.set()
+
+    caller = Thread(target=invoke, daemon=True)
+    caller.start()
+    try:
+        assert interrupted.wait(5)
+        assert returned.wait(5), 'policy interrupt waited for capacity'
+        assert errors == [error]
+    finally:
+        manager.close()
+        caller.join(5)
+        assert not caller.is_alive()
 
 
 @pytest.mark.parametrize('pool', [None, 'logical-pool'])
@@ -5363,6 +5474,10 @@ def test_handoff_target_disposal_allows_reentry(factory, operation, expected):
 
 def test_callback_pool_fanout_uses_bounded_reserved_capacity():
     from cassandra._management import compatibility_work
+
+
+def test_synchronous_callback_pool_fanout_uses_bounded_reserved_capacity():
+    from cassandra._management import compatibility_call, compatibility_work
     dispatch = Dispatcher()
     manager = ManagementRuntime(dispatch, limit=1, reentry_window=2)
     release, started = Event(), Event()
@@ -5374,11 +5489,12 @@ def test_callback_pool_fanout_uses_bounded_reserved_capacity():
         return True
     def fanout():
         try:
-            for _ in range(5):
-                with compatibility_work(manager) as attach:
-                    future = executor.submit(work)
-                    submitted.append(future)
-                    attach(future)
+            with compatibility_call(manager):
+                for _ in range(5):
+                    with compatibility_work(manager) as attach:
+                        future = executor.submit(work)
+                        submitted.append(future)
+                        attach(future)
             started.set()
         except BaseException as exc:
             errors.append(exc)
@@ -5400,5 +5516,50 @@ def test_callback_pool_fanout_uses_bounded_reserved_capacity():
         release.set()
         executor.shutdown()
         manager.close()
+        dispatch.drain()
+        manager.join(5)
+
+
+def test_close_releases_synchronous_callback_waiting_for_reserved_capacity():
+    from cassandra._management import (
+        callback_on, compatibility_call, compatibility_work)
+    dispatch = Dispatcher()
+    manager = ManagementRuntime(dispatch, limit=1, reentry_window=1)
+    physical = Future()
+    waiting, returned = Event(), Event()
+    errors = []
+    original_wait = manager._condition.wait
+
+    def observe_wait(timeout=None):
+        if callback_on(manager) and manager._reentry_credits == 1:
+            waiting.set()
+        return original_wait(timeout)
+
+    manager._condition.wait = observe_wait
+
+    def fanout():
+        try:
+            with compatibility_call(manager):
+                with compatibility_work(manager) as attach:
+                    attach(physical)
+                with compatibility_work(manager):
+                    pytest.fail('second pool job admitted into a full window')
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            returned.set()
+
+    notification = manager.notify(fanout)
+    try:
+        assert waiting.wait(5)
+        assert not returned.is_set()
+        manager.close()
+        assert returned.wait(5)
+        assert len(errors) == 1 and isinstance(errors[0], ManagementClosed)
+        with pytest.raises(ManagementClosed):
+            notification.result(5)
+    finally:
+        manager.close()
+        physical.set_result(True)
         dispatch.drain()
         manager.join(5)

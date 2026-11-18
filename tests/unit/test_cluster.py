@@ -49,11 +49,59 @@ from tests import connection_class
 import pytest
 
 
+@pytest.mark.parametrize('proxy', [False, True])
+def test_cancelled_completion_wakes_bulk_waiters_repeatedly(proxy):
+    from concurrent.futures import wait
+    from cassandra.cluster import _cancel_and_notify, _PoolIntentCompletion
+    if proxy:
+        completion = _PoolIntentCompletion()
+        owner = object()
+        future = completion.claim(owner)
+        sibling = completion.new_waiter()
+    else:
+        future = Future()
+    installed = Event()
+
+    class ObservedWaiters(list):
+        def append(self, waiter):
+            super().append(waiter)
+            installed.set()
+
+    future._waiters = ObservedWaiters()
+    observed = []
+    future.add_done_callback(
+        lambda done: (
+            observed.append(wait([done], timeout=0)) if proxy else None))
+    results = []
+    waiter = Thread(target=lambda: results.append(wait([future], timeout=5)))
+    waiter.start()
+    try:
+        assert installed.wait(5)
+        _cancel_and_notify(future)
+        _cancel_and_notify(future)
+        waiter.join(5)
+        assert not waiter.is_alive()
+        assert results[0].done == {future}
+        assert not results[0].not_done
+        if proxy:
+            assert observed[0].done == {future}
+            assert completion.is_owner_pending(owner)
+            assert not sibling.done()
+            work = Future()
+            work.set_result(42)
+            completion.complete_from_work(owner, work)
+            assert sibling.result(0) == 42
+            assert future.cancelled()
+    finally:
+        waiter.join(5)
+
+
 log = logging.getLogger(__name__)
 
 
 def await_lifecycle_callbacks(cluster):
-    """Join delivery after a manually executed asynchronous executor handoff."""
+    ("""Join delivery after a manually executed asynchronous executor """
+     """handoff.""")
     coordinator = cluster._lifecycle
     if not coordinator.closed and not coordinator.delivering:
         coordinator._runtime.notify(
@@ -2763,7 +2811,8 @@ cluster = Cluster(
     allow_control_connection_query_fallback=
     ControlConnectionQueryFallback.SkipPoolCreation,
 )
-with patch.object(cluster.connection_class, 'initialize_reactor', wraps=cluster.connection_class.initialize_reactor), \
+with patch.object(cluster.connection_class, 'initialize_reactor', \
+wraps=cluster.connection_class.initialize_reactor), \
         patch.object(cluster.control_connection, 'connect'), \
         patch.object(cluster, '_populate_hosts'), \
         patch.object(cluster.profile_manager, 'check_supported'):
@@ -2824,7 +2873,8 @@ cluster = Cluster(
     allow_control_connection_query_fallback=
     ControlConnectionQueryFallback.SkipPoolCreation,
 )
-with patch.object(cluster.connection_class, 'initialize_reactor', wraps=cluster.connection_class.initialize_reactor), \
+with patch.object(cluster.connection_class, 'initialize_reactor', \
+wraps=cluster.connection_class.initialize_reactor), \
         patch.object(cluster.control_connection, 'connect'), \
         patch.object(cluster, '_populate_hosts'), \
         patch.object(cluster.profile_manager, 'check_supported'):

@@ -32,7 +32,7 @@ from cassandra._management import (
     ManagementRuntime, ReactorChannel, ManagementClosed, ManagementOverloaded,
     assert_synchronous_api, execution_context, physical_work_context,
     performing_cleanup, compatibility_call, compatibility_work,
-    compatibility_timeout, policy_call)
+    compatibility_timeout, policy_call, callback_on)
 
 __all__ = ()
 
@@ -188,7 +188,8 @@ class LifecycleCoordinator:
 
     def __init__(self, cluster=None, runtime=None):
         self._cluster = weakref.proxy(cluster) if cluster is not None else None
-        self._cluster_ref = weakref.ref(cluster) if cluster is not None else lambda: None
+        self._cluster_ref = (weakref.ref(cluster) if cluster is not None
+                             else lambda: None)
         self._lock = RLock()
         self._local = local()
         self._events = deque()
@@ -420,7 +421,8 @@ class LifecycleCoordinator:
                 finally:
                     self._local.depth -= 1
         finally:
-            if (drain or self._draining) and not getattr(self._local, 'depth', 0):
+            if ((drain or self._draining) and
+                    not getattr(self._local, 'depth', 0)):
                 self.drain()
 
     def reserve_refresh(self, force_token_rebuild=False):
@@ -472,6 +474,7 @@ class LifecycleCoordinator:
                     channel = ReactorChannel(connection_class)
                     runtime._dispatch = channel.dispatch
                     runtime._on_finalized = channel.close
+                    runtime._join_completion = channel.join
                     if self.closed:
                         raise ManagementClosed(
                             'Lifecycle coordinator closed during startup')
@@ -500,23 +503,9 @@ class LifecycleCoordinator:
         event = ready
 
         def deliver():
-            with self._lock:
-                if self.closed or event not in self._events:
-                    return
-                self._events.remove(event)
-                self._active_event = True
-            try:
-                self._local.delivering = True
-                callback()
-            except Exception:
-                log.exception("Error delivering host lifecycle notification")
-            finally:
-                self._local.delivering = False
-                with self._lock:
-                    self._active_event = False
-                    if not self._events:
-                        self._draining = False
-                        self._idle.set()
+            self._deliver_callbacks(
+                (callback,), 'Error delivering host lifecycle notification',
+                event=event)
 
         with self._lock:
             if self.closed:
@@ -532,6 +521,39 @@ class LifecycleCoordinator:
                 # on a separate executor draining again after that callback.
                 runtime.release_notifications([ready])
         return event, completion
+
+    def _deliver_callbacks(self, callbacks, error_message, event=None,
+                           raise_errors=False):
+        """Track serial delivery and isolate each callback's failure."""
+        with self._lock:
+            if self.closed:
+                return
+            if event is not None:
+                if event not in self._events:
+                    return
+                self._events.remove(event)
+            self._active_event = self._draining = True
+            self._idle.clear()
+        try:
+            self._local.delivering = True
+            for callback in callbacks:
+                try:
+                    callback()
+                except Exception:
+                    log.exception(error_message)
+                    if raise_errors:
+                        raise
+        finally:
+            self._local.delivering = False
+            with self._lock:
+                self._finish_delivery_locked()
+
+    def _finish_delivery_locked(self):
+        """Release active delivery while holding the publication lock."""
+        self._active_event = False
+        if not self._events:
+            self._draining = False
+            self._idle.set()
 
     def submit(self, callback, *args, **kwargs):
         """Admit an ordered notification on the serial compatibility lane."""
@@ -573,22 +595,11 @@ class LifecycleCoordinator:
                     if self._pending_observations.get(id(host)) is entry:
                         self._pending_observations.pop(id(host))
                     callbacks = tuple(entry[1].values())
-                    self._active_event = self._draining = True
-                    self._idle.clear()
                 try:
-                    self._local.delivering = True
-                    for pending_callback in callbacks:
-                        try:
-                            pending_callback()
-                        except Exception:
-                            log.exception('Error delivering deferred lifecycle observation')
+                    self._deliver_callbacks(
+                        callbacks,
+                        'Error delivering deferred lifecycle observation')
                 finally:
-                    self._local.delivering = False
-                    with self._lock:
-                        self._active_event = False
-                        if not self._events:
-                            self._draining = False
-                            self._idle.set()
                     runtime.unregister_health(host, only_if_idle=True)
 
             entry = (host, {family: callback}, deliver)
@@ -670,13 +681,19 @@ class LifecycleCoordinator:
         """Retain one idempotent reconciliation per owned Session lifetime."""
         if self.closed:
             return
-        runtime = self._ensure_runtime()
+        try:
+            runtime = self._ensure_runtime()
+        except ManagementClosed:
+            return
         try:
             self._queue_event(session._reconcile_pools)
         except ManagementOverloaded:
             def reconcile():
                 try:
-                    session._reconcile_pools()
+                    self._deliver_callbacks(
+                        (session._reconcile_pools,),
+                        'Error delivering session pool reconciliation',
+                        raise_errors=True)
                 finally:
                     runtime.unregister_health(session, only_if_idle=True)
             # Session-wide demand must survive removal of any individual host.
@@ -690,16 +707,25 @@ class LifecycleCoordinator:
         The executor releases transaction gates without joining delivery.
         Coalesced negative observations retain their admission-only receipt.
         """
-        try:
-            queued = self._queue_event(partial(callback, *args, **kwargs))
-        except ManagementOverloaded:
-            if getattr(callback, '_negative_lifecycle', False):
-                host = args[1]
-                if self._retain_negative(host, partial(callback, *args, **kwargs)):
-                    completed = Future()
-                    completed.set_result(None)
-                    return completed
-            raise
+        notification = partial(callback, *args, **kwargs)
+        negative = getattr(callback, '_negative_lifecycle', False) is True
+        with self._lock:
+            retained = False
+            if negative and id(args[1]) in self._pending_observations:
+                retained = self._retain_negative(args[1], notification)
+                queued = None
+            else:
+                try:
+                    queued = self._queue_event(notification)
+                except ManagementOverloaded:
+                    if not negative or not self._retain_negative(
+                            args[1], notification):
+                        raise
+                    retained = True
+            if retained:
+                completed = Future()
+                completed.set_result(None)
+                return completed
         if queued is None:
             return None
         event, completion = queued
@@ -1028,7 +1054,12 @@ class LifecycleCoordinator:
 
     def _submit_reconnect(self, reconnect):
         """Retain one control reconnect demand across endpoint replacements."""
-        runtime = self._ensure_runtime()
+        if self.closed:
+            return
+        try:
+            runtime = self._ensure_runtime()
+        except ManagementClosed:
+            return
         try:
             self._queue_event(reconnect)
         except ManagementOverloaded:
@@ -1231,7 +1262,8 @@ def compatibility_lock(coordinator, lock):
     from cassandra._management import compatibility_lock as admitted_lock
     try:
         with admitted_lock(lock):
-            coordinator._local.locked = getattr(coordinator._local, 'locked', 0) + 1
+            coordinator._local.locked = (
+                getattr(coordinator._local, 'locked', 0) + 1)
             try:
                 yield
             finally:
