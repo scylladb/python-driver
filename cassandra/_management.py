@@ -34,7 +34,8 @@ from itertools import chain
 import logging
 import os
 from threading import (
-    Condition, Event, Lock, Thread, current_thread, enumerate as active_threads,
+    Condition, Event, Lock, Thread, current_thread,
+    enumerate as active_threads,
     local)
 import time
 from typing import NamedTuple
@@ -950,11 +951,13 @@ class ManagementRuntime:
         for future in chain(record.futures, record.foreign_futures):
             self._retire_captures_locked(future._delivery.fail(error))
 
-    def _retire_captures_locked(self, captures):
+    def _retire_captures_locked(self, captures, record=None):
         if captures:
             # Last captures can run arbitrary finalizers. Keep them off owners
             # and retain cleanup until the callback lane drops them.
-            self._callback_garbage.append(captures)
+            if record is not None:
+                record.notification = True
+            self._callback_garbage.append((captures, record))
             self._capture_obligations += 1
             self._condition.notify_all()
 
@@ -1064,6 +1067,21 @@ class ManagementRuntime:
             self._condition.notify_all()
         if record.delivery or record.notification:
             return
+        if isinstance(record.handler, _Notification):
+            captures = record.handler.callbacks
+            record.handler = None
+            if captures:
+                self._retire_captures_locked(captures, record)
+                return
+        elif record.handler is _compatibility_reservation:
+            # This module-owned function has no captures to dispose.
+            record.handler = None
+        elif record.handler is not None:
+            # Keep ordinary admission charged through handler disposal.
+            # Private native completion above remains independent of L.
+            self._retire_captures_locked([record.handler], record)
+            record.handler = None
+            return
         record.released = True
         count = record.budgets['ordinary']
         if count:
@@ -1080,11 +1098,6 @@ class ManagementRuntime:
                 if future._delivery.record is record:
                     future._delivery.record = future._record
         record.foreign_futures.clear()
-        if isinstance(record.handler, _Notification):
-            self._retire_captures_locked(record.handler.callbacks)
-        elif record.handler is not None:
-            self._retire_captures_locked([record.handler])
-        record.handler = None
         self._condition.notify_all()
         self._maybe_finalized_locked()
 
@@ -1184,7 +1197,7 @@ class ManagementRuntime:
                         return
                     self._condition.wait()
                 if self._callback_garbage:
-                    garbage = self._callback_garbage.popleft()
+                    garbage, retiring_record = self._callback_garbage.popleft()
                 else:
                     garbage = None
                     record, callback = self._notifications.popleft()
@@ -1196,7 +1209,11 @@ class ManagementRuntime:
                         garbage = None
                         with self._condition:
                             self._capture_obligations -= 1
+                            if retiring_record is not None:
+                                retiring_record.notification = False
+                                self._release_locked(retiring_record)
                             self._maybe_finalized_locked()
+                retiring_record = None
                 continue
             with _entered('callback', record):
                 try:
@@ -1238,11 +1255,12 @@ class ManagementRuntime:
         return release
 
     def close(self, wait=False):
-        """Retire admission and return its already-set ``closed`` event.
+        """Begin admission retirement and return the shared ``closed`` event.
 
-        ``wait`` retains the synchronous-context check; retirement completes
-        before this method returns. Use :meth:`join` to wait for cleanup,
-        callback delivery and runner termination.
+        The outermost call sets the event after native retirement. A reentrant
+        call may return it before the outer call finishes. ``wait`` checks the
+        synchronous context and waits for this event. Use :meth:`join` to wait
+        for cleanup, callback delivery and runner termination.
         """
         self._check_pid()
         if wait:
@@ -1399,6 +1417,10 @@ def performing_cleanup():
     return getattr(_context, 'cleanup', False)
 
 
+def _compatibility_reservation(record):
+    return _PENDING
+
+
 class _CompatibilityCall:
     """Admit legacy phases while their state writers still use locks.
 
@@ -1421,7 +1443,7 @@ class _CompatibilityCall:
             return
         if self.budget == 'aggregate' and self.runtime._reentry_active:
             raise ManagementContextError('Recursive native reentry aggregate')
-        future = self.runtime.submit(lambda record: _PENDING, wait=True,
+        future = self.runtime.submit(_compatibility_reservation, wait=True,
                                      budget=self.budget, reserve=1)
         self.record = future._record
         try:
@@ -1488,7 +1510,7 @@ def compatibility_work(runtime):
         # Admission cannot retain a phase's credit while waiting for a child
         # record in a full window, or retain a Session lock needed by workers.
         call.release()
-    future = runtime.submit(lambda record: _PENDING, wait=same_call,
+    future = runtime.submit(_compatibility_reservation, wait=same_call,
                             budget=budget, reserve=1)
     record = future._record
     attached = False

@@ -6,7 +6,7 @@
 Run from a checkout with the driver dependencies installed::
 
     python benchmarks/bench_management_runtime.py
-    python benchmarks/bench_management_runtime.py --module-source /tmp/baseline.py
+    python benchmarks/bench_management_runtime.py --module-source baseline.py
 
 Each size uses two warm-ups and seven measured runs. Startup, owner progress,
 and cleanup are excluded from timing. Admission holds the runtime condition
@@ -66,8 +66,11 @@ def sample(module, size, snapshots):
                 manager.submit(retain)
             admission_ns = perf_counter_ns() - started
         # A FIFO fence excludes owner progress from snapshot timing.
-        manager.submit(lambda record: None).result(5)
+        fence = manager.submit(lambda record: None)
+        fence.result(5)
         with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: fence._record.released, 5)
             assert len(manager._records) == size
         started = perf_counter_ns()
         for _ in range(snapshots):
@@ -91,7 +94,8 @@ def main():
     if args.snapshots < 1:
         parser.error('--snapshots must be positive')
     module = load_runtime(args.module_source)
-    print('retained  admission ns/operation  snapshot ns/call (medians, 7 runs)')
+    print('retained  admission ns/operation  '
+          'snapshot ns/call (medians, 7 runs)')
     for size in (1, 64, 256, 1024):
         for _ in range(2):
             sample(module, size, args.snapshots)
