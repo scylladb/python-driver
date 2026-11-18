@@ -44,7 +44,7 @@ from cassandra.policies import RetryPolicy, ExponentialBackoffRetryPolicy, Simpl
 from cassandra.pool import Host, NoConnectionsAvailable
 from cassandra.query import (SimpleStatement, PreparedStatement, BoundStatement,
                              BatchStatement)
-from tests.unit.utils import move_host
+from tests.unit.utils import move_host, new_owned_pool
 from tests.util import assertEqual, assertIsInstance
 import pytest
 
@@ -75,34 +75,7 @@ class ResponseFutureTests(unittest.TestCase):
         return session
 
     def make_owned_pool(self, host, request_id=1):
-        connection = Mock(spec=Connection)
-        connection.lock = RLock()
-        connection._requests = {}
-        connection.request_ids = deque()
-        connection.orphaned_request_ids = set()
-        connection.orphaned_threshold = 256
-        connection.orphaned_threshold_reached = False
-        connection.in_flight = 0
-        connection.is_control_connection = False
-        connection.is_defunct = False
-
-        def borrow_connection(**kwargs):
-            connection.in_flight += 1
-            return connection, request_id
-
-        def return_connection(conn, stream_was_orphaned=False):
-            if not stream_was_orphaned:
-                conn.in_flight -= 1
-
-        def send_msg(message, stream_id, cb, **kwargs):
-            connection._requests[stream_id] = cb
-            return 128
-
-        connection.send_msg.side_effect = send_msg
-        pool = Mock(host=host, endpoint=host.endpoint, is_shutdown=False)
-        pool.borrow_connection.side_effect = borrow_connection
-        pool.return_connection.side_effect = return_connection
-        return pool, connection
+        return new_owned_pool(host, request_id)
 
     def test_timeout_returns_stream_to_borrowed_pool_after_replacement(self):
         host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
