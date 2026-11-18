@@ -35,10 +35,11 @@ from typing import Any, Dict, Optional, Union, Tuple
 from warnings import warn
 from random import random
 import re
+from contextlib import nullcontext
 import queue
 import socket
 import time
-from threading import get_ident, Lock, RLock, Thread, Event
+from threading import current_thread, get_ident, Lock, RLock, Thread, Event
 import uuid
 
 try:
@@ -690,6 +691,7 @@ class ProfileManager(object):
             for n in names
         )
 
+    @_lifecycle.policy_call
     def distance(self, host):
         if not self.pools_allowed:
             return HostDistance.IGNORED
@@ -699,14 +701,17 @@ class ProfileManager(object):
             HostDistance.REMOTE if HostDistance.REMOTE in distances else \
             HostDistance.IGNORED
 
+    @_lifecycle.policy_call
     def populate(self, cluster, hosts):
         for p in self.profiles.values():
             p.load_balancing_policy.populate(cluster, hosts)
 
+    @_lifecycle.policy_call
     def check_supported(self):
         for p in self.profiles.values():
             p.load_balancing_policy.check_supported()
 
+    @_lifecycle.policy_call
     def on_up(self, host):
         if not self.pools_allowed:
             return
@@ -715,6 +720,7 @@ class ProfileManager(object):
                 return
             p.load_balancing_policy.on_up(host)
 
+    @_lifecycle.policy_call
     def on_down(self, host):
         if not self.pools_allowed:
             return
@@ -723,12 +729,14 @@ class ProfileManager(object):
             if host._is_removed:
                 return
 
+    @_lifecycle.policy_call
     def on_add(self, host):
         for p in self.profiles.values():
             if host._is_removed:
                 return
             p.load_balancing_policy.on_add(host)
 
+    @_lifecycle.policy_call
     def on_remove(self, host):
         for p in self.profiles.values():
             p.load_balancing_policy.on_remove(host)
@@ -1764,6 +1772,10 @@ class Cluster(object):
             schema_metadata_enabled, token_metadata_enabled,
             schema_meta_page_size=schema_metadata_page_size)
 
+    @staticmethod
+    def _management_start_allowed():
+        return not _cluster_scheduler_shutdown_started
+
     def _resolve_hostnames(self):
         raw_contact_points = []
         for cp in [cp for cp in self.contact_points if not isinstance(cp, EndPoint)]:
@@ -1856,6 +1868,7 @@ class Cluster(object):
             session.user_type_registered(keyspace, user_type, klass)
         UserType.evict_udt_class(keyspace, user_type)
 
+    @_lifecycle.synchronous_api
     def add_execution_profile(self, name, profile, pool_wait_timeout=5):
         """
         Adds an :class:`.ExecutionProfile` to the cluster. This makes it available for use by ``name`` in :meth:`.Session.execute`
@@ -1864,11 +1877,16 @@ class Cluster(object):
         Normally profiles will be injected at cluster initialization via ``Cluster(execution_profiles)``. This method
         provides a way of adding them dynamically.
 
-        Adding a new profile updates the connection pools according to the specified ``load_balancing_policy``. By default,
-        this method will wait up to five seconds for the pool creation to complete, so the profile can be used immediately
-        upon return. This behavior can be controlled using ``pool_wait_timeout`` (see
-        `concurrent.futures.wait <https://docs.python.org/3/library/concurrent.futures.html#concurrent.futures.wait>`_
-        for timeout semantics).
+        Adding a new profile updates the connection pools for its
+        ``load_balancing_policy``. By default, this method waits up to
+        five seconds for pool-work capacity and completion, so the
+        profile can be used immediately upon return.
+
+        The ``pool_wait_timeout`` budget starts when pool updates begin.
+        Initial management admission, policy population and readmission
+        after that policy phase are outside the budget. A timeout leaves
+        the profile registered and its unfinished pool work scheduled.
+        See :func:`concurrent.futures.wait` for timeout semantics.
         """
         if not isinstance(profile, ExecutionProfile):
             raise TypeError("profile must be an instance of ExecutionProfile")
@@ -1892,18 +1910,30 @@ class Cluster(object):
                 ''.format(name=_execution_profile_to_string(name), self=self, ep=profile))
 
         self.profile_manager.profiles[name] = profile
-        profile.load_balancing_policy.populate(self, self.metadata.all_hosts())
-        # on_up after populate allows things like DCA LBP to choose default local dc
-        for host in filter(lambda h: h.is_up, self.metadata.all_hosts()):
-            profile.load_balancing_policy.on_up(host)
-        futures = set()
-        for session in tuple(self.sessions):
-            self._set_default_dbaas_consistency(session)
-            futures.update(session.update_created_pools())
-        _, not_done = wait_futures(futures, pool_wait_timeout)
+        self._populate_execution_profile(profile)
+        try:
+            with _lifecycle.compatibility_timeout(pool_wait_timeout) as remaining:
+                futures = set()
+                for session in tuple(self.sessions):
+                    self._set_default_dbaas_consistency(session)
+                    futures.update(session.update_created_pools())
+                _, not_done = wait_futures(futures, remaining())
+        except OperationTimedOut:
+            # Admission expired before all hosts could be scheduled. Keep the
+            # registered profile's remaining work live after returning timeout.
+            for session in tuple(self.sessions):
+                self._lifecycle.submit_reconciliation(session)
+            raise
         if not_done:
             raise OperationTimedOut("Failed to create all new connection pools in the %ss timeout." % pool_wait_timeout,
                                     timeout=pool_wait_timeout)
+
+    @_lifecycle.policy_call
+    def _populate_execution_profile(self, profile):
+        profile.load_balancing_policy.populate(self, self.metadata.all_hosts())
+        # on_up after populate lets policies choose their default local DC.
+        for host in filter(lambda h: h.is_up, self.metadata.all_hosts()):
+            profile.load_balancing_policy.on_up(host)
 
     @property
     def ssl_session_cache(self):
@@ -2084,6 +2114,7 @@ class Cluster(object):
                     "https://python-driver.docs.scylladb.com/stable/api/cassandra/cluster.html#cassandra.cluster.Cluster.protocol_version", self.protocol_version, new_version, host_endpoint)
         self.protocol_version = new_version
 
+    @_lifecycle.policy_call
     def _populate_hosts(self):
         self.profile_manager.populate(
             weakref.proxy(self), self.metadata.all_hosts())
@@ -2091,6 +2122,7 @@ class Cluster(object):
             weakref.proxy(self), self.metadata.all_hosts()
         )
 
+    @_lifecycle.synchronous_api
     def connect(self, keyspace=None, wait_for_all_pools=False):
         """
         Creates and returns a new :class:`~.Session` object.
@@ -2101,10 +2133,20 @@ class Cluster(object):
         `wait_for_all_pools` specifies whether this call should wait for all connection pools to be
         established or attempted. Default is `False`, which means it will return when the first
         successful connection is established. Remaining pools are added asynchronously.
+
+        Blocking management APIs such as this method and
+        :meth:`add_execution_profile` raise
+        :class:`~cassandra.DriverException` from management handlers and
+        from I/O contexts reported by the connection class. Applications
+        should catch that public base exception. Built-in connection
+        classes report their I/O context. Custom classes without
+        management hooks use a separate completion channel, which cannot
+        identify their I/O callbacks. Do not call blocking management
+        APIs from those custom I/O callbacks.
         """
         reject_late_connect = False
         shutdown_rejected_cluster = False
-        with self._lock:
+        with _lifecycle.compatibility_lock(self._lifecycle, self._lock):
             if self.is_shutdown:
                 raise DriverException("Cluster is already shut down")
 
@@ -2200,12 +2242,41 @@ class Cluster(object):
         call shutdown() on a Cluster instance when you are done with it**.
 
         Once shutdown, a Cluster should not be used for any purpose.
+        From management callbacks, handlers, marked pool-creation
+        workers and I/O contexts reported by the connection class, this
+        method marks the Cluster shut down and defers physical cleanup.
+        Return in those contexts does not guarantee that cleanup has
+        finished. Arbitrary executor workers (including preparation
+        workers) and custom I/O callbacks without management hooks are
+        not detected. Use an application thread for shutdown in those
+        cases.
+
+        Shutdown does not wait for callbacks already running on the
+        lifecycle notification thread, even from an application thread.
+        Those callbacks can finish after this method returns. If
+        deferred cleanup submission raises, call ``shutdown()`` again
+        from an application thread to finish the retained cleanup.
         """
         with self._lock:
             if self.is_shutdown:
-                return
+                cleanup = getattr(self, '_shutdown_cleanup', None)
+                if cleanup is None:
+                    return
             else:
                 self.is_shutdown = True
+                cleanup = None
+
+        if cleanup is not None:
+            _lifecycle.retry_cleanup(self, self)
+            return
+
+        if _lifecycle.managed_context(self):
+            try:
+                self._shutdown_future = _lifecycle.defer_cleanup(
+                    self, partial(self._shutdown, wait_for_executor=False))
+            finally:
+                self._lifecycle.close()
+            return
 
         # Once interpreter scheduler cleanup has begun, executor teardown is
         # imminent and this call may itself be running on an executor worker.
@@ -2216,7 +2287,7 @@ class Cluster(object):
         """Finish cleanup after shutdown has been claimed under ``self._lock``."""
 
         self._lifecycle.close()
-        if self._lifecycle.delivering:
+        if self._lifecycle.delivering or _lifecycle.execution_context() is not None:
             wait_for_executor = False
 
         if self._idle_heartbeat:
@@ -2309,7 +2380,7 @@ class Cluster(object):
             for session in tuple(self.sessions):
                 if not self._lifecycle.readiness_is_current(host, generation):
                     return
-                session.update_created_pools()
+                self._reconcile_session_pools(session)
         finally:
             self._lifecycle.finish_up(host, generation)
 
@@ -2385,12 +2456,14 @@ class Cluster(object):
             if futures:
                 self._lifecycle.collect_futures(
                     futures, partial(self._on_up_pools_completed, host,
-                                     generation=generation))
+                                     generation=generation), host=host,
+                    is_current=partial(self._lifecycle.readiness_is_current,
+                                       host, generation))
         except Exception:
             log.exception("Unexpected failure handling node %s being marked up:", host)
             for future in futures:
                 future.cancel()
-
+            self._on_up_preparation_failed(host, generation)
             raise
         else:
             if not futures:
@@ -2471,7 +2544,7 @@ class Cluster(object):
         return reconnector
 
     @run_in_executor
-    @_lifecycle.event
+    @_lifecycle.negative_event
     def on_down_potentially_blocking(self, host, is_host_addition,
                                      down_event_generation,
                                      on_add_reconnection=None):
@@ -2801,7 +2874,8 @@ class Cluster(object):
                                 host, addition_token):
                             return
                         try:
-                            session.update_created_pools(
+                            self._reconcile_session_pools(
+                                session,
                                 excluded_host=host,
                                 hosts=reconciliation_hosts)
                         except Exception:
@@ -2843,9 +2917,12 @@ class Cluster(object):
                                addition_token=addition_token)
             return
 
-        self._lifecycle.collect_futures(futures, pools_completed)
+        self._lifecycle.collect_futures(
+            futures, pools_completed, host=host,
+            is_current=partial(self._lifecycle.addition_is_current,
+                               host, addition_token))
 
-    @_lifecycle.event
+    @_lifecycle.observation_event('readiness')
     def _finalize_add(self, host, set_up=True, generation=None,
                       addition_token=None, advance_health=True):
         if not self._lifecycle.mark_ready(
@@ -2859,7 +2936,13 @@ class Cluster(object):
         for session in tuple(self.sessions):
             if not self._lifecycle.readiness_is_current(host, generation):
                 return
-            session.update_created_pools()
+            self._reconcile_session_pools(session)
+
+    def _reconcile_session_pools(self, session, **kwargs):
+        """Admit readiness reconciliation through its callback work window."""
+        runtime = self._lifecycle._ensure_runtime()
+        with _lifecycle.compatibility_call(runtime):
+            return session.update_created_pools(**kwargs)
 
     def _notify_pending_add(self, host, generation):
         if not self._lifecycle.claim_addition_notification(host, generation):
@@ -3135,6 +3218,7 @@ class Cluster(object):
         connection = self.control_connection._connection
         return self.control_connection._get_host_for_connection(connection)
 
+    @_lifecycle.synchronous_api
     def refresh_schema_metadata(self, max_schema_agreement_wait=None):
         """
         Synchronously refresh all schema metadata.
@@ -3151,6 +3235,7 @@ class Cluster(object):
         if not self.control_connection.refresh_schema(schema_agreement_wait=max_schema_agreement_wait, force=True):
             raise DriverException("Schema metadata was not refreshed. See log for details.")
 
+    @_lifecycle.synchronous_api
     def refresh_keyspace_metadata(self, keyspace, max_schema_agreement_wait=None):
         """
         Synchronously refresh keyspace metadata. This applies to keyspace-level information such as replication
@@ -3162,6 +3247,7 @@ class Cluster(object):
                                                       schema_agreement_wait=max_schema_agreement_wait, force=True):
             raise DriverException("Keyspace metadata was not refreshed. See log for details.")
 
+    @_lifecycle.synchronous_api
     def refresh_table_metadata(self, keyspace, table, max_schema_agreement_wait=None):
         """
         Synchronously refresh table metadata. This applies to a table, and any triggers or indexes attached
@@ -3173,6 +3259,7 @@ class Cluster(object):
                                                       schema_agreement_wait=max_schema_agreement_wait, force=True):
             raise DriverException("Table metadata was not refreshed. See log for details.")
 
+    @_lifecycle.synchronous_api
     def refresh_materialized_view_metadata(self, keyspace, view, max_schema_agreement_wait=None):
         """
         Synchronously refresh materialized view metadata.
@@ -3183,6 +3270,7 @@ class Cluster(object):
                                                       schema_agreement_wait=max_schema_agreement_wait, force=True):
             raise DriverException("View metadata was not refreshed. See log for details.")
 
+    @_lifecycle.synchronous_api
     def refresh_user_type_metadata(self, keyspace, user_type, max_schema_agreement_wait=None):
         """
         Synchronously refresh user defined type metadata.
@@ -3193,6 +3281,7 @@ class Cluster(object):
                                                       schema_agreement_wait=max_schema_agreement_wait, force=True):
             raise DriverException("User Type metadata was not refreshed. See log for details.")
 
+    @_lifecycle.synchronous_api
     def refresh_user_function_metadata(self, keyspace, function, max_schema_agreement_wait=None):
         """
         Synchronously refresh user defined function metadata.
@@ -3205,6 +3294,7 @@ class Cluster(object):
                                                       schema_agreement_wait=max_schema_agreement_wait, force=True):
             raise DriverException("User Function metadata was not refreshed. See log for details.")
 
+    @_lifecycle.synchronous_api
     def refresh_user_aggregate_metadata(self, keyspace, aggregate, max_schema_agreement_wait=None):
         """
         Synchronously refresh user defined aggregate metadata.
@@ -3217,6 +3307,7 @@ class Cluster(object):
                                                       schema_agreement_wait=max_schema_agreement_wait, force=True):
             raise DriverException("User Aggregate metadata was not refreshed. See log for details.")
 
+    @_lifecycle.synchronous_api
     def refresh_nodes(self, force_token_rebuild=False):
         """
         Synchronously publish refreshed node-list and token metadata.
@@ -3273,6 +3364,11 @@ class Cluster(object):
         if token is None:
             return
 
+        worker_threads = []
+        def prepare():
+            worker_threads.append(current_thread())
+            return self._prepare_all_queries(host)
+
         def completed(future):
             def deliver():
                 if not self._lifecycle.finish_preparation(host, token):
@@ -3283,10 +3379,15 @@ class Cluster(object):
                 except Exception:
                     log.exception("Error preparing host %s for readiness", host)
                     failed()
-            self._lifecycle.submit(deliver)
+            with self._lifecycle.transaction(drain=False), host.lock:
+                if (not self._lifecycle.is_current(host) or
+                        getattr(host, '_lifecycle_preparation', None) is not token):
+                    return
+                self._lifecycle.submit_observation(host, 'preparation', deliver)
+            self._lifecycle.drain(wait=current_thread() not in worker_threads)
 
         try:
-            future = self.executor.submit(self._prepare_all_queries, host)
+            future = self.executor.submit(prepare)
         except Exception:
             self._lifecycle.finish_preparation(host, token)
             raise
@@ -3561,12 +3662,15 @@ class Session(object):
     _pool_generations = None
     _pool_intents = None
     _pool_creation_work = None
+    # Bare Session.__new__ fixtures have no admitted runtime lifetime.
+    _management_runtime = None
     _profile_manager = None
     _metrics = None
     _request_init_callbacks = None
 
     def __init__(self, cluster, hosts, keyspace=None):
         self.cluster = cluster
+        self._management_runtime = cluster._lifecycle._ensure_runtime()
         self.hosts = hosts
         self.keyspace = keyspace
 
@@ -4213,11 +4317,26 @@ class Session(object):
         """
         Close all connections.  ``Session`` instances should not be used
         for any purpose after being shutdown.
+        From management callbacks, handlers, marked pool-creation
+        workers and I/O contexts reported by the connection class, this
+        method defers physical cleanup. Return in those contexts does
+        not guarantee that all connections have finished closing.
+        Arbitrary executor workers (including preparation workers) and
+        custom I/O callbacks without management hooks are not detected.
+        Use an application thread for shutdown in those cases.
+
+        Shutdown does not wait for callbacks already running on the
+        lifecycle notification thread, even from an application thread.
+        If deferred cleanup submission raises, an application thread can
+        call ``shutdown()`` again to finish the retained cleanup.
         """
         with self._lock:
             if self.is_shutdown:
-                return
+                cleanup = getattr(self, '_shutdown_cleanup', None)
+                if cleanup is None:
+                    return
             else:
+                cleanup = None
                 self.is_shutdown = True
                 pool_generations = self._pool_generations
                 if pool_generations is not None:
@@ -4233,11 +4352,25 @@ class Session(object):
                     for future in initial_connect_futures
                     if future in pool_creation_work)
 
+        if cleanup is not None:
+            _lifecycle.retry_cleanup(self.cluster, self)
+            return
+
+        cleanup = partial(self._finish_shutdown, initial_connect_work,
+                          initial_connect_futures)
+        if (_lifecycle.managed_context(self.cluster) and
+                not _lifecycle.performing_cleanup()):
+            self._shutdown_future = _lifecycle.defer_cleanup(
+                self.cluster, cleanup, owner=self)
+            return
+        cleanup()
+
+    def _finish_shutdown(self, initial_connect_work, initial_connect_futures):
         # PYTHON-673. If shutdown was called shortly after session init, avoid
         # a race by cancelling any initial connection attempts haven't started,
         # then blocking on any that have.
         for future in initial_connect_work:
-            future.cancel()
+            _cancel_and_notify(future)
         wait_futures(initial_connect_work)
 
         for future in initial_connect_futures:
@@ -4283,22 +4416,43 @@ class Session(object):
             pool_intents = self._pool_intents = {}
         return pool_intents
 
-    def _submit_pool_creation_work(self, completion, fn, *args, **kwargs):
-        """Submit pool creation and retain its work behind its public proxy."""
-        with self._lock:
-            work_future = self.submit(fn, *args, **kwargs)
-            add_done_callback = (
-                getattr(work_future, 'add_done_callback', None)
-                if work_future is not None else None)
-            if callable(add_done_callback):
-                work = self._pool_creation_work
-                if work is None:
-                    work = self._pool_creation_work = {}
-                work[completion] = work_future
+    def _submit_pool_creation_work(self, intent, fn, *args, **kwargs):
+        """Wire accepted physical work before phase readmission."""
+        completion = intent.completion
+        worker_threads = []
+        submitted = False
+        def work():
+            worker_threads.append(current_thread())
+            with _lifecycle.physical_work_context():
+                return fn(*args, **kwargs)
 
-        if callable(add_done_callback):
-            add_done_callback(partial(
-                self._pool_creation_work_done, completion))
+        try:
+            with _lifecycle.compatibility_work(self._management_runtime) as attach:
+                with self._lock:
+                    work_future = self.submit(work)
+                    submitted = work_future is not None
+                    add_done_callback = (
+                        getattr(work_future, 'add_done_callback', None)
+                        if work_future is not None else None)
+                    if callable(add_done_callback):
+                        work_future._management_work_threads = worker_threads
+                        work_items = self._pool_creation_work
+                        if work_items is None:
+                            work_items = self._pool_creation_work = {}
+                        work_items[completion] = work_future
+                attach(work_future)
+                if callable(add_done_callback):
+                    add_done_callback(partial(self._pool_creation_work_done, completion))
+                    add_done_callback(partial(
+                        _lifecycle.physical_completion, intent.complete_from_work))
+                else:
+                    intent.complete_result(work_future)
+        except Exception as exc:
+            # Once accepted, work owns the shared intent's result. A timeout
+            # while reacquiring a phase belongs only to the synchronous caller.
+            if not submitted:
+                intent.complete_exception(exc)
+            raise
         return work_future
 
     def _pool_creation_work_done(self, completion, work_future):
@@ -4717,21 +4871,14 @@ class Session(object):
                     finally:
                         new_pool.shutdown()
 
-        try:
-            work_future = self._submit_pool_creation_work(
-                attempt.intent.completion, run_add_or_renew_pool)
-        except Exception as exc:
-            attempt.intent.complete_exception(exc)
-            raise
+        work_future = self._submit_pool_creation_work(
+            attempt.intent, run_add_or_renew_pool)
         if work_future is None:
-            attempt.intent.complete_result(None)
             return None
         add_done_callback = getattr(
             work_future, 'add_done_callback', None)
         if not callable(add_done_callback):
-            attempt.intent.complete_result(work_future)
             return work_future
-        add_done_callback(attempt.intent.complete_from_work)
         return attempt.intent.completion
 
     def _recover_pool(self, failed_pool):
@@ -4784,7 +4931,8 @@ class Session(object):
                     "Session pool recovery schedule exhausted for %s", host)
                 return
             session.cluster.scheduler.schedule(
-                delay, partial(lifecycle.submit, recover))
+                delay, partial(lifecycle.submit_recovery,
+                               host, failed_pool, recover))
 
         def recover():
             """Reconcile this host without adopting a newer pool lifecycle."""
@@ -4792,8 +4940,12 @@ class Session(object):
             if session is None:
                 return
             try:
-                futures = session.update_created_pools(
-                    hosts=(host,), _expected_pool=failed_pool)
+                admission = (_lifecycle.compatibility_call(session._management_runtime)
+                             if session._management_runtime is not None
+                             else nullcontext())
+                with admission:
+                    futures = session.update_created_pools(
+                        hosts=(host,), _expected_pool=failed_pool)
             except Exception:
                 log.exception("Error recovering session pool for %s", host)
                 retry()
@@ -4801,13 +4953,15 @@ class Session(object):
             if futures:
                 # Reconciliation of this single host has one completion.
                 for future in futures:
-                    future.add_done_callback(partial(lifecycle.submit, retry))
+                    future.add_done_callback(partial(
+                        lifecycle.submit_recovery, host, failed_pool, retry))
             else:
                 retry()
 
         # Connection return may run on a reactor or heartbeat thread. Admit
         # recovery without making that caller deliver lifecycle callbacks.
-        lifecycle.submit_async(self.cluster.executor, retry)
+        lifecycle.submit_recovery(
+            host, failed_pool, retry, executor=self.cluster.executor)
 
     def _shutdown_detached_pool(self, pool, on_shutdown_error=None):
         """Close an unindexed pool even when asynchronous cleanup is rejected.
@@ -5055,7 +5209,13 @@ class Session(object):
             # Queue this pool-removal completion through the lifecycle FIFO so
             # its reconciliation follows active host notifications.
             future.add_done_callback(
-                lambda f: self.cluster._lifecycle.submit(self.update_created_pools))
+                lambda f: self.cluster._lifecycle.submit_reconciliation(self))
+
+    def _reconcile_pools(self):
+        runtime = self._management_runtime
+        with (_lifecycle.compatibility_call(runtime) if runtime is not None
+              else nullcontext()):
+            self.update_created_pools()
 
     def on_remove(self, host, trigger_reconciliation=True):
         """Remove this host's pool and optionally reconcile remaining pools."""
@@ -5064,6 +5224,7 @@ class Session(object):
         else:
             self.remove_pool(host)
 
+    @_lifecycle.synchronous_api
     def set_keyspace(self, keyspace):
         """
         Set the default keyspace for all queries made through this Session.

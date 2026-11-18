@@ -47,6 +47,7 @@ from cassandra.policies import (DCAwareRoundRobinPolicy, HostDistance,
                                 ConstantReconnectionPolicy,
                                 ExponentialReconnectionPolicy,
                                 IdentityTranslator)
+from tests import connection_class
 from tests.unit.utils import new_session_with_pool_state
 
 PEER_IP = "foobar"
@@ -161,6 +162,7 @@ class MockMetadata(object):
 
 class MockCluster(object):
 
+    connection_class = connection_class
     max_schema_agreement_wait = 5
     profile_manager = ProfileManager()
     reconnection_policy = ConstantReconnectionPolicy(2)
