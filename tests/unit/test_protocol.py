@@ -311,10 +311,9 @@ class MessageTest(unittest.TestCase):
         )
         msg = ResultMessage(kind=RESULT_KIND_ROWS)
         msg.recv_results_metadata(buf, user_type_map={})
-        # recv_results_metadata returns early on NO_METADATA; result_metadata_id
-        # must never be set as an instance attribute (it is not a class default).
-        # column_metadata is a class attribute defaulting to None and must remain so.
-        assert not hasattr(msg, 'result_metadata_id')
+        # NO_METADATA returns before setting either metadata field; both keep
+        # their None defaults.
+        assert msg.result_metadata_id is None
         assert msg.column_metadata is None
 
     def test_query_message(self):
