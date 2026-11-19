@@ -267,22 +267,25 @@ that is itself waiting for that completion.
      - Consequences and evidence needed
    * - Dedicated native C; logical P mailboxes
      - One C thread, two P runners shared within one Cluster, and one L
-       callback thread; existing blocking-I/O workers remain separate.
-       C progress is isolated from P runner occupancy.
-     - Four proposed new threads per Cluster plus existing services;
+       callback thread, plus one bounded capture-cleanup thread. Existing
+       blocking-I/O workers remain separate. C progress is isolated from P
+       runner occupancy.
+     - Five proposed new threads per Cluster plus existing services;
        cross-thread result/completion bridges and all supported reactor,
        fork and close paths need validation. Counts are sizing hypotheses.
    * - One native management runner for C and P
      - Distinct logical C/P mailboxes share one native runner; L and blocking
-       I/O remain separate. This reduces handoffs and proposed new threads
-       to two without giving a worker publication authority.
+       I/O remain separate. With the same capture-cleanup service, this reduces
+       handoffs and proposed new threads to three without giving a worker
+       publication authority.
      - P work also delays C. Specify bounded handler/scan turns, fair ready
        scheduling and reserved health/close progress. Co-location cannot bypass
        identity checks, leases or the prohibition on synchronous owner waits.
    * - Fixed per-Cluster runners shared by C and P
      - For comparison, two management runners claim at most one drainer per
-       mailbox, plus L. Existing blocking-I/O workers remain separate. This
-       permits C/P parallelism with one scheduling engine.
+       mailbox, plus L and the capture-cleanup service. Existing blocking-I/O
+       workers remain separate. This permits C/P parallelism with one
+       scheduling engine.
      - Define failure-safe ownership handoff, rejected resubmission and fairness
        when P occupies the runners. Per-Cluster sharing has no unrelated-Cluster
        starvation; process-wide sharing is a different option with that cost.
@@ -334,6 +337,16 @@ delivery path and cannot queue behind a listener that is waiting for that
 future. No owner invokes arbitrary future callbacks
 as part of a state transition.
 
+One additional cleanup thread releases handler captures for private-only native
+operations and consumed health observations. Releasing the last reference can
+invoke a destructor or weakref callback, so this happens outside runtime and
+Future locks, without occupying C, P or the active L callback. Ordinary handler
+captures and notification/done-callback batches retain their L disposal path.
+Coalesced work that retains an ordinary reservation also keeps that path; its
+private waiter may finish independently while the ordinary charge bounds the
+remaining captures. This service does not invoke lifecycle notifications or
+registered done callbacks, and is not a pool per Host or shard.
+
 .. code-block:: text
 
    callers / timers / heartbeat / reactor observations
@@ -351,6 +364,7 @@ as part of a state transition.
    C/P terminal records ---> native condition/waiter notification ---> API waiters
                +----------> reactor completion bridge ---> done callbacks
    C notification batches ---> callback lane ---> continuation messages
+   private/health captures ---> bounded cleanup ---> reservation retirement
 
 For this candidate, the benefit of a native C thread is independence from
 reactor dispatch and application callbacks. Its cost is an additional owner
@@ -508,6 +522,13 @@ their obligations discharge. Native future completion alone does not return
 credit while its physical cleanup or callback batch remains outstanding.
 Use at most one driver-owned completion-queue node per charged record.
 These are internal limits to validate, not public configuration promises.
+
+Capture disposal remains charged too. A private-only native record retains its
+reservation until its cleanup-thread disposal finishes; native completion or
+handoff to cleanup does not make that reservation reusable. This reuses the
+existing admission bounds rather than introducing an uncharged disposal queue.
+Report retained cleanup captures and active disposal separately from pending
+operation counts; terminal operations can still own cleanup obligations.
 
 Ordinary internal nonblocking submissions reject immediately with an internal
 ``ManagementOverloaded`` outcome, distinct from shutdown. They retain no
@@ -716,6 +737,21 @@ owned current/retiring incarnations; retirement frees its record after its
 obligations drain. Test DOWN/REMOVE progress with all 1,024 ordinary credits
 held by slow I/O and separately by paused callbacks.
 
+A consumed health handler keeps its incarnation slot active through cleanup;
+newer observations coalesce in that slot's single pending record. Unregistering
+cannot free an active slot, and re-registering the same incarnation reuses it.
+An old disposal must not clear a newer pending observation or create a second,
+uncharged slot. Also bound consumed and cleanup-pending health records across
+all incarnations by the existing management limit, initially 1,024, separately
+from ordinary capacity. Further pending observations coalesce until reserved
+health capacity returns. Unregistering discards unconsumed pending work outside
+runtime locks; active tombstones remain charged until their obligations drain.
+This bounds retired-incarnation churn without claiming a fixed bound on the
+live registration/configuration data. A full health limit defers native
+application of new observations; ordinary admission saturation alone does not.
+A paired notification remains pending until its native health application
+finishes, including when the active slot or aggregate health limit defers it.
+
 Reserve one result slot with each physical item before submitting it. Results
 and cleanup retain that reservation, so ordinary admission cannot prevent their
 return. Each Cluster, registered Session and logical pool owns one guaranteed,
@@ -733,6 +769,18 @@ active callback batches retain charged records; a slow listener delays its
 lane, not native result publication, cleanup or reentrant API completion.
 Report ordinary, query-driven, health, reentry, close and delivery high-water
 counts separately; never hide growth in an uncharged auxiliary queue.
+
+The cleanup context must not wait for the capacity or disposal that it advances.
+Reject blocking admission, pending ``result``/``exception`` and bulk future
+waits, synchronous reentry, and cleanup-dependent joins there. Already-terminal
+reads, nonblocking submissions and nonblocking close remain valid. Blocking
+close uses the same cleanup-context wait guard. Test destructor and
+weakref-callback reentry through these paths, without holding runtime or Future
+locks across capture release. No finite completion bound is claimed for a
+destructor that itself never returns.
+Such a destructor can backpressure private-native admission and health
+consumption. C/P dispatch and native close retirement remain available;
+finalization and joins still require actual disposal to finish.
 
 Decisions required before adopting the candidate
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -899,9 +947,10 @@ A slow listener can therefore delay background classification on L. It cannot
 delay native negative-health/close handling or consume a physical-work worker
 needed by synchronous policy reentry. Do not run driver-managed lifecycle
 policy callbacks on the physical-work executor, C or P. Within this worked
-candidate's resource proposal, do not add a fifth management lane. A different
-evaluated arrangement needs its own reviewed resource account; four threads
-are not a universal ownership requirement. Physical work returns observations
+candidate, the fifth thread is solely the bounded capture-cleanup service;
+it does not add another lifecycle policy/callback lane. A different evaluated
+arrangement needs its own reviewed resource account; five threads are not a
+universal ownership requirement. Physical work returns observations
 instead of waiting for a management continuation that requires another task
 on that same executor.
 
@@ -1000,6 +1049,13 @@ execution available until the last resource obligation is discharged. Only
 then stop executors, owner threads and completion bridges. Repeated close is
 idempotent and joins the same close record.
 
+Start the cleanup service before the other management threads so it can dispose
+captures after a later startup failure. Failed or interrupted startup must
+retire every started execution resource without dropping captures under owner
+locks or on the active L callback. Keep cleanup available until accepted private
+and health captures drain. The final resource barrier covers all five candidate
+threads and retained disposal obligations, including late results.
+
 Normal external shutdown waits for its transport/operation cleanup barrier,
 but does not wait for an active application notification to return, preserving
 the existing coordinator-close contract. Retire/cancel queued notifications;
@@ -1013,7 +1069,9 @@ Calls originating
 on an owner, callback lane, completion bridge or worker must not self-join or
 wait on a cycle; they retire state immediately and delegate remaining joins
 to cleanup continuations. This worked candidate proposes no dedicated closer
-thread; other arrangements must account for their cleanup resources explicitly.
+thread; its capture-cleanup service is not a general shutdown join worker and
+must not wait for itself. Other arrangements must account for their cleanup
+resources explicitly.
 A Session close retires only its own pools and operations;
 other Sessions and C remain operational. Preserve partial initialization,
 interpreter-exit scheduling guards and fork safeguards; a child process must
@@ -1047,8 +1105,8 @@ deletion stage.
      - Producers and work moved
      - Delete old path only when
    * - #1257
-     - Mailbox/runtime, completion adapters, reserved results, close sink;
-       lifecycle FIFO delivery adapters
+     - Mailbox/runtime, completion adapters, reserved results, close sink,
+       bounded capture disposal; lifecycle FIFO delivery adapters
      - Execution/admission/bridge and required workload/budget decisions above
        are recorded before runtime implementation. Admission, exception,
        saturation, cancellation, callback and runtime compatibility tests pass.
@@ -1126,6 +1184,16 @@ workers, fake timers and barriers, not timing sleeps, for the new scenarios.
        policy/listener callbacks with
        ``executor_threads=1`` and all ordinary delivery credits held; physical
        prerequisites and native completion must still progress.
+       Repeat private-native calls while L remains occupied, retaining their
+       reservations through cleanup and checking that capture high-water stays
+       bounded. Repeat health consumption, unregister/re-register while disposal
+       is paused, and verify one active slot plus its coalesced pending record.
+       Churn distinct retired incarnations with small injected aggregate health
+       limits; consumed captures and tombstones must stay within that limit.
+       Check destructor/weakref reentry, terminal reads, nonblocking submission
+       and close, and reject self-dependent waits on cleanup. Inject failure at
+       each of the five thread-start phases and verify final capture/thread
+       retirement, including shutdown with cleanup paused and late results.
        Profile timeout leaves it registered; retry reports already-exists.
        Test caller initialization overlapping lifecycle delivery without claiming
        that baseline registration excludes the policy from L. For the worked
@@ -1275,17 +1343,17 @@ Do not combine runs with materially different environments into one ratio.
    * - Many hosts/pools/shards
      - 1, 100 and 1,000 logical pools with fake I/O, varying shards per pool;
        also measure the live topology's resource counts
-     - For the worked candidate, new management threads <= 4 per Cluster on
+     - For the worked candidate, new management threads <= 5 per Cluster on
        threaded reactors (one C, two P runners shared within that Cluster, one
-       callback lane), independent of pools/shards;
-       completion adapters must not add one thread per mailbox
+       callback lane and one capture-cleanup thread), independent of pools and
+       shards; completion adapters must not add one thread per mailbox
    * - Repeated close and late results
      - 100 create/connect/close cycles; barrier-controlled late socket/pool
        completions and canceled timers, with bounded existing I/O timeouts
      - Zero residual owned connections, manager threads, outstanding operation
        records or retry timers after final resource barrier; no self/cyclic wait
 
-The worked candidate's proposed four-thread budget excludes existing
+The worked candidate's proposed five-thread budget excludes existing
 scheduler/heartbeat/I/O executor threads, which must be reported too so a
 resource transfer cannot hide growth.
 Its native completion bridges must fit that proposal or obtain a reviewed
