@@ -467,6 +467,7 @@ class _Record:
         self.delivery_ticket = None
         self.delivery_again = False
         self.notification = False
+        self.notifying = False
         self.released = False
 
 
@@ -1480,6 +1481,7 @@ class ManagementRuntime:
                 else:
                     garbage = None
                     record, callback, ready = self._notifications.popleft()
+                    record.notifying = True
             if garbage is not None:
                 with _entered('callback', runtime=self):
                     try:
@@ -1503,6 +1505,11 @@ class ManagementRuntime:
                 else:
                     self._finish(record, value)
                 finally:
+                    # Actual application execution is an ordinary shutdown
+                    # obligation. Its later capture disposal is separate.
+                    with self._condition:
+                        record.notifying = False
+                        self._condition.notify_all()
                     # Drop a bound adapter before publishing released credits;
                     # an idle lane must not root its last coordinator.
                     callback = None
@@ -1651,7 +1658,7 @@ class ManagementRuntime:
             self._condition.wait_for(lambda: (
                 not self._native_runners and not self._cleanup_obligations and
                 all(not (record.physical or record.mailbox_pending or
-                         record.delivery or record.executing)
+                         record.delivery or record.executing or record.notifying)
                     for record in self._records)))
             self._completion_retired = True
             close = self._close_completion
