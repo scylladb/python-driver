@@ -571,7 +571,9 @@ def test_callback_reserved_window_progresses_at_full_delivery_capacity(
     release.set()
     assert completed.wait(5)
     notification.result(5)
-    assert manager._reentry_credits == 0
+    with manager._condition:
+        assert manager._condition.wait_for(
+            lambda: manager._reentry_credits == 0, 5)
 
 
 def test_superseded_physical_result_is_disposed(runtime):
@@ -750,7 +752,7 @@ def test_interrupted_physical_callback_registration_releases_once(
         assert manager.counts()['ordinary'] == 0
 
 
-@pytest.mark.parametrize('failed_phase', [1, 2, 3, 4])
+@pytest.mark.parametrize('failed_phase', [1, 2, 3, 4, 5])
 @pytest.mark.parametrize('startup_error', [RuntimeError, KeyboardInterrupt])
 def test_start_failure_and_repeated_close_leave_no_threads(
         monkeypatch, failed_phase, startup_error):
@@ -786,7 +788,7 @@ def test_start_failure_and_repeated_close_leave_no_threads(
         assert all(not thread.is_alive() for thread in manager._threads)
 
 
-@pytest.mark.parametrize('failed_phase', [1, 2, 3, 4])
+@pytest.mark.parametrize('failed_phase', [1, 2, 3, 4, 5])
 @pytest.mark.parametrize('failure_point', ['construct', 'before', 'after'])
 @pytest.mark.parametrize('startup_error', [RuntimeError, KeyboardInterrupt])
 def test_start_failure_retires_registered_lifetimes(
@@ -931,7 +933,7 @@ def test_start_interruption_retires_entered_or_revokes_unentered_runner(
     assert entered.is_set() is (not bootstrap_pending)
 
 
-@pytest.mark.parametrize('failed_phase', [1, 2, 3, 4])
+@pytest.mark.parametrize('failed_phase', [1, 2, 3, 4, 5])
 def test_start_interruption_before_native_launch_retires_limbo_entry(
         monkeypatch, failed_phase):
     import threading
@@ -1252,7 +1254,7 @@ def test_pool_mailboxes_share_two_runners_without_concurrent_handlers():
         for future in [first, second, queued_same, third]:
             future.result(5)
         assert len({thread for _, thread in seen}) == 2
-        assert len(manager._threads) == 4
+        assert len(manager._threads) == 5
     finally:
         release.set()
         manager.close()
@@ -3092,7 +3094,7 @@ def test_open_notification_retirement_guards_same_lane_waits(mode):
 
 @pytest.mark.skipif(platform.python_implementation() != 'CPython',
                     reason='Requires synchronous reference destruction')
-def test_consumed_health_handler_captures_retire_on_callback_lane():
+def test_consumed_health_handler_captures_retire_on_cleanup_lane():
     manager = ManagementRuntime(Dispatcher())
     applied, retired = Event(), Event()
     observed = []
@@ -3111,8 +3113,417 @@ def test_consumed_health_handler_captures_retire_on_callback_lane():
         assert manager.observe_negative(incarnation, Apply())
         assert applied.wait(5)
         assert retired.wait(5)
-        assert observed == [('callback', False)]
+        assert observed == [('cleanup', False)]
     finally:
+        manager.close()
+        manager.join(5)
+
+
+def test_private_capture_retirement_is_bounded_while_callback_is_occupied():
+    import gc
+    import weakref
+
+    manager = ManagementRuntime(Dispatcher(), reentry_window=1)
+    finished, release = Event(), Event()
+    references, observations = [], []
+    class Payload:
+        pass
+
+    def listener():
+        with manager.synchronous_reentry() as budget:
+            for _ in range(100):
+                payload = Payload()
+                references.append(weakref.ref(payload))
+                future = manager.submit(
+                    lambda record, owned=payload: 7, budget=budget, wait=True)
+                del payload
+                assert future.result(5) == 7
+                del future
+            gc.collect()
+            observations.append(sum(ref() is not None for ref in references))
+            with manager._condition:
+                observations.append(len(manager._records))
+        finished.set()
+        assert release.wait(5)
+
+    try:
+        future = manager.notify(listener)
+        assert finished.wait(5), 'native calls depended on callback retirement'
+        assert observations[0] <= 1
+        assert observations[1] <= 2  # The listener and its last native record.
+    finally:
+        release.set()
+        manager.close()
+        manager.join(5)
+    gc.collect()
+    assert all(ref() is None for ref in references)
+
+
+@pytest.mark.skipif(platform.python_implementation() != 'CPython',
+                    reason='Requires synchronous reference destruction')
+@pytest.mark.parametrize('mode', [
+    'result', 'exception', 'wait', 'as_completed', 'admission', 'reentry',
+    'join'])
+def test_private_cleanup_keeps_credit_and_rejects_self_dependent_waits(mode):
+    manager = ManagementRuntime(Dispatcher(), reentry_window=1)
+    listener_entered, listener_release = Event(), Event()
+    cleanup_entered, cleanup_release = Event(), Event()
+    observations, pending = [], []
+
+    class Payload:
+        def __del__(self):
+            observations.append((execution_context(),
+                                 manager._condition._is_owned()))
+            child = manager.notify(lambda: 9)
+            pending.append(child)
+            try:
+                if mode == 'result':
+                    child.result(2)
+                elif mode == 'exception':
+                    child.exception(2)
+                elif mode == 'wait':
+                    wait([child], timeout=2)
+                elif mode == 'as_completed':
+                    next(as_completed([child], timeout=2))
+                elif mode == 'admission':
+                    manager.submit(lambda record: 1, wait=True, timeout=2)
+                elif mode == 'reentry':
+                    with manager.synchronous_reentry():
+                        observations.append('unexpected reentry')
+                else:
+                    manager.join(2)
+            except ManagementContextError:
+                observations.append('rejected')
+            except BaseException as exc:
+                observations.append(type(exc))
+            else:
+                observations.append('unexpected wait')
+            observations.append(manager.counts()['reentry'])
+            cleanup_entered.set()
+            cleanup_release.wait(5)
+
+    def listener():
+        listener_entered.set()
+        assert listener_release.wait(5)
+
+    try:
+        manager.notify(listener)
+        assert listener_entered.wait(5)
+        payload = Payload()
+        future = manager.submit(lambda record, owned=payload: 7,
+                                budget='reentry')
+        del payload
+        assert future.result(5) == 7
+        assert cleanup_entered.wait(5)
+        assert observations == [('cleanup', False), 'rejected', 1]
+        assert manager.counts()['reentry'] == 1
+        with pytest.raises(ManagementOverloaded):
+            manager.submit(lambda record: 1, budget='reentry')
+        # C and the physical executor are not used for disposal.
+        assert manager.submit(lambda record: 11).result(5) == 11
+        manager.close()
+        assert not manager.finalized.is_set()
+    finally:
+        cleanup_release.set()
+        listener_release.set()
+        manager.close()
+        manager.join(5)
+    assert future._record.released
+    assert manager.counts()['reentry'] == 0
+    assert not manager._handler_garbage
+
+
+@pytest.mark.skipif(platform.python_implementation() != 'CPython',
+                    reason='Requires synchronous reference destruction')
+def test_health_cleanup_coalesces_and_survives_unregister_reregister():
+    import gc
+    import weakref
+
+    manager = ManagementRuntime(Dispatcher())
+    listener_entered, listener_release = Event(), Event()
+    cleanup_entered, cleanup_release = Event(), Event()
+    latest_applied = Event()
+    incarnation, references, applied = object(), [], []
+
+    class Apply:
+        def __init__(self, value):
+            self.value = value
+
+        def __call__(self):
+            applied.append(self.value)
+            if self.value == 101:
+                latest_applied.set()
+
+        def __del__(self):
+            if self.value == 0:
+                cleanup_entered.set()
+                cleanup_release.wait(5)
+
+    def observe(value):
+        callback = Apply(value)
+        references.append(weakref.ref(callback))
+        assert manager.observe_negative(incarnation, callback)
+
+    def listener():
+        listener_entered.set()
+        assert listener_release.wait(5)
+
+    try:
+        manager.notify(listener)
+        assert listener_entered.wait(5)
+        manager.register_health(incarnation)
+        observe(0)
+        assert cleanup_entered.wait(5)
+        slot = manager._health[id(incarnation)]
+        for value in range(1, 101):
+            observe(value)
+        gc.collect()
+        assert sum(ref() is not None for ref in references) == 2
+        with manager._condition:
+            assert sum(r.health_slot is slot for r in manager._records) == 1
+        manager.unregister_health(incarnation)
+        assert manager._health[id(incarnation)] is slot
+        manager.register_health(incarnation)
+        observe(101)
+        assert manager._health[id(incarnation)] is slot
+        assert not latest_applied.is_set()
+        cleanup_release.set()
+        assert latest_applied.wait(5)
+        with manager._condition:
+            assert manager._condition.wait_for(lambda: not slot.active, 5)
+        assert manager._health[id(incarnation)] is slot
+        assert applied == [0, 101]
+        manager.unregister_health(incarnation)
+        assert id(incarnation) not in manager._health
+    finally:
+        cleanup_release.set()
+        listener_release.set()
+        manager.close()
+        manager.join(5)
+    gc.collect()
+    assert all(ref() is None for ref in references)
+
+
+def test_private_cleanup_progresses_with_all_physical_workers_waiting():
+    manager = ManagementRuntime(Dispatcher(), reentry_window=1)
+    entered, release, stop = Event(), Event(), Event()
+    callers_ready = Barrier(3)
+    executor, callers = ThreadPoolExecutor(2), []
+
+    def listener():
+        entered.set()
+        assert release.wait(5)
+
+    def synchronous_caller():
+        callers_ready.wait(5)
+        for _ in range(50):
+            if stop.is_set():
+                return
+            assert manager.submit(lambda record: 11, budget='reentry',
+                                  wait=True, timeout=5).result(5) == 11
+
+    try:
+        manager.notify(listener)
+        assert entered.wait(5)
+        callers = [executor.submit(synchronous_caller) for _ in range(2)]
+        callers_ready.wait(5)
+        for caller in callers:
+            caller.result(5)
+    finally:
+        stop.set()
+        release.set()
+        try:
+            manager.close()
+            manager.join(5)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+            assert not wait(callers, timeout=5).not_done
+
+
+@pytest.mark.skipif(platform.python_implementation() != 'CPython',
+                    reason='Requires synchronous reference destruction')
+def test_health_incarnation_churn_retains_bounded_cleanup_slots():
+    manager = ManagementRuntime(Dispatcher(), limit=2)
+    entered, release = Event(), Event()
+    applied = []
+
+    class Apply:
+        def __init__(self, number):
+            self.number = number
+
+        def __call__(self):
+            applied.append(self.number)
+
+        def __del__(self):
+            if self.number == 0:
+                entered.set()
+                release.wait(5)
+
+    try:
+        incarnation = object()
+        manager.register_health(incarnation)
+        manager.observe_negative(incarnation, Apply(0))
+        assert entered.wait(5)
+        manager.unregister_health(incarnation)
+        incarnation = object()
+        manager.register_health(incarnation)
+        manager.observe_negative(incarnation, Apply(1))
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: manager._health_active == manager.limit, 5)
+        manager.unregister_health(incarnation)
+        for number in range(2, 102):
+            incarnation = object()
+            manager.register_health(incarnation)
+            manager.observe_negative(incarnation, Apply(number))
+            manager.unregister_health(incarnation)
+        assert applied == [0, 1]
+        with manager._condition:
+            assert manager._health_active == manager.limit
+            assert len(manager._health) == manager.limit
+            assert len(manager._records) == manager.limit
+        manager.close()
+        assert not manager.finalized.is_set()
+        release.set()
+        manager.join(5)
+        assert not manager._health
+        assert manager._health_active == 0
+    finally:
+        release.set()
+        manager.close()
+        manager.join(5)
+
+
+@pytest.mark.skipif(platform.python_implementation() != 'CPython',
+                    reason='Requires synchronous reference destruction')
+@pytest.mark.parametrize('same_incarnation', [True, False])
+def test_deferred_health_apply_precedes_its_notification(same_incarnation):
+    manager = ManagementRuntime(Dispatcher(), limit=1)
+    entered, release, applied, notified = Event(), Event(), Event(), Event()
+    observations = []
+
+    class First:
+        def __call__(self):
+            pass
+
+        def __del__(self):
+            entered.set()
+            release.wait(5)
+
+    def notification():
+        observations.append(applied.is_set())
+        notified.set()
+
+    try:
+        first = object()
+        manager.register_health(first)
+        manager.observe_negative(first, First())
+        assert entered.wait(5)
+        target = first if same_incarnation else object()
+        manager.register_health(target)
+        manager.observe_negative(target, applied.set, notification)
+        # A native mailbox fence lets C examine the deferred health demand.
+        # With capacity held, it must skip both apply and paired notification.
+        fence = manager.submit(lambda record: None)
+        fence.result(5)
+        wait_for_retirement(manager, fence)
+        with manager._condition:
+            assert manager._health[id(target)].notification is notification
+        assert not notified.is_set()
+        release.set()
+        assert notified.wait(5)
+        assert observations == [True]
+    finally:
+        release.set()
+        manager.close()
+        manager.join(5)
+
+
+def test_consumed_health_captures_do_not_accumulate_across_incarnations():
+    import gc
+    import weakref
+
+    manager = ManagementRuntime(Dispatcher(), limit=2)
+    entered, release = Event(), Event()
+    references = []
+
+    class Payload:
+        pass
+
+    def listener():
+        entered.set()
+        assert release.wait(5)
+
+    try:
+        manager.notify(listener)
+        assert entered.wait(5)
+        for _ in range(32):
+            incarnation, payload, applied = object(), Payload(), Event()
+            references.append(weakref.ref(payload))
+            manager.register_health(incarnation)
+            manager.observe_negative(
+                incarnation, lambda owned=payload, event=applied: event.set())
+            del payload
+            assert applied.wait(5)
+            manager.unregister_health(incarnation)
+        gc.collect()
+        assert sum(ref() is not None for ref in references) <= manager.limit
+        with manager._condition:
+            assert len(manager._records) <= manager.limit + 1
+    finally:
+        release.set()
+        manager.close()
+        manager.join(5)
+    gc.collect()
+    assert all(ref() is None for ref in references)
+
+
+@pytest.mark.skipif(platform.python_implementation() != 'CPython',
+                    reason='Requires synchronous reference destruction')
+def test_private_cleanup_weakref_callback_allows_terminal_reads_and_close():
+    import weakref
+
+    manager = ManagementRuntime(Dispatcher(), limit=2, reentry_window=1)
+    entered, release, run, retired = Event(), Event(), Event(), Event()
+    observations, children = [], []
+
+    class Payload:
+        pass
+
+    def listener():
+        entered.set()
+        assert release.wait(5)
+
+    def retirement(reference):
+        try:
+            observations.append((execution_context(),
+                                 manager._condition._is_owned(),
+                                 future._condition._is_owned()))
+            observations.append(future.result(0))
+            children.append(manager.submit(lambda record: 9))
+            manager.close()
+            observations.append(manager.finalized.is_set())
+        except BaseException as exc:
+            observations.append(type(exc))
+        finally:
+            retired.set()
+
+    try:
+        manager.notify(listener)
+        assert entered.wait(5)
+        payload = Payload()
+        reference = weakref.ref(payload, retirement)
+        future = manager.submit(lambda record, owned=payload: run.wait(5),
+                                budget='reentry')
+        del payload
+        run.set()
+        assert future.result(5) is True
+        assert retired.wait(5)
+        assert reference() is None
+        assert observations == [('cleanup', False, False), True, False]
+    finally:
+        run.set()
+        release.set()
         manager.close()
         manager.join(5)
 

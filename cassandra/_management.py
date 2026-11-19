@@ -76,9 +76,9 @@ def _callback_runtime():
 
 
 def assert_can_wait():
-    if execution_context() in ('cluster', 'pool', 'bridge'):
+    if execution_context() in ('cluster', 'pool', 'bridge', 'cleanup'):
         raise ManagementContextError(
-            'Blocking management call on an owner or reactor')
+            'Blocking management call on an owner, reactor or cleanup lane')
 
 
 def _future_access(method):
@@ -152,6 +152,8 @@ class _HealthSlot:
     apply: object = None
     notification: object = None
     removed: bool = False
+    registered: bool = True
+    active: bool = False
 
 
 class _MailboxEntry(NamedTuple):
@@ -423,6 +425,7 @@ class _Record:
         self.pool, self.key = pool, key
         self.budgets = dict.fromkeys(('ordinary', 'reentry', 'aggregate'), 0)
         self.private_released = False
+        self.health_slot = None
         self.futures = []
         self.foreign_futures = set()
         self.physical = 0
@@ -575,7 +578,7 @@ class _LifetimeHandle:
 
 
 class ManagementRuntime:
-    """One C owner, two P runners and one callback lane per Cluster.
+    """One C owner, two P runners, one callback and one cleanup lane.
 
     ``dispatch`` schedules a callable on the shared reactor, never
     inline on C/P. It must remain usable until ``finalized``. A
@@ -588,6 +591,14 @@ class ManagementRuntime:
     are explicitly marked failed while physical cleanup continues.
     Normal startup, idle and close use the adapter's lifetime
     guarantee rather than this failure policy.
+
+    Private-native and consumed-health handler captures retire on a dedicated
+    cleanup thread, outside runtime and Future locks. Private reservations
+    cover this disposal; ordinary-coalesced handlers remain covered by ordinary
+    credit on L. Consumed health records have one slot per incarnation and at
+    most ``limit`` active slots, independent of ordinary admission. Pending
+    health observations coalesce while their slot or this capacity is held.
+    Cleanup-context blocking calls reject self-dependent waits.
     """
 
     def __init__(self, dispatch, limit=1024, pool_limit=64, reentry_window=64,
@@ -604,6 +615,7 @@ class ManagementRuntime:
         self._active_pools = set()
         self._notifications = deque()
         self._callback_garbage = deque()
+        self._handler_garbage = deque()
         self._records = set()
         self._keys = {}
         self._pool_credits = {}
@@ -624,6 +636,7 @@ class ManagementRuntime:
         self._finalizing = False
         self._on_finalized = on_finalized
         self._health = {}
+        self._health_active = 0
         self._unknown_refresh = None
         self._lifetimes = set()
         self.closed = Event()
@@ -659,7 +672,10 @@ class ManagementRuntime:
             if self._started:
                 return
             self._started = True
-            targets = [('cluster', self._run_cluster),
+            # Start disposal first: a later partial-start failure may retire
+            # accepted captures without ever starting the callback lane.
+            targets = [('cleanup', self._run_handler_cleanup),
+                       ('cluster', self._run_cluster),
                        ('pool', self._run_pool), ('pool', self._run_pool),
                        ('callback', self._run_notifications)]
             try:
@@ -898,8 +914,11 @@ class ManagementRuntime:
         with self._condition:
             if self._closing:
                 raise ManagementClosed('Management lifetime is closed')
-            self._health.setdefault(
+            slot = self._health.setdefault(
                 id(incarnation), _HealthSlot(incarnation))
+            if not slot.registered:
+                slot.registered = True
+                slot.removed = False
             self._observe_counts_locked()
 
     def observe_negative(self, incarnation, apply, notification=None,
@@ -910,7 +929,8 @@ class ManagementRuntime:
             if self._closing:
                 return False
             slot = self._health.get(id(incarnation))
-            if slot is None or slot.incarnation is not incarnation:
+            if (slot is None or not slot.registered or
+                    slot.incarnation is not incarnation):
                 self._unknown_refresh = True
                 return False
             # An already pending removal is terminal for this incarnation.
@@ -933,7 +953,16 @@ class ManagementRuntime:
     def unregister_health(self, incarnation):
         self._check_pid()
         with self._condition:
-            retired = self._health.pop(id(incarnation), None)
+            slot = self._health.get(id(incarnation))
+            retired = None
+            if slot is not None:
+                slot.registered = False
+                retired = (slot.apply, slot.notification)
+                slot.apply = slot.notification = None
+                # Keep the same slot through disposal and re-registration.
+                # Its active handler must not create an uncharged old slot.
+                if not slot.active:
+                    del self._health[id(incarnation)]
         del retired
 
     def register_lifetime(self):
@@ -972,13 +1001,14 @@ class ManagementRuntime:
         for future in chain(record.futures, record.foreign_futures):
             self._retire_captures_locked(future._delivery.fail(error))
 
-    def _retire_captures_locked(self, captures, record=None):
+    def _retire_captures_locked(self, captures, record=None, *, native=False):
         if captures:
-            # Last captures can run arbitrary finalizers. Keep them off owners
-            # and retain cleanup until the callback lane drops them.
+            # Last captures can run arbitrary finalizers. Native private and
+            # health handlers must retire independently of an occupied L.
             if record is not None:
                 record.notification = True
-            self._callback_garbage.append((captures, record))
+            queue = self._handler_garbage if native else self._callback_garbage
+            queue.append((captures, record))
             self._capture_obligations += 1
             self._condition.notify_all()
 
@@ -1074,18 +1104,23 @@ class ManagementRuntime:
                     self._release_locked(record)
                     return
 
-    def _release_locked(self, record):
-        if (record.released or not record.handler_done or record.physical or
-                record.mailbox_pending or record.executing):
-            return
-        # Coalesced waiters share physical work, but private native completion
-        # must release its own window independently of ordinary callback debt.
+    def _release_private_locked(self, record):
         if not record.private_released:
             if record.budgets['aggregate']:
                 self._reentry_active = False
             self._reentry_credits -= record.budgets['reentry']
             record.private_released = True
             self._condition.notify_all()
+
+    def _release_locked(self, record):
+        if (record.released or not record.handler_done or record.physical or
+                record.mailbox_pending or record.executing):
+            return
+        # Ordinary credit bounds a coalesced handler through its L retirement.
+        # Otherwise private credit must cover disposal on the independent
+        # cleanup lane, rather than funding an unbounded uncharged backlog.
+        if record.budgets['ordinary']:
+            self._release_private_locked(record)
         if record.delivery or record.notification:
             return
         if isinstance(record.handler, _Notification):
@@ -1098,11 +1133,12 @@ class ManagementRuntime:
             # This module-owned function has no captures to dispose.
             record.handler = None
         elif record.handler is not None:
-            # Keep ordinary admission charged through handler disposal.
-            # Private native completion above remains independent of L.
-            self._retire_captures_locked([record.handler], record)
+            self._retire_captures_locked(
+                [record.handler], record,
+                native=not record.budgets['ordinary'])
             record.handler = None
             return
+        self._release_private_locked(record)
         record.released = True
         count = record.budgets['ordinary']
         if count:
@@ -1114,6 +1150,15 @@ class ManagementRuntime:
                 else:
                     del self._pool_credits[record.pool]
         self._records.discard(record)
+        if record.health_slot is not None:
+            # Keep the incarnation reference on this record until the cleanup
+            # loop drops the record outside the condition.
+            slot = record.health_slot
+            slot.active = False
+            self._health_active -= 1
+            if (not slot.registered and
+                    self._health.get(id(slot.incarnation)) is slot):
+                del self._health[id(slot.incarnation)]
         for future in record.foreign_futures:
             with future._condition:
                 if future._delivery.record is record:
@@ -1132,8 +1177,9 @@ class ManagementRuntime:
                     self._maybe_finalized_locked()
 
     def _health_ready(self):
-        return any(slot.apply is not None or
-                   (slot.notification is not None and
+        return any((self._health_active < self.limit and
+                    not slot.active and slot.apply is not None) or
+                   (slot.apply is None and slot.notification is not None and
                     self._capacity(None, 'ordinary'))
                    for slot in self._health.values())
 
@@ -1145,8 +1191,10 @@ class ManagementRuntime:
                     self._condition.wait()
                 if self._closing and not self._cluster:
                     return
-                health = next((slot for slot in self._health.values()
-                               if slot.apply is not None), None)
+                health = (next((slot for slot in self._health.values()
+                                if not slot.active and slot.apply is not None),
+                               None)
+                          if self._health_active < self.limit else None)
                 if health is not None:
                     self._sequence += 1
                     record = _Record(
@@ -1154,6 +1202,9 @@ class ManagementRuntime:
                                        self.lifetime, ()), health.apply,
                         None, None)
                     health.apply = None
+                    health.active = True
+                    self._health_active += 1
+                    record.health_slot = health
                     # Keep the apply capture on its record until execution
                     # retires; the owner stack holds only this adapter.
                     callback = lambda: record.handler()
@@ -1162,7 +1213,8 @@ class ManagementRuntime:
                     native_health = True
                 else:
                     pending = next((slot for slot in self._health.values()
-                                    if slot.notification is not None and
+                                    if slot.apply is None and
+                                    slot.notification is not None and
                                     self._capacity(None, 'ordinary')), None)
                     if pending is not None:
                         notification, pending.notification = (
@@ -1256,6 +1308,31 @@ class ManagementRuntime:
                         record.notification = False
                         self._release_locked(record)
             record = callback = value = None
+
+    def _run_handler_cleanup(self):
+        """Dispose bounded native captures without borrowing L or workers.
+
+        Disposal owns the record's private credit or health slot until it
+        finishes. Blocking management reentry from this lane is rejected:
+        it could otherwise wait for the very credit being disposed.
+        """
+        while True:
+            with self._condition:
+                while not self._handler_garbage:
+                    if self._closing and not self._records:
+                        return
+                    self._condition.wait()
+                garbage, record = self._handler_garbage.popleft()
+            try:
+                garbage.clear()
+            finally:
+                garbage = None
+                with self._condition:
+                    self._capture_obligations -= 1
+                    record.notification = False
+                    self._release_locked(record)
+                    self._maybe_finalized_locked()
+            record = None
 
     def retain_cleanup(self):
         """Retain one explicit cleanup obligation in the ``close`` count.
