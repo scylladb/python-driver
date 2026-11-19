@@ -475,6 +475,8 @@ class LifecycleCoordinator:
                     runtime._dispatch = channel.dispatch
                     runtime._on_finalized = channel.close
                     runtime._join_completion = channel.join
+                    runtime._close_completion = channel.close
+                    runtime._completion_detached = channel._detached
                     if self.closed:
                         raise ManagementClosed(
                             'Lifecycle coordinator closed during startup')
