@@ -82,6 +82,7 @@ build-backend = "setuptools.build_meta"
 cache-keys = [
     { file = "pyproject.toml" },
     { file = "setup.py" },
+    { file = "build-release/libev.py" },
     # Cythonized modules
     { file = "cassandra/io/libevwrapper.c" },
     { file = "cassandra/cmurmur3.c" },

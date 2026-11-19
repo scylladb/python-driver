@@ -14,7 +14,7 @@
 
 import os
 import sys
-import json
+import runpy
 import warnings
 from pathlib import Path
 from setuptools.command.build_ext import build_ext
@@ -107,56 +107,12 @@ class BuildFailed(Exception):
         self.ext = ext
 
 is_windows = sys.platform.startswith('win32')
-is_macos = sys.platform.startswith('darwin')
-
-def get_subdriname(directory_path):
-    try:
-        # List only subdirectories in the given directory
-        subdirectories = [name for dir in directory_path for name in os.listdir(dir)
-                          if os.path.isdir(os.path.join(directory_path, name))]
-        return subdirectories
-    except Exception:
-        return []
-
-def get_libev_headers_path():
-    libev_hb_paths = ["/opt/homebrew/Cellar/libev", os.path.expanduser('~/homebrew/Cellar/libev')]
-    for hb_path in libev_hb_paths:
-        if not os.path.exists(hb_path):
-            continue
-        versions = [dir for dir in get_subdriname(hb_path) if dir[0] in "0123456789"]
-        if not versions:
-            continue
-        picked_version = sorted(versions, reverse=True)[0]
-        resulted_path = os.path.join(hb_path, picked_version, 'include')
-        warnings.warn("found libev headers in '%s'" % resulted_path)
-        return [resulted_path]
-    warnings.warn("did not find libev headers in '%s'" % libev_hb_paths)
-    return []
-
-
 murmur3_ext = Extension('cassandra.cmurmur3',
                         sources=['cassandra/cmurmur3.c'])
 
-is_macos = sys.platform.startswith('darwin')
-
-def eval_env_var_as_array(varname):
-    val = os.environ.get(varname)
-    return None if not val else [v.strip() for v in val.split(',')]
-
-DEFAULT_LIBEV_INCLUDES = ['/usr/include/libev', '/usr/local/include', '/opt/local/include', '/usr/include']
-DEFAULT_LIBEV_LIBDIRS = ['/usr/local/lib', '/opt/local/lib', '/usr/lib64']
-libev_includes = eval_env_var_as_array('CASS_DRIVER_LIBEV_INCLUDES') or DEFAULT_LIBEV_INCLUDES
-libev_libdirs = eval_env_var_as_array('CASS_DRIVER_LIBEV_LIBS') or DEFAULT_LIBEV_LIBDIRS
-
-if is_macos:
-    libev_includes.extend(['/opt/homebrew/include', os.path.expanduser('~/homebrew/include'), *get_libev_headers_path()])
-    libev_libdirs.extend(['/opt/homebrew/lib'])
-
-conan_envfile = Path(__file__).parent / 'build-release/conan/conandeps.env'
-if conan_envfile.exists():
-    conan_paths = json.loads(conan_envfile.read_text())
-    libev_includes.extend(conan_paths.get('include_dirs', []))
-    libev_libdirs.extend(conan_paths.get('library_dirs', []))
+libev_paths = runpy.run_path(
+    str(Path(__file__).parent / 'build-release/libev.py'))['libev_paths']
+libev_includes, libev_libdirs = libev_paths(Path(__file__).parent)
 
 libev_ext = Extension('cassandra.io.libevwrapper',
                       sources=['cassandra/io/libevwrapper.c'],

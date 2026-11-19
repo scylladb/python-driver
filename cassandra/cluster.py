@@ -1739,7 +1739,7 @@ class Cluster(object):
 
         self._user_types = defaultdict(dict)
 
-        self.executor = self._create_thread_pool_executor(max_workers=executor_threads)
+        self.executor = ThreadPoolExecutor(max_workers=executor_threads)
         self.scheduler = _Scheduler(self.executor)
 
         self._lock = RLock()
@@ -1791,15 +1791,6 @@ class Cluster(object):
         if self.contact_points and (not self.endpoints_resolved):
             # only want to raise here if the user specified CPs but resolution failed
             raise UnresolvableContactPoints(endpoint_map)
-
-    def _create_thread_pool_executor(self, **kwargs):
-        """
-        Create a ThreadPoolExecutor for the cluster.
-
-        :param kwargs: All keyword args are passed to the ThreadPoolExecutor constructor.
-        :return: A ThreadPoolExecutor instance.
-        """
-        return ThreadPoolExecutor(**kwargs)
 
     def register_user_type(self, keyspace, user_type, klass):
         """

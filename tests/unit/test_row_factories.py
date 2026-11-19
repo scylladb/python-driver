@@ -13,75 +13,26 @@
 # limitations under the License.
 
 
-from cassandra.query import named_tuple_factory
-
-import logging
 import warnings
 
-import sys
+import pytest
 
-from unittest import TestCase
-
-
-log = logging.getLogger(__name__)
+from cassandra.query import named_tuple_factory
 
 
-NAMEDTUPLE_CREATION_BUG = sys.version_info >= (3,) and sys.version_info < (3, 7)
+@pytest.mark.parametrize("column_count", [200, 300])
+def test_named_tuple_factory_wide_rows(column_count):
+    colnames = ['col{}'.format(i) for i in range(column_count)]
+    values = ['value{}'.format(i) for i in range(column_count)]
 
-class TestNamedTupleFactory(TestCase):
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always')
+        rows = named_tuple_factory(colnames, [values])
 
-    long_colnames, long_rows = (
-        ['col{}'.format(x) for x in range(300)],
-        [
-            ['value{}'.format(x) for x in range(300)]
-            for _ in range(100)
-        ]
-    )
-    short_colnames, short_rows = (
-        ['col{}'.format(x) for x in range(200)],
-        [
-            ['value{}'.format(x) for x in range(200)]
-            for _ in range(100)
-        ]
-    )
-
-    def test_creation_warning_on_long_column_list(self):
-        """
-        Reproduces the failure described in PYTHON-893
-
-        @since 3.15
-        @jira_ticket PYTHON-893
-        @expected_result creation fails on Python > 3 and < 3.7
-
-        @test_category row_factory
-        """
-        if not NAMEDTUPLE_CREATION_BUG:
-            named_tuple_factory(self.long_colnames, self.long_rows)
-            return
-
-        with warnings.catch_warnings(record=True) as w:
-            rows = named_tuple_factory(self.long_colnames, self.long_rows)
-        assert len(w) == 1
-        warning = w[0]
-        assert 'pseudo_namedtuple_factory' in str(warning)
-        assert '3.7' in str(warning)
-
-        for r in rows:
-            assert r.col0 == self.long_rows[0][0]
-
-    def test_creation_no_warning_on_short_column_list(self):
-        """
-        Tests that normal namedtuple row creation still works after PYTHON-893 fix
-
-        @since 3.15
-        @jira_ticket PYTHON-893
-        @expected_result creates namedtuple-based Rows
-
-        @test_category row_factory
-        """
-        with warnings.catch_warnings(record=True) as w:
-            rows = named_tuple_factory(self.short_colnames, self.short_rows)
-        assert len(w) == 0
-        # check that this is a real namedtuple
-        assert hasattr(rows[0], '_fields')
-        assert isinstance(rows[0], tuple)
+    assert not caught
+    row, = rows
+    assert isinstance(row, tuple)
+    assert row._fields == tuple(colnames)
+    assert tuple(row) == tuple(values)
+    assert row.col0 == values[0]
+    assert getattr(row, colnames[-1]) == values[-1]
