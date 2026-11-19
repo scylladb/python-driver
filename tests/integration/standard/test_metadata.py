@@ -15,7 +15,6 @@
 import unittest
 
 import logging
-import sys
 import os
 
 from packaging.version import Version
@@ -1130,17 +1129,15 @@ class TestCodeCoverage(unittest.TestCase):
                 "Protocol 3.0+ is required for UDT change events, currently testing against %r"
                 % (PROTOCOL_VERSION,))
 
-        if sys.version_info[0:2] != (2, 7):
-            raise unittest.SkipTest('This test compares static strings generated from dict items, which may change orders. Test with 2.7.')
-
         cluster = TestCluster()
+        self.addCleanup(cluster.shutdown)
         session = cluster.connect()
-
         session.execute("""
             CREATE KEYSPACE export_udts
-            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
+            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
             AND durable_writes = true;
         """)
+        self.addCleanup(session.execute, "DROP KEYSPACE IF EXISTS export_udts")
         session.execute("""
             CREATE TYPE export_udts.street (
                 street_number int,
@@ -1162,7 +1159,7 @@ class TestCodeCoverage(unittest.TestCase):
             addresses map<text, frozen<address>>)
         """)
 
-        expected_prefix = """CREATE KEYSPACE export_udts WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}  AND durable_writes = true;
+        expected_prefix = """CREATE KEYSPACE export_udts WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}  AND durable_writes = true;
 
 CREATE TYPE export_udts.street (
     street_number int,
@@ -1192,8 +1189,6 @@ CREATE TABLE export_udts.users (
     addresses map<text, frozen<address>>"""
 
         assert_startswith_diff(table_meta.export_as_string(), expected_prefix)
-
-        cluster.shutdown()
 
     @greaterthancass21
     def test_case_sensitivity(self):

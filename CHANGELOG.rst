@@ -21,6 +21,9 @@ Compatibility Changes
 
 Removed
 -------
+* Remove the obsolete ``cassandra.query.PseudoNamedTupleRow`` and
+  ``pseudo_namedtuple_factory`` fallback for Python 3.0-3.6. Supported Python
+  versions return native named tuples for wide result sets (CASSPYTHON-18).
 * DataStax Enterprise (DSE) Graph support has been removed. This drops the
   ``cassandra.datastax.graph`` and ``cassandra.graph`` packages (including the
   fluent API), ``GraphExecutionProfile``, ``GraphAnalyticsExecutionProfile``,
@@ -42,6 +45,10 @@ Removed
 
 Bug Fixes
 ---------
+* Exclude Cython-generated C sources from distributions while retaining the
+  handwritten C extensions (CASSPYTHON-21).
+* Skip libev callbacks after the Python interpreter has shut down, before
+  attempting to acquire the GIL (upstream PR 1287).
 * Schema metadata reads no longer fail with ``AttributeError`` when a later
   page of a system table query fails with an expected error, such as
   ``InvalidRequest`` for a missing table. Paging stops and the rows already
