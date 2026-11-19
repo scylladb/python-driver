@@ -306,7 +306,8 @@ def test_application_cython_parser_does_not_gain_cache_eligibility():
 
 
 def test_udt_mapping_truth_callback_can_reenter_cache():
-    # Bound a cache-lock regression in its own process; terminate on failure.
+    # Bound a cache-lock regression in its own process; terminate on
+    # failure.
     run_isolated_subprocess(
         'from cassandra.cqltypes import UserType, Int32Type\n'
         'calls = []\n'

@@ -311,8 +311,8 @@ class MessageTest(unittest.TestCase):
         )
         msg = ResultMessage(kind=RESULT_KIND_ROWS)
         msg.recv_results_metadata(buf, user_type_map={})
-        # NO_METADATA returns before setting either metadata field; both keep
-        # their None defaults.
+        # NO_METADATA returns before setting either metadata field; both
+        # keep their None defaults.
         assert msg.result_metadata_id is None
         assert msg.column_metadata is None
 

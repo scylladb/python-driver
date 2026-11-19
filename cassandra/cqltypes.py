@@ -1035,15 +1035,17 @@ class UserType(TupleType):
                        mapped_class=None):
         assert len(field_names) == len(field_types)
 
-        # A UDT type descriptor can outlive the response that created it (for
-        # example, in a PreparedStatement's cached result metadata).  Keep a
-        # distinct descriptor for each registered Python mapping so parsing
-        # metadata for another Cluster cannot mutate an existing descriptor.
+        # A UDT type descriptor can outlive the response that created it
+        # (for example, in a PreparedStatement's cached result
+        # metadata).  Keep a distinct descriptor for each registered
+        # Python mapping so parsing metadata for another Cluster cannot
+        # mutate an existing descriptor.
         #
-        # Use identity rather than the class itself in the key. Registered
-        # classes normally are hashable, but a custom metaclass may opt out of
-        # hashing. The generated descriptor holds a strong reference to
-        # mapped_class, so its id cannot be reused while this entry exists.
+        # Use identity rather than the class itself in the key.
+        # Registered classes normally are hashable, but a custom
+        # metaclass may opt out of hashing. The generated descriptor
+        # holds a strong reference to mapped_class, so its id cannot be
+        # reused while this entry exists.
         cache_key = (keyspace, udt_name, id(mapped_class))
         with cls._cache_lock:
             instance = cls._cache.get(cache_key)
@@ -1051,10 +1053,11 @@ class UserType(TupleType):
                     or len(instance.subtypes) != len(field_types)
                     or any(cached is not current for cached, current in
                            zip(instance.subtypes, field_types))):
-                # Decoder classes carry behavior by identity. Their custom
-                # equality can also reenter eviction, so do not call it here.
-                # A mapping can become false-valued before decoding. Keep
-                # its fallback without replacing the unmapped pickle binding.
+                # Decoder classes carry behavior by identity. Their
+                # custom equality can also reenter eviction, so do not
+                # call it here. A mapping can become false-valued before
+                # decoding. Keep its fallback without replacing the
+                # unmapped pickle binding.
                 if mapped_class is None:
                     tuple_type = cls._make_registered_udt_namedtuple(
                         keyspace, udt_name, field_names)
@@ -1075,7 +1078,8 @@ class UserType(TupleType):
 
     @classmethod
     def evict_udt_class(cls, keyspace, udt_name):
-        # Registration changes must evict mapped and unmapped variants alike.
+        # Registration changes must evict mapped and unmapped variants
+        # alike.
         with cls._cache_lock:
             cache_keys = [
                 cache_key for cache_key in cls._cache
@@ -1089,9 +1093,9 @@ class UserType(TupleType):
         keyspace = subtypes[0].cass_parameterized_type()  # when parsed from cassandra type, the keyspace is created as an unrecognized cass type; This gets the name back
         udt_name = _name_from_hex_string(subtypes[1].cassname)
         field_names = tuple(_name_from_hex_string(encoded_name) for encoded_name in names[2:])  # using tuple here to match what comes into make_udt_class from other sources (for caching equality test)
-        # Cassandra type strings carry no per-Cluster user-type map. Keep this
-        # legacy lookup explicitly unmapped instead of borrowing a descriptor
-        # registered for some other Cluster.
+        # Cassandra type strings carry no per-Cluster user-type map.
+        # Keep this legacy lookup explicitly unmapped instead of
+        # borrowing a descriptor registered for some other Cluster.
         return cls.make_udt_class(keyspace, udt_name, field_names, tuple(subtypes[2:]))
 
     @classmethod

@@ -1125,17 +1125,20 @@ _PREPARED_METADATA_RESULT_ATTRIBUTE_EXCLUSIONS = frozenset((
     'type_codes',
     '_cqltypes_by_code',
     # Retained by FastResultMessage but unused by the Python and Cython
-    # decoders. It therefore is not part of prepared-metadata provenance.
+    # decoders. It therefore is not part of prepared-metadata
+    # provenance.
     'code_to_type',
 ))
 
 
 def _prepared_metadata_result_attributes(result_message_type):
     """
-    Capture every effective result-message attribute except decoder type maps.
+    Capture every effective result-message attribute except decoder type
+    maps.
 
-    Deriving this from the MRO avoids a hand-maintained allowlist silently
-    falling behind when ResultMessage gains another decoding attribute.
+    Deriving this from the MRO avoids a hand-maintained allowlist
+    silently falling behind when ResultMessage gains another decoding
+    attribute.
     """
     attributes = {}
     for base in reversed(result_message_type.__mro__[:-1]):
@@ -1159,10 +1162,10 @@ def _prepared_metadata_cache_config(
     """
     Capture the canonical driver-owned result-decoder configuration.
 
-    Cluster-side snapshots compare against this exact configuration. Installing
-    an application ResultMessage or mutating a decoding attribute therefore
-    makes the handler ineligible for skip-metadata instead of attempting to
-    freeze arbitrary application class state.
+    Cluster-side snapshots compare against this exact configuration.
+    Installing an application ResultMessage or mutating a decoding
+    attribute therefore makes the handler ineligible for skip-metadata
+    instead of attempting to freeze arbitrary application class state.
     """
     message_types = (
         handler.message_types_by_opcode
@@ -1227,9 +1230,10 @@ class _ProtocolHandler(object):
     column_encryption_policy = None
     """Instance of :class:`cassandra.policies.ColumnEncryptionPolicy` in use by this handler"""
 
-    # Marks handlers whose result-decoder configuration the driver may copy
-    # into an immutable per-request snapshot. Subclasses do not inherit
-    # eligibility because their opcode and type maps are application-owned.
+    # Marks handlers whose result-decoder configuration the driver may
+    # copy into an immutable per-request snapshot. Subclasses do not
+    # inherit eligibility because their opcode and type maps are
+    # application-owned.
     _prepared_metadata_cache_token = object()
 
     @classmethod
@@ -1400,8 +1404,9 @@ def cython_protocol_handler(colparser, _prepared_metadata_cache=False):
 
         col_parser = colparser
 
-    # Only driver-owned parser construction opts into immutable snapshots.
-    # Application parsers may retain mutable state behind their callables.
+    # Only driver-owned parser construction opts into immutable
+    # snapshots. Application parsers may retain mutable state behind
+    # their callables.
     if _prepared_metadata_cache:
         CythonProtocolHandler._prepared_metadata_cache_token = object()
         CythonProtocolHandler._prepared_metadata_cache_config = \

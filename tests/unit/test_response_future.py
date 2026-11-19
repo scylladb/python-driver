@@ -4020,9 +4020,9 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_continuous_paging_option_disables_skip_meta(self):
         """
-        Continuous paging cannot decode later metadata-less pages because its
-        connection path does not thread cached result metadata through the
-        paging session.
+        Continuous paging cannot decode later metadata-less pages
+        because its connection path does not thread cached result
+        metadata through the paging session.
         """
         ps = self._make_prepared_statement([('ks', 'tbl', 'col', Mock())], b'meta_hash')
 
@@ -4109,7 +4109,8 @@ class ResponseFutureTests(unittest.TestCase):
     def test_cross_cluster_execute_rejects_foreign_decoder_metadata(self):
         """
         Decoder revisions are cluster-unique. Two clusters with no UDT
-        registrations must not consider their cached metadata interchangeable.
+        registrations must not consider their cached metadata
+        interchangeable.
         """
         ps = self._make_prepared_statement(
             [('ks', 'tbl', 'col', Mock())], b'meta_hash')
@@ -4124,8 +4125,8 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_protocol_handler_is_set_before_response_future_timer_starts(self):
         """
-        A speculative timer may fire from ResponseFuture.__init__, so the
-        handler must be installed before the timer is created.
+        A speculative timer may fire from ResponseFuture.__init__, so
+        the handler must be installed before the timer is created.
         """
         class CustomProtocolHandler(ProtocolHandler):
             pass
@@ -4267,7 +4268,8 @@ class ResponseFutureTests(unittest.TestCase):
         rf._query.assert_called_once_with('host', page_generation=0)
 
     def test_reprepare_refresh_cannot_restore_previous_page(self):
-        # Bound worker failures and lock-order regressions inside a subprocess.
+        # Bound worker failures and lock-order regressions inside a
+        # subprocess.
         run_isolated_subprocess(
             'from tests.unit.test_response_future import ResponseFutureTests\n'
             'case = ResponseFutureTests()\n'
@@ -4359,8 +4361,9 @@ class ResponseFutureTests(unittest.TestCase):
                         assert copied.wait(2), 'refresh did not copy message'
                         page_thread.start()
                         assert page_attempted.wait(2), 'peer did not complete'
-                        # If refresh does not serialize with paging, let the
-                        # next page publish before the old copy is resumed.
+                        # If refresh does not serialize with paging, let
+                        # the next page publish before the old copy is
+                        # resumed.
                         if not page_blocked[0]:
                             assert page_finished.wait(2)
                     finally:
@@ -4433,8 +4436,9 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_prepared_future_freezes_builtin_decoder_maps(self):
         """
-        Mutating the public built-in handler map after future construction must
-        not turn an old-metadata request into a new-decoder response.
+        Mutating the public built-in handler map after future
+        construction must not turn an old-metadata request into a
+        new-decoder response.
         """
         class _ReplacementResultMessage(ResultMessage):
             pass
@@ -4507,9 +4511,10 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_concurrent_refresh_publishes_message_and_metadata_together(self):
         """
-        A speculative send that has captured a request snapshot must retain its
-        matching message/metadata pair if paging or reprepare publishes a new
-        snapshot while that send is borrowing a connection.
+        A speculative send that has captured a request snapshot must
+        retain its matching message/metadata pair if paging or reprepare
+        publishes a new snapshot while that send is borrowing a
+        connection.
         """
         session = self.make_basic_session()
         policy = session.cluster._default_load_balancing_policy
@@ -4550,8 +4555,8 @@ class ResponseFutureTests(unittest.TestCase):
             column_metadata=late_metadata)
         connection.send_msg.call_args.kwargs['cb'](response)
 
-        # The late callback is tagged with the context captured by its own
-        # request, not the future's newer mutable context.
+        # The late callback is tagged with the context captured by its
+        # own request, not the future's newer mutable context.
         assert ps._result_metadata_snapshot == (
             tuple(late_metadata),
             b'late_hash',
@@ -4559,8 +4564,9 @@ class ResponseFutureTests(unittest.TestCase):
 
 
     def test_page_advance_during_borrow_keeps_attempt_generation(self):
-        # A lock-scope regression must fail locally rather than strand the
-        # synchronous peer callback inside the mocked borrowing operation.
+        # A lock-scope regression must fail locally rather than strand
+        # the synchronous peer callback inside the mocked borrowing
+        # operation.
         run_isolated_subprocess(
             'from tests.unit.test_response_future import ResponseFutureTests\n'
             'case = ResponseFutureTests()\n'
@@ -4594,7 +4600,8 @@ class ResponseFutureTests(unittest.TestCase):
                     rf._set_result(self.host1, None, None, peer_response)
                     assert rf._event.is_set()
                     # The application starts another page after the peer
-                    # attempt completes, while this attempt still borrows.
+                    # attempt completes, while this attempt still
+                    # borrows.
                     with patch.object(rf, 'send_request'):
                         rf.start_fetching_next_page()
                     return borrow(*args, **kwargs)
@@ -4629,8 +4636,9 @@ class ResponseFutureTests(unittest.TestCase):
                 next_response = self._make_rows_response()
                 next_response.parsed_rows = [(2,)]
                 next_call.kwargs['cb'](next_response)
-                # Mocked timers cannot settle a pending test future. Require
-                # synchronous callback completion before result() can wait.
+                # Mocked timers cannot settle a pending test future.
+                # Require synchronous callback completion before
+                # result() can wait.
                 assert rf._event.is_set()
                 assert rf.result().one() == (['col'], [(2,)])
                 assert rf._paging_state is None

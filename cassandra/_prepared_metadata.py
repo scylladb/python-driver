@@ -37,14 +37,15 @@ def protocol_handler_snapshot(protocol_handler):
     """
     Freeze the result-decoder configuration of a driver-owned handler.
 
-    The public handler maps are intentionally customizable. Only the canonical
-    driver-owned configuration is eligible: application changes fall back to
-    full metadata because arbitrary decoder class state cannot be frozen
-    safely. An eligible prepared future receives a private snapshot so a later
-    source mutation cannot produce a hybrid old-metadata/new-decoder request.
+    The public handler maps are intentionally customizable. Only the
+    canonical driver-owned configuration is eligible: application
+    changes fall back to full metadata because arbitrary decoder class
+    state cannot be frozen safely. An eligible prepared future receives
+    a private snapshot so a later source mutation cannot produce a
+    hybrid old-metadata/new-decoder request.
 
-    Custom or modified handlers are returned unchanged and remain ineligible
-    for skip-metadata.
+    Custom or modified handlers are returned unchanged and remain
+    ineligible for skip-metadata.
     """
     try:
         handler_vars = vars(protocol_handler)
@@ -98,9 +99,10 @@ def protocol_handler_snapshot(protocol_handler):
             handler_config[:-1],
             id(column_encryption_policy),
         )
-        # A malformed in-place customization should fall back to full metadata,
-        # not make request construction fail or create an uncached snapshot
-        # whose identity never matches the PREPARE provenance.
+        # A malformed in-place customization should fall back to full
+        # metadata, not make request construction fail or create an
+        # uncached snapshot whose identity never matches the PREPARE
+        # provenance.
         hash(cache_key)
     except Exception:
         log.debug(
@@ -169,15 +171,17 @@ def decoder_context(protocol_handler, cluster_context):
     """
     Return cache provenance for a frozen driver-owned protocol handler.
 
-    Custom subclasses can mutate ``message_types_by_opcode`` and their result
-    type maps in place. Class identity alone therefore cannot prove that cached
-    column descriptors are still valid. Eligible handlers are copied into a
-    cached snapshot with read-only maps; inherited tokens deliberately do not
-    opt a custom subclass into skip-metadata.
+    Custom subclasses can mutate ``message_types_by_opcode`` and their
+    result type maps in place. Class identity alone therefore cannot
+    prove that cached column descriptors are still valid. Eligible
+    handlers are copied into a cached snapshot with read-only maps;
+    inherited tokens deliberately do not opt a custom subclass into
+    skip-metadata.
     """
-    # ``None`` marks a client-side metadata transition. Responses decoded
-    # while the transition is in progress must never become eligible for
-    # skip-metadata, even if another execute observes the same marker.
+    # ``None`` marks a client-side metadata transition. Responses
+    # decoded while the transition is in progress must never become
+    # eligible for skip-metadata, even if another execute observes the
+    # same marker.
     if cluster_context is None:
         return None
 
@@ -200,8 +204,9 @@ def session_handler(session, protocol_handler):
     Return the Session's immutable snapshot for ``protocol_handler``.
 
     A Session keeps using the snapshot even if the source class is later
-    mutated in place. Assigning a different client protocol handler invalidates
-    the cache by identity and builds (or rejects) a new snapshot.
+    mutated in place. Assigning a different client protocol handler
+    invalidates the cache by identity and builds (or rejects) a new
+    snapshot.
     """
     cached = vars(session).get('_prepared_metadata_handler_cache')
     if (cached is not None

@@ -150,7 +150,8 @@ class Address:
 @pytest.mark.parametrize('equality_action', ('evict', 'equal'))
 def test_udt_subtype_matching_uses_decoder_identity(
         message_class, equality_action):
-    # Bound callbacks that reenter the process-wide descriptor cache lock.
+    # Bound callbacks that reenter the process-wide descriptor cache
+    # lock.
     run_isolated_subprocess(
         'from tests.unit.test_prepared_metadata_cache_regressions import '
         '_exercise_udt_subtype_matching\n'
@@ -278,8 +279,8 @@ def test_late_udt_registration_forces_result_metadata_refresh():
 
         cluster.register_user_type(_KEYSPACE, 'address', Address)
 
-        # A metadata-less response still uses the UDT class cached before
-        # registration, which has no mapped_class.
+        # A metadata-less response still uses the UDT class cached
+        # before registration, which has no mapped_class.
         stale = _decode_rows(
             ResultMessage,
             _udt_rows_body(7, no_metadata=True),
@@ -288,9 +289,10 @@ def test_late_udt_registration_forces_result_metadata_refresh():
         )
         assert not isinstance(stale.parsed_rows[0][0], Address)
 
-        # Registering a mapping is a client-side metadata change: the server's
-        # metadata id cannot detect it. Invalidate the id so the next execute
-        # requests definitions and rebuilds the UDT type with the new mapping.
+        # Registering a mapping is a client-side metadata change: the
+        # server's metadata id cannot detect it. Invalidate the id so
+        # the next execute requests definitions and rebuilds the UDT
+        # type with the new mapping.
         assert prepared.result_metadata_id is None
 
         session = Mock(spec=Session)
@@ -498,7 +500,8 @@ def test_registration_cleanup_restores_context_after_failure(failure_point):
     assert cluster._prepared_metadata_context is not None
     assert cluster._prepared_metadata_context is not old_context
 
-    # Cleanup must also balance the transition before the next registration.
+    # Cleanup must also balance the transition before the next
+    # registration.
     cluster._user_types[_KEYSPACE] = {}
     cluster.register_user_type(_KEYSPACE, 'address', Address)
     assert cluster._prepared_metadata_context is not None
@@ -509,7 +512,8 @@ def test_registration_cleanup_restores_context_after_failure(failure_point):
 @pytest.mark.parametrize('fail_late', (False, True))
 def test_overlapping_udt_registrations_keep_transition_ineligible(
         fail_early, fail_late):
-    # Bound deadlocks even if a regression holds a lock across user callbacks.
+    # Bound deadlocks even if a regression holds a lock across user
+    # callbacks.
     run_isolated_subprocess(
         'from tests.unit.test_prepared_metadata_cache_regressions import '
         '_exercise_overlapping_udt_registrations\n'
@@ -603,8 +607,9 @@ def _exercise_overlapping_udt_registrations(fail_early, fail_late):
             else:
                 cluster.register_user_type(_KEYSPACE, 'other', Address)
 
-            # The peer has exited, but this response is decoded before the
-            # paused mapping is published. Its provenance must stay ineligible.
+            # The peer has exited, but this response is decoded before
+            # the paused mapping is published. Its provenance must stay
+            # ineligible.
             assert type(publish_full_response(b'overlap-id')) is Address
         finally:
             resume.set()
@@ -666,8 +671,9 @@ def test_protocol_handler_change_forces_result_metadata_refresh():
             'cassandra.cluster.ResponseFuture', return_value=prepare_future):
         prepared = Session.prepare(session, 'SELECT value FROM values_by_id')
 
-    # With NO_METADATA, even the custom ResultMessage must use the default type
-    # cached by PREPARE and therefore cannot apply its custom decoder.
+    # With NO_METADATA, even the custom ResultMessage must use the
+    # default type cached by PREPARE and therefore cannot apply its
+    # custom decoder.
     stale = _decode_rows(
         _CustomResultMessage,
         _int_rows_body(7, no_metadata=True),
@@ -678,9 +684,10 @@ def test_protocol_handler_change_forces_result_metadata_refresh():
     session.client_protocol_handler = _CustomProtocolHandler
     message, bound_result_metadata = _capture_execute(session, prepared)
 
-    # A cache produced by another handler is not safe to use for NO_METADATA.
-    # Send the empty id sentinel and suppress skip so the server returns column
-    # definitions for the current handler to interpret.
+    # A cache produced by another handler is not safe to use for
+    # NO_METADATA. Send the empty id sentinel and suppress skip so the
+    # server returns column definitions for the current handler to
+    # interpret.
     assert message.skip_meta is False
     assert message.result_metadata_id is None
     assert not bound_result_metadata
@@ -688,9 +695,10 @@ def test_protocol_handler_change_forces_result_metadata_refresh():
     refreshed = _decode_rows(_CustomResultMessage, _int_rows_body(7))
     assert refreshed.parsed_rows == [(70,)]
 
-    # Custom handlers expose mutable opcode/type maps. Even after one full
-    # response, class identity cannot prove that their decoding configuration
-    # is unchanged, so they remain ineligible for skip-metadata.
+    # Custom handlers expose mutable opcode/type maps. Even after one
+    # full response, class identity cannot prove that their decoding
+    # configuration is unchanged, so they remain ineligible for
+    # skip-metadata.
     prepared._update_result_metadata(
         refreshed.column_metadata, b'custom-metadata-id', None)
     message, bound_result_metadata = _capture_execute(session, prepared)
@@ -736,8 +744,9 @@ def test_builtin_protocol_handler_map_change_forces_result_metadata_refresh(
     assert message.result_metadata_id is None
     assert not bound_result_metadata
 
-    # A future that already captured the old built-in configuration remains
-    # internally consistent even after the public source map changes.
+    # A future that already captured the old built-in configuration
+    # remains internally consistent even after the public source map
+    # changes.
     frozen_response = handler_snapshot.decode_message(
         protocol_version=4,
         protocol_features=ProtocolFeatures(),
@@ -763,8 +772,9 @@ def test_builtin_protocol_handler_map_change_forces_result_metadata_refresh(
     assert frozen_response.parsed_rows == [(7,)]
     assert current_response.parsed_rows == [(70,)]
 
-    # Even metadata decoded after the customization cannot make an arbitrary
-    # application ResultMessage eligible for metadata-less responses.
+    # Even metadata decoded after the customization cannot make an
+    # arbitrary application ResultMessage eligible for metadata-less
+    # responses.
     prepared._update_result_metadata(
         current_response.column_metadata,
         b'custom-metadata-id',
@@ -823,8 +833,8 @@ def test_trace_queries_use_builtin_decoder_with_custom_application_handler():
             SimpleStatement('SELECT value FROM system_traces.sessions'),
             None, time_spent=0, max_wait=1)
 
-    # The application's decoder multiplies integers by ten. Internal trace
-    # values must retain their ordinary types and values.
+    # The application's decoder multiplies integers by ten. Internal
+    # trace values must retain their ordinary types and values.
     assert result.one().value == 7
     assert session.client_protocol_handler is _CustomProtocolHandler
 
@@ -865,8 +875,9 @@ def test_full_metadata_response_recovers_after_udt_transition():
             user_type_map=cluster._user_types)
         response.result_metadata_id = b'new-metadata-id'
         future._set_result(None, None, None, response)
-        # The callback is synchronous and timers are mocked. Check completion
-        # before result() so a publication regression cannot hang the test.
+        # The callback is synchronous and timers are mocked. Check
+        # completion before result() so a publication regression cannot
+        # hang the test.
         assert future._event.is_set()
         assert isinstance(future.result().one()[0], Address)
         assert prepared._result_metadata_snapshot[2] == (
@@ -916,15 +927,17 @@ def test_factory_snapshot_survives_registration_before_future_construction():
                 session, prepared.bind(()), parameters=None, trace=False,
                 custom_payload=None, timeout=1)
 
-        # This request captured the old mapping before registration started.
+        # This request captured the old mapping before registration
+        # started.
         assert future.message.skip_meta is True
         assert future._bound_result_metadata[0][3].mapped_class is None
         assert future._result_metadata_decoder_context == original_context
         assert prepared.result_metadata_id is None
         assert cluster._prepared_metadata_context is not original_context[2]
 
-        # A full response can decode with the new mapping, but the old request
-        # context must not make it eligible under the new Cluster token.
+        # A full response can decode with the new mapping, but the old
+        # request context must not make it eligible under the new
+        # Cluster token.
         message_class = future._protocol_handler.message_types_by_opcode[
             ResultMessage.opcode]
         response = _decode_rows(

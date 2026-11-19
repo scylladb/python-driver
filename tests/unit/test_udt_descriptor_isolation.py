@@ -217,8 +217,9 @@ def _exercise_concurrent_mapping_creation_and_eviction():
 
 
 def test_concurrent_mapping_creation_and_eviction_is_safe():
-    # Isolate worker threads so a cache-lock regression fails within a local
-    # deadline, including when executor shutdown would otherwise wait forever.
+    # Isolate worker threads so a cache-lock regression fails within a
+    # local deadline, including when executor shutdown would otherwise
+    # wait forever.
     run_isolated_subprocess(
         'from tests.unit.test_udt_descriptor_isolation import '
         '_exercise_concurrent_mapping_creation_and_eviction\n'

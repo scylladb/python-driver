@@ -156,9 +156,9 @@ def _prepared_metadata_request_state(
     """
     Resolve one coherent metadata/id/provenance snapshot for an EXECUTE.
 
-    ``requested_metadata_id`` is supplied by the compatibility path where an
-    extension constructs a ResponseFuture directly. A mismatch with the
-    PreparedStatement cache forces a self-describing response.
+    ``requested_metadata_id`` is supplied by the compatibility path
+    where an extension constructs a ResponseFuture directly. A mismatch
+    with the PreparedStatement cache forces a self-describing response.
     """
     if decoder_context is _NOT_SET:
         decoder_context = _prepared_metadata.decoder_context(
@@ -1774,9 +1774,9 @@ class Cluster(object):
         self.control_connection = None
         self._prepared_statements = WeakValueDictionary()
         self._prepared_statement_lock = Lock()
-        # Opaque and instance-unique: cached decoder metadata must not be
-        # reused by a Session from another Cluster merely because both have
-        # registered the same number of UDT mappings.
+        # Opaque and instance-unique: cached decoder metadata must not
+        # be reused by a Session from another Cluster merely because
+        # both have registered the same number of UDT mappings.
         self._prepared_metadata_context = object()
         self._user_type_registration_count = 0
 
@@ -1846,13 +1846,15 @@ class Cluster(object):
 
     def _invalidate_prepared_metadata_context(self, registration_delta):
         """
-        Rotate this Cluster's decoder context and invalidate cached server ids.
+        Rotate this Cluster's decoder context and invalidate cached
+        server ids.
 
-        The token also covers statements not currently present in the weak
-        prepared cache: their old context will no longer match on execute.
-        An ineligible context prevents metadata decoded during a client-side
-        transition from enabling skip-metadata until all registrations finish.
-        The count also covers overlapping and reentrant Session callbacks.
+        The token also covers statements not currently present in the
+        weak prepared cache: their old context will no longer match on
+        execute. An ineligible context prevents metadata decoded during
+        a client-side transition from enabling skip-metadata until all
+        registrations finish. The count also covers overlapping and
+        reentrant Session callbacks.
         """
         with self._prepared_statement_lock:
             self._user_type_registration_count += registration_delta
@@ -1915,9 +1917,10 @@ class Cluster(object):
                         "CQL encoding for simple statements will still work, but named tuples will "
                         "be returned when reading type %s.%s.", self.protocol_version, keyspace, user_type)
 
-        # Enter a transition context before publishing any mapping changes.
-        # Executes created while Session callbacks run must request full
-        # metadata rather than retain the old id and decoder descriptors.
+        # Enter a transition context before publishing any mapping
+        # changes. Executes created while Session callbacks run must
+        # request full metadata rather than retain the old id and
+        # decoder descriptors.
         self._invalidate_prepared_metadata_context(registration_delta=1)
         try:
             self._user_types[keyspace][user_type] = klass
@@ -1928,9 +1931,10 @@ class Cluster(object):
                 UserType.evict_udt_class(keyspace, user_type)
             finally:
                 # Only the last registration restores a distinct stable
-                # context. Metadata decoded during any overlapping transition
-                # remains ineligible, including when a callback fails.
-                # Balance entry even if map publication or eviction fails.
+                # context. Metadata decoded during any overlapping
+                # transition remains ineligible, including when a
+                # callback fails. Balance entry even if map publication
+                # or eviction fails.
                 self._invalidate_prepared_metadata_context(
                     registration_delta=-1)
 
@@ -3932,10 +3936,11 @@ class Session(object):
         """ Returns the ResponseFuture before calling send_request() on it """
 
         prepared_statement = None
-        # A request's decoder and cached metadata must belong to one handler
-        # snapshot. Reading this attribute again after construction
-        # could pair metadata selected for one handler with another handler's
-        # decode_message when applications change it concurrently.
+        # A request's decoder and cached metadata must belong to one
+        # handler snapshot. Reading this attribute again after
+        # construction could pair metadata selected for one handler with
+        # another handler's decode_message when applications change it
+        # concurrently.
         if protocol_handler is _NOT_SET:
             protocol_handler = self.client_protocol_handler
 
@@ -4032,10 +4037,10 @@ class Session(object):
             # Whether skip_meta and the id actually reach the wire is decided per
             # connection at serialization time (see ExecuteMessage.send_body).
             # Continuous paging sessions are excluded:
-            # Connection.process_msg hardcodes result_metadata=None for every
-            # page after the first (it is not threaded through the paging
-            # session), so a skip_meta response has nothing to decode page 2+
-            # against.
+            # Connection.process_msg hardcodes result_metadata=None for
+            # every page after the first (it is not threaded through the
+            # paging session), so a skip_meta response has nothing to
+            # decode page 2+ against.
             (bound_result_metadata,
              result_metadata_id,
              skip_meta,
@@ -4240,9 +4245,9 @@ class Session(object):
         message. See :ref:`custom_payload`.
         """
         message = PrepareMessage(query=query, keyspace=keyspace)
-        # PREPARE is client-initiated too: its bind and result type descriptors
-        # must be produced by the same handler snapshot that will decode
-        # EXECUTE.
+        # PREPARE is client-initiated too: its bind and result type
+        # descriptors must be produced by the same handler snapshot that
+        # will decode EXECUTE.
         protocol_handler = _prepared_metadata.session_handler(
             self, self.client_protocol_handler)
         result_metadata_decoder_context = \
@@ -7463,8 +7468,9 @@ class ResponseFuture(object):
             prepared_metadata_skip_allowed
         if (not _prepared_metadata_resolved
                 and isinstance(message, ExecuteMessage)):
-            # A direct caller's full-metadata request applies to every page.
-            # Factory requests can be temporarily ineligible and recover.
+            # A direct caller's full-metadata request applies to every
+            # page. Factory requests can be temporarily ineligible and
+            # recover.
             self._prepared_metadata_skip_allowed = (
                 self._prepared_metadata_skip_allowed and message.skip_meta)
         # TODO: normalize handling of retry policy and row factory
@@ -7476,11 +7482,12 @@ class ResponseFuture(object):
         self._retry_policy = retry_policy
         self._metrics = metrics
         self.prepared_statement = prepared_statement
-        # Factory-created requests retain the context captured with their
-        # descriptors, even if a later registration rotates the Cluster token.
-        # Extension code constructing an Execute ResponseFuture directly may
-        # omit it; resolve the same state here without mutating the caller's
-        # message, which could already be shared by speculative attempts.
+        # Factory-created requests retain the context captured with
+        # their descriptors, even if a later registration rotates the
+        # Cluster token. Extension code constructing an Execute
+        # ResponseFuture directly may omit it; resolve the same state
+        # here without mutating the caller's message, which could
+        # already be shared by speculative attempts.
         if (bound_result_metadata is _NOT_SET
                 and prepared_statement is not None
                 and isinstance(message, ExecuteMessage)):
@@ -7520,8 +7527,9 @@ class ResponseFuture(object):
             elif (decoder_context is None
                   or result_metadata_decoder_context != decoder_context
                   or explicit_metadata != trusted_metadata):
-                # Provenance alone cannot establish a metadata/id pair. A
-                # direct caller must match the same trusted statement state.
+                # Provenance alone cannot establish a metadata/id pair.
+                # A direct caller must match the same trusted statement
+                # state.
                 bound_result_metadata = ()
                 message = copy(message)
                 message.skip_meta = False
@@ -7542,9 +7550,10 @@ class ResponseFuture(object):
         self._result_metadata_decoder_context = (
             None if result_metadata_decoder_context is _NOT_SET
             else result_metadata_decoder_context)
-        # Requests may be sent concurrently by speculative execution. Publish
-        # the message and the metadata handed to its decoder as one immutable
-        # snapshot so refreshes for paging/reprepare cannot tear the pair.
+        # Requests may be sent concurrently by speculative execution.
+        # Publish the message and the metadata handed to its decoder as
+        # one immutable snapshot so refreshes for paging/reprepare
+        # cannot tear the pair.
         self._request_snapshot = (
             self.message,
             self._bound_result_metadata,
@@ -8060,9 +8069,10 @@ class ResponseFuture(object):
             self, message=None, cb=None, connection=None, host=None,
             record_attempt=True, record_size=True, request_id=_NOT_SET,
             provisional_session=None, page_generation=None):
-        # Paging publishes its message and generation under this same lock.
-        # Keep the captured tag while borrowing, even if another attempt
-        # completes this page and the application starts the next one.
+        # Paging publishes its message and generation under this same
+        # lock. Keep the captured tag while borrowing, even if another
+        # attempt completes this page and the application starts the
+        # next one.
         with self._callback_lock:
             stale = page_generation is not None and (
                 page_generation != self._page_generation or self._is_final())
@@ -8076,8 +8086,9 @@ class ResponseFuture(object):
                     decoder_context = self._result_metadata_decoder_context
         if stale:
             if request_id is not _NOT_SET and request_id is not None:
-                # This stream was borrowed by the caller, before this send
-                # could register a callback or become an orphaned request.
+                # This stream was borrowed by the caller, before this
+                # send could register a callback or become an orphaned
+                # request.
                 self._release_control_connection_request(
                     connection, request_id, provisional_session, reserved=True)
             return _NOT_SET
@@ -8331,9 +8342,10 @@ class ResponseFuture(object):
             provisional_session=provisional_session, **options)
 
     def _query(self, host, message=None, cb=None, page_generation=None):
-        # Paging publishes its message and generation under this same lock.
-        # Keep the captured tag while borrowing, even if another attempt
-        # completes this page and the application starts the next one.
+        # Paging publishes its message and generation under this same
+        # lock. Keep the captured tag while borrowing, even if another
+        # attempt completes this page and the application starts the
+        # next one.
         with self._callback_lock:
             if page_generation is not None and (
                     page_generation != self._page_generation
@@ -8566,13 +8578,15 @@ class ResponseFuture(object):
 
     def _refresh_prepared_result_metadata(self, paging_state=_NOT_SET):
         """
-        Refresh this future's metadata/id snapshot before reusing its EXECUTE.
+        Refresh this future's metadata/id snapshot before reusing its
+        EXECUTE.
 
-        A future is reused for manual paging and after UNPREPARED recovery.  In
-        both cases the shared PreparedStatement may have acquired fresher
-        metadata since the original message was built.
+        A future is reused for manual paging and after UNPREPARED
+        recovery.  In both cases the shared PreparedStatement may have
+        acquired fresher metadata since the original message was built.
 
-        The caller must hold _callback_lock while publishing this snapshot.
+        The caller must hold _callback_lock while publishing this
+        snapshot.
         """
         if (self.prepared_statement is None
                 or not isinstance(self.message, ExecuteMessage)):
@@ -8926,9 +8940,10 @@ class ResponseFuture(object):
                                 expected=hexlify(expected_query_id),
                                 got=hexlify(response.query_id)))
                     elif self.prepared_statement:
-                        # Bind metadata and result provenance belong to the
-                        # page that received UNPREPARED. Publish them with its
-                        # refreshed request before another page can advance.
+                        # Bind metadata and result provenance belong to
+                        # the page that received UNPREPARED. Publish
+                        # them with its refreshed request before another
+                        # page can advance.
                         self.prepared_statement.column_metadata = \
                             response.bind_metadata
                         self.prepared_statement._update_result_metadata(
@@ -9093,8 +9108,9 @@ class ResponseFuture(object):
                 return
             page_generation = self._page_generation
             if consistency_level is not None:
-                # Keep a retry-policy update and metadata refresh in the same
-                # publication order. Already captured attempts keep their CL.
+                # Keep a retry-policy update and metadata refresh in the
+                # same publication order. Already captured attempts keep
+                # their CL.
                 original_cl = self.message.consistency_level
                 rejected_downgrade = (
                     ConsistencyLevel.is_serial(original_cl)
