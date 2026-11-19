@@ -27,12 +27,13 @@ Read the document with these distinct statuses:
   runtime. Keep questioned claims, their assumptions and counterexamples in
   the evaluation rather than silently deleting a topic or declaring it settled.
 
-The architecture, workload set, budgets and measurement procedure require
-recorded maintainer agreement before the affected runtime implementation.
-Neither agreement nor benchmark success is claimed here. In particular,
-query-capacity/topology changes and reactor-callback errors remain separate
-compatibility decisions. The decision and stage-entry gates below identify
-what must be resolved before implementation or deletion of an old writer;
+The architecture, workload set, performance measurements and acceptable
+regressions require recorded maintainer agreement before runtime implementation
+starts at #1257. Budgets and the measurement procedure are part of that
+agreement. Neither agreement nor benchmark success is claimed here. In
+particular, query-capacity/topology changes and reactor-callback errors remain
+separate compatibility decisions. The decision and stage-entry gates below
+identify what must be resolved before implementation or deletion of an old writer;
 choosing this evaluation format supplies none of those approvals.
 
 Baseline and invariants
@@ -146,9 +147,11 @@ The stage numbers are GitHub issues.
        initialization
      - ``Cluster.add_execution_profile`` registers, calls ``populate/on_up``,
        then requests Session pool reconciliation before waiting;
-       ``_set_default_dbaas_consistency`` on connect and profile addition
-       rewrites every registered non-explicit profile's ``consistency_level``
-       and the Session default, including later user assignments to that field
+       when ``metadata.dbaas`` is true, ``_set_default_dbaas_consistency`` on
+       connect and profile addition rewrites every registered non-explicit
+       profile's ``consistency_level`` and the Session default, including later
+       user assignments to that field. The flag defaults to false and is set
+       for the DataStax Cloud product type; other clusters retain their defaults
      - Query profile/consistency lookup, policy distance and Session pool
        reconciliation
      - Initiating API configuration and C-owned pool reconciliation / #1259;
@@ -338,10 +341,13 @@ future. No owner invokes arbitrary future callbacks
 as part of a state transition.
 
 One additional cleanup thread releases handler captures for private-only native
-operations and consumed health observations. Releasing the last reference can
-invoke a destructor or weakref callback, so this happens outside runtime and
-Future locks, without occupying C, P or the active L callback. Ordinary handler
-captures and notification/done-callback batches retain their L disposal path.
+operations, consumed health observations and replaced pending health captures
+retired by C/P. Releasing the last reference can invoke a destructor or weakref
+callback, so this happens outside runtime and Future locks, without occupying
+C, P or the active L callback. Ordinary handler
+captures and lifecycle notification batches retain their L disposal path.
+Future done-callback captures retire on their bridge or caller drainer; disposal
+after delivery failure uses L.
 Coalesced work that retains an ordinary reservation also keeps that path; its
 private waiter may finish independently while the ordinary charge bounds the
 remaining captures. This service does not invoke lifecycle notifications or
@@ -514,21 +520,23 @@ public behavior remain requirements regardless of which mechanism is chosen.
 Do not infer a fixed byte bound, a bound on every configuration/lifetime object,
 or finite completion behind arbitrary stalled code from a record-count formula.
 
-The proposed initial ordinary budget is 1,024 outstanding reservations per
-Cluster; each pool's 64-reservation limit is a subset of that budget, not
-additional capacity. Count queued and running operations, coalesced waiter records,
-reserved physical results and queued/active completion-delivery batches until
-their obligations discharge. Native future completion alone does not return
-credit while its physical cleanup or callback batch remains outstanding.
+The proposed initial ordinary budget, ``limit``, is 1,024 outstanding
+reservations per Cluster; each pool's 64-reservation limit is a subset of that
+budget, not additional capacity. Count queued and running operations, coalesced
+waiter records, reserved physical results and queued/active completion-delivery
+batches until their obligations discharge. Native future completion alone does
+not return credit while its physical cleanup or callback batch remains
+outstanding.
 Use at most one driver-owned completion-queue node per charged record.
 These are internal limits to validate, not public configuration promises.
 
 Capture disposal remains charged too. A private-only native record retains its
 reservation until its cleanup-thread disposal finishes; native completion or
-handoff to cleanup does not make that reservation reusable. This reuses the
-existing admission bounds rather than introducing an uncharged disposal queue.
-Report retained cleanup captures and active disposal separately from pending
-operation counts; terminal operations can still own cleanup obligations.
+handoff to cleanup does not make that reservation reusable. This retains the
+record's applicable ordinary or private admission charge, rather than
+introducing an uncharged disposal queue. Report retained cleanup captures and
+active disposal separately from pending operation counts; terminal operations
+can still own cleanup obligations.
 
 Ordinary internal nonblocking submissions reject immediately with an internal
 ``ManagementOverloaded`` outcome, distinct from shutdown. They retain no
@@ -695,7 +703,9 @@ binding, shutdown and timeout/error precedence. Fill all domain slots, remove
 and re-add UUIDs while cleanup is paused, and discover another UUID: no new
 domain, candidate backlog or new-host publication until one domain fully drains;
 existing healthy-host attempts still send when their stream capacity allows,
-and reserved native close/health transitions still run. Check final
+and reserved native close still runs. Check health progress with its separate
+consumed and pending-disposal capacity available; test the specified deferral
+or rejection separately when those windows are full. Check final
 zero debt. Use small injected limits for deterministic schedules and the full
 proposed limits for resource/load trials.
 
@@ -726,7 +736,10 @@ Each current/retiring Host incarnation has one separately reserved native
 health/removal record and one latest unadmitted notification slot. That
 record applies negative health, request-view exclusion and lease revocation
 without acquiring ordinary capacity, waiting for slow opens, or waiting for
-callback delivery. Removal supersedes pending positives. It does not allocate
+L callback delivery. Consumed-health and pending-disposal capacity can still
+defer or reject an observation as specified below; this candidate does not
+guarantee DOWN/REMOVE progress through stalled capture disposal. Removal
+supersedes pending positives when admitted. It does not allocate
 physical work or a new callback batch: those require ordinary transition
 credits. Preserve already admitted versioned batches and their waiters;
 stale batches revalidate before effects. Pending unadmitted notifications
@@ -735,22 +748,51 @@ on accepted pool outcomes. Previously unseen identities set one pending full
 refresh demand instead of growing a key map. Record counts are bounded by
 owned current/retiring incarnations; retirement frees its record after its
 obligations drain. Test DOWN/REMOVE progress with all 1,024 ordinary credits
-held by slow I/O and separately by paused callbacks.
+held by slow I/O and separately by paused callbacks, while reserved health
+and pending-disposal capacity remain available.
 
 A consumed health handler keeps its incarnation slot active through cleanup;
 newer observations coalesce in that slot's single pending record. Unregistering
 cannot free an active slot, and re-registering the same incarnation reuses it.
 An old disposal must not clear a newer pending observation or create a second,
-uncharged slot. Also bound consumed and cleanup-pending health records across
-all incarnations by the existing management limit, initially 1,024, separately
-from ordinary capacity. Further pending observations coalesce until reserved
-health capacity returns. Unregistering discards unconsumed pending work outside
-runtime locks; active tombstones remain charged until their obligations drain.
-This bounds retired-incarnation churn without claiming a fixed bound on the
-live registration/configuration data. A full health limit defers native
-application of new observations; ordinary admission saturation alone does not.
+uncharged slot. Bound consumed and cleanup-pending health records across
+all incarnations with a proposed separate health window. It shares the
+candidate's ``limit`` seed of 1,024 but does not consume ordinary capacity.
+Further pending observations coalesce until reserved health capacity returns.
+A full consumed-health limit defers native application of new observations;
+ordinary admission saturation alone does not.
 A paired notification remains pending until its native health application
 finishes, including when the active slot or aggregate health limit defers it.
+
+Replacing or unregistering a pending observation can release its old handler
+and notification captures. When either old capture is present, C/P must reserve
+safe disposal before changing that observation or registration. An empty old
+pair needs no disposal batch and can change despite a full disposal window.
+Permit at most one pending-disposal batch per incarnation, containing at most
+the old handler and notification captures, and at most ``limit`` such batches
+across the Cluster. This proposed window shares
+the same numerical seed, but its count is separate from consumed-health and
+ordinary capacity.
+These are retained-object counts, not bounds on arbitrary payload bytes.
+
+For operations that retire an old capture, raise ``ManagementOverloaded`` if
+the incarnation already owns a pending-disposal batch or the aggregate limit
+is full. Raise it before changing the pending observation or registration.
+Preserve the old captures and state so the producer can retry. Successful
+replacement and unregistration retain their behavior.
+Queue admission must also succeed before transferring captures or charging the
+batch; a failed admission must leave the old state intact. Release accepted
+captures on the cleanup service outside C/P and runtime/Future locks. Return
+the batch's capacity only after actual disposal, including destructors and
+weakref callbacks, finishes. Producers outside C/P can release replaced pending
+captures directly outside runtime locks, without adding a disposal batch.
+
+Retain an unregistered incarnation's slot until both consumed-health work and
+pending-disposal batches drain; re-registration reuses that slot. This bounds
+retired-incarnation churn without claiming a fixed bound on live registration
+data. Ordinary saturation alone cannot block reserved health progress, but
+pending-disposal capacity can reject C/P replacement or unregistration. Native
+close retirement retains its guaranteed reserved path.
 
 Reserve one result slot with each physical item before submitting it. Results
 and cleanup retain that reservation, so ordinary admission cannot prevent their
@@ -778,16 +820,21 @@ close uses the same cleanup-context wait guard. Test destructor and
 weakref-callback reentry through these paths, without holding runtime or Future
 locks across capture release. No finite completion bound is claimed for a
 destructor that itself never returns.
-Such a destructor can backpressure private-native admission and health
-consumption. C/P dispatch and native close retirement remain available;
-finalization and joins still require actual disposal to finish.
+Such a destructor can hold the record's ordinary or private reservation,
+backpressure health consumption, or exhaust pending-disposal capacity. A
+pending DOWN/REMOVE can then leave the old routing view visible until capacity
+returns and the producer retries a rejected observation. C/P dispatch and native
+close retirement remain available; finalization and joins still require actual
+disposal to finish.
 
 Decisions required before adopting the candidate
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The following are open evaluation decisions, not implementation permissions.
 Record the chosen mechanism, its assumptions, compatibility consequences,
-acceptance criteria and required evidence before entering the affected stage.
+acceptance criteria and required evidence before runtime implementation starts
+at #1257. Later stage entries below assign implementation and validation work;
+they do not postpone the agreement on acceptable regressions required by #1256.
 A numerical seed, an existing exception name or a reviewed documentation page
 does not itself establish an accepted change to public behavior.
 
@@ -801,7 +848,9 @@ does not itself establish an accepted change to public behavior.
    * - Execution and ordinary admission
      - Compare the arrangements above. The candidate's 16-message turns,
        1,024 ordinary records, pool subset of 64, reentry window and per-lifetime
-       records are concrete proposals, not universal constants. Blocking-I/O
+       records are concrete proposals, not universal constants. The separate
+       consumed-health and pending-disposal windows each share the proposed
+       ``limit`` seed; neither is an existing released-driver limit. Blocking-I/O
        executor reuse may couple owners to their prerequisites.
      - Before #1257, agree execution/admission and bridge contracts; demonstrate
        handler fairness, exclusive handoff, supported-runtime wakeups, reserved
@@ -812,11 +861,11 @@ does not itself establish an accepted change to public behavior.
        or selective admission with a complete account of unknown statements.
        The existing USE recognizer does not classify arbitrary DDL. Returning
        a stream or closing its socket does not drain handed-off manager work.
-     - Before relevant #1259/#1261 query/keyspace/schema migration, resolve
-       original-attempt ownership through timeout, cancellation, retries,
-       speculation, fallback, disposal and replacement/re-addition. Test all
-       retained cases below; do not hide debt in an unadmitted queue or reuse
-       credit before its obligations discharge.
+     - Agree original-attempt ownership before #1257. Before relevant
+       #1259/#1261 query/keyspace/schema migration, test timeout, cancellation,
+       retries, speculation, fallback, disposal and replacement/re-addition.
+       Test all retained cases below; do not hide debt in an unadmitted queue
+       or reuse credit before its obligations discharge.
    * - Capacity and topology compatibility
      - The candidate's 1,024 records per Host can reject a healthy Host's next
        attempt while baseline connection streams remain available. Its 1,024
@@ -824,25 +873,44 @@ does not itself establish an accepted change to public behavior.
        snapshot while old debt remains, and impose a hard ceiling of 1,024 live
        UUIDs even without debt. These are distinct new restrictions,
        not proof of preserving baseline capacity or topology visibility.
-     - Before relevant #1258 publication or #1259/#1261 admission work,
-       demonstrate preservation of #1256's query hot-path and topology
-       requirements. A compatibility discussion alone cannot waive them; an
-       incompatible proposal needs an explicit recorded amendment of those
-       requirements before implementation. No such amendment is recorded here.
+       Stalled health capture disposal can also defer negative health or reject
+       pending replacement/removal, retaining an old routing view. This is a
+       proposed dependency, not proof of preserving baseline recovery.
+     - Agree acceptable regressions before #1257. Before relevant #1258
+       publication or #1259/#1261 admission work, demonstrate preservation of
+       #1256's query hot-path rule, this document's topology invariants and
+       #382's recovery requirement. A compatibility discussion alone cannot
+       waive them. An incompatible proposal needs an explicit recorded amendment
+       of those requirements before implementation. No such amendment is
+       recorded here.
        Keep the proposed limits, full-domain churn, aggregate/payload accounting
-       and healthy-host trials; measure
-       sizing rather than treating host isolation as approval of these limits.
+       and healthy-host trials. Measure sizing rather than treating host
+       isolation as approval of these limits.
    * - Reactor synchronous calls
      - The RuntimeError option below replaces existing possible blocking,
        timeout or deadlock on reactor callbacks. It is not an accepted error
        contract merely because native waiters and callbacks are separated.
-     - Resolve compatibility before affected #1257 adapters and #1259 APIs;
-       name every affected API, pre-state-change behavior and tests. Keep the
-       ordinary caller contract and valid async/terminal-result paths.
+     - Resolve compatibility before #1257; validate its affected adapters and
+       #1259 APIs. Name every affected API, pre-state-change behavior and tests.
+       Keep the ordinary caller contract and valid async/terminal-result paths.
+   * - Cleanup-context blocking calls and close
+     - The candidate rejects pending waits and blocking close with
+       ``ManagementContextError`` on its cleanup thread, before a blocking
+       close changes state. Terminal reads and nonblocking close remain valid.
+       This is a new API restriction, including when destruction reenters an API.
+     - Resolve compatibility before #1257. Destructor-driven Session/Cluster
+       cleanup must initiate reserved nonblocking retirement before any wait
+       guard can abort it. A swallowed exception from ``Session.__del__`` must
+       not abandon pool closure. Test actual Session/pool captures and pending
+       initial-connect futures in the #1259/#1262 adapters; runtime-only tests
+       do not establish that integration.
    * - Combined shutdown and measurement
      - Every arrangement retains late-result disposal, idempotent close,
        original resource ownership and no self/cyclic join. Thread counts,
        workloads, thresholds and measurement procedure remain proposals.
+       Decide whether normal external shutdown also waits for arbitrary capture
+       disposal or leaves it to eventual finalization; no choice is accepted
+       here.
      - Before #1262 deletion, cover all lifetime/partial-initialization/fork
        obligations. Before #1257 runtime implementation obtain the required
        workload/budget agreement; before #1263 acceptance record the agreed
@@ -929,8 +997,10 @@ location is visible. Endpoint replacement still follows its own identity and
 lease rules. Arbitrary application code has no finite completion bound, so
 neither does this deferral. Expose pending deferred-location count and oldest
 age in management diagnostics, and test the retained routing view while the
-old-membership callback is paused. Negative-health exclusion and close must
-still progress independently.
+old-membership callback is paused. Negative-health exclusion must progress
+independently of that callback while its health/disposal windows permit
+admission; capture disposal can still defer or reject it as described above.
+Native close retirement remains independent.
 
 ``Cluster.connect`` retains first-usable-pool completion by default and
 all-initial-attempts completion for ``wait_for_all_pools=True``. Registration,
@@ -943,9 +1013,10 @@ For ordinary C-driven ADD/UP or Session reconciliation, evaluate custom
 ``distance`` on L as a versioned policy batch backed by the requesting
 operation's reservation. Capture topology, Session/pool intent and policy
 revision; C validates the returned decision and continues asynchronously.
-A slow listener can therefore delay background classification on L. It cannot
-delay native negative-health/close handling or consume a physical-work worker
-needed by synchronous policy reentry. Do not run driver-managed lifecycle
+A slow listener can therefore delay background classification on L. That lane
+does not own native negative-health/close handling; the separate capture-cleanup
+capacity limits above still apply to health. L cannot consume a physical-work
+worker needed by synchronous policy reentry. Do not run driver-managed lifecycle
 policy callbacks on the physical-work executor, C or P. Within this worked
 candidate, the fifth thread is solely the bounded capture-cleanup service;
 it does not add another lifecycle policy/callback lane. A different evaluated
@@ -1053,25 +1124,52 @@ Start the cleanup service before the other management threads so it can dispose
 captures after a later startup failure. Failed or interrupted startup must
 retire every started execution resource without dropping captures under owner
 locks or on the active L callback. Keep cleanup available until accepted private
-and health captures drain. The final resource barrier covers all five candidate
-threads and retained disposal obligations, including late results.
+and health captures drain, including accepted pending-disposal batches. Close
+retains their capacity charges and capture obligations until actual disposal.
+The final resource barrier covers all five candidate threads and retained
+disposal obligations, including late results.
 
-Normal external shutdown waits for its transport/operation cleanup barrier,
-but does not wait for an active application notification to return, preserving
-the existing coordinator-close contract. Retire/cancel queued notifications;
-an already-running callback may finish after shutdown and its subsequent
-submissions are rejected. Its lane releases its execution resource when it
-returns. A separate final resource barrier, used by lifecycle tests after
-releasing controlled callbacks, observes that last lane exit. No implementation
+Keep native close, physical/resource cleanup and final execution-resource
+retirement distinct. The candidate runtime's nonblocking close returns a shared
+native closed event; that event does not certify physical or capture disposal.
+Its finalization/join barrier waits for physical obligations, actual capture
+disposal, all five runner exits and reactor-channel detachment. A non-returning
+destructor can therefore prevent that final barrier from completing.
+
+Normal external shutdown must preserve its existing transport/operation cleanup
+and executor-wait behavior. In the baseline, ``Cluster.shutdown()`` normally
+waits for its executor, so an active listener on another executor worker can
+block it. The callback-origin self-join exemption depends on delivery in the
+calling thread; closing the lifecycle coordinator alone does not join callbacks
+and does not define the whole Cluster shutdown boundary. Moving notifications
+to L must not silently change that external wait behavior. Whether
+``Cluster.shutdown()`` also waits for the new capture-disposal debt is an open
+adapter compatibility decision, not a guarantee established by the runtime
+primitive. Leaving that debt to eventual finalization is a proposal that avoids
+adding a wait on arbitrary destructors; waiting for it instead can make normal
+shutdown unbounded. Include the chosen API boundary in the pre-#1257 agreement;
+test shutdown with cleanup paused, then release cleanup and verify final
+disposal and thread exit before integrating the affected #1259/#1262 adapters.
+Retire/cancel queued notifications. Where the shutdown-origin and executor
+rules permit it, an already-running callback may finish after shutdown and its
+subsequent submissions are rejected. Its lane releases its execution resource
+when it returns. A separate final resource barrier, used by lifecycle tests
+after releasing controlled callbacks, observes that last lane exit. No implementation
 can forcibly stop arbitrary non-returning application code.
 
-Calls originating
-on an owner, callback lane, completion bridge or worker must not self-join or
-wait on a cycle; they retire state immediately and delegate remaining joins
-to cleanup continuations. This worked candidate proposes no dedicated closer
-thread; its capture-cleanup service is not a general shutdown join worker and
+Calls originating on an owner, callback lane, completion bridge or worker must
+not self-join or wait on a cycle; they retire state immediately and delegate
+remaining joins to cleanup continuations. This worked candidate proposes no
+dedicated closer thread; its capture-cleanup service is not a general shutdown join worker and
 must not wait for itself. Other arrangements must account for their cleanup
-resources explicitly.
+resources explicitly. In particular, destructor-driven close must initiate
+guaranteed reserved nonblocking retirement before any pending-wait guard can
+reject the call.
+The baseline ``Session.__del__`` swallows shutdown exceptions, and
+``Session.shutdown`` waits for initial-connect futures before closing pools;
+inserting a cleanup guard into that path alone can abandon pool closure.
+The adapters must preserve retirement with real Session/pool captures, including
+partially initialized Sessions, rather than rely on the swallowed exception.
 A Session close retires only its own pools and operations;
 other Sessions and C remain operational. Preserve partial initialization,
 interpreter-exit scheduling guards and fork safeguards; a child process must
@@ -1190,6 +1288,14 @@ workers, fake timers and barriers, not timing sleeps, for the new scenarios.
        is paused, and verify one active slot plus its coalesced pending record.
        Churn distinct retired incarnations with small injected aggregate health
        limits; consumed captures and tombstones must stay within that limit.
+       Hold pending-capture disposal while C/P repeatedly replaces or
+       unregisters observations. Check the per-incarnation batch and separate
+       aggregate bounds, overload before any state change when old captures
+       exist, empty-pair success at a full quota, successful producer retry
+       after capacity returns, queue-admission failure and shutdown debt.
+       Pause cleanup while delivering DOWN/REMOVE: distinguish ordinary-only
+       saturation from consumed-window deferral and pending-disposal rejection;
+       observe the retained routing view and eventual application after retry.
        Check destructor/weakref reentry, terminal reads, nonblocking submission
        and close, and reject self-dependent waits on cleanup. Inject failure at
        each of the five thread-start phases and verify final capture/thread
@@ -1201,9 +1307,7 @@ workers, fake timers and barriers, not timing sleeps, for the new scenarios.
        reconciliation demand live; concurrent additions and timeout/shutdown
        must not lose profiles or grow an unadmitted task/waiter list. Its L
        profile addition uses reentry, and its L keyspace change uses query credit
-       without also taking reentry. Test dbaas consistency-default writes on
-       connect and profile addition, including non-explicit profiles whose
-       consistency level was subsequently assigned by the application.
+       without also taking reentry.
        If the reactor-context proposal is approved, assert ``RuntimeError``
        from every affected synchronous API, including
        ``Cluster.add_execution_profile`` and ``Session.set_keyspace``, in a
@@ -1233,7 +1337,12 @@ workers, fake timers and barriers, not timing sleeps, for the new scenarios.
      - Overlap two candidate constructors with an accepted healthy pool;
        count statement dispatches for the remaining #317 gap while preserving
        already-covered original-pool stream return. Close one of two Sessions
-       while its candidate and timer complete.
+       while its candidate and timer complete. Test consistency-default writes
+       on connect and profile addition when ``metadata.dbaas`` is true, including
+       non-explicit profiles subsequently assigned by the application; verify
+       false leaves those profiles and the Session default unchanged.
+       Drop the last Session reference on cleanup with initial-connect futures
+       pending; guarded waits must not prevent reserved pool retirement.
    * - Pool members / #1260
      - ``test_host_connection_pool.py``: coalesced shard recovery, submission
        rejection, draining/orphaned streams, stale replacement and USE races;

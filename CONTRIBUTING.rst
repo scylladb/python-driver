@@ -33,9 +33,10 @@ The `cluster and pool manager ownership evaluation <MANAGER_OWNERSHIP.rst>`_
 records ownership requirements, evaluates execution arrangements and retains
 a worked candidate, migration stages, regression coverage and proposed
 validation budgets. It does not select a runtime engine. The architecture,
-workloads, budgets and measurement procedure require recorded agreement
-before affected runtime implementation. The evaluation describes development
-work rather than released runtime behavior.
+workloads, performance measurements and acceptable regressions require recorded
+maintainer agreement before runtime implementation starts at #1257. Budgets and
+the measurement procedure are part of that agreement. The evaluation describes
+development work rather than released runtime behavior.
 
 Optional NumPy imports
 ----------------------
