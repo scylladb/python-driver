@@ -1374,12 +1374,75 @@ class ManagementRuntime:
                     raise TimeoutError()
 
 
+class ReactorChannel:
+    """Borrow dispatch without owning the process-global I/O service.
+
+    The libev adapter supplied by the later reactor integration must
+    keep its I/O runner live until the final admitted delivery drains.
+    Its startup must finish before runtime admission. Closing one
+    channel releases only its borrow, never another Cluster's reactor.
+    """
+
+    def __init__(self, connection_class):
+        dispatch = getattr(connection_class, '_management_dispatch', None)
+        in_context = getattr(connection_class, '_management_in_context', None)
+        if dispatch is None or in_context is None:
+            raise ManagementContextError(
+                'Connection class has no management completion adapter')
+        self._closed = False
+        self._dispatch = dispatch
+        self._release = None
+        connection_class.initialize_reactor()
+        borrow = getattr(connection_class, '_management_borrow', None)
+        if borrow is not None:
+            self._release = borrow()
+        elif not in_context():
+            ready = Event()
+            dispatch(ready.set)
+            if not ready.wait(5):
+                raise ManagementContextError(
+                    'Management reactor channel startup did not complete')
+
+    def dispatch(self, callback):
+        if self._closed:
+            raise ManagementClosed('Management completion channel detached')
+        self._dispatch(callback)
+
+    def close(self, completed=lambda: None):
+        if self._closed:
+            completed()
+            return
+        self._closed = True
+        release, self._release = self._release, None
+        self._dispatch = None
+        if release is None:
+            completed()
+        else:
+            release(completed)
 
 
+def assert_synchronous_api(connection_class):
+    assert_can_wait()
+    in_context = getattr(connection_class, '_management_in_context', None)
+    if in_context is not None and in_context():
+        raise ManagementContextError(
+            'Blocking management call on a reactor thread')
 
 
+@contextmanager
+def physical_work_context(cleanup=False):
+    """Mark physical work; cleanup may finish child closes inline."""
+    previous = getattr(_context, 'cleanup', False)
+    _context.cleanup = cleanup
+    try:
+        with _entered('worker'):
+            yield
+    finally:
+        _context.cleanup = previous
 
 
+def performing_cleanup():
+    return getattr(_context, 'cleanup', False)
 
 
 def _compatibility_reservation(record):
