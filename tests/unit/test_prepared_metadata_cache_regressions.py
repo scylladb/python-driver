@@ -279,6 +279,48 @@ def test_false_valued_mapping_keeps_namedtuple_fallback(message_class):
         UserType.evict_udt_class(_KEYSPACE, 'address')
 
 
+@pytest.mark.parametrize('message_class', list(dict.fromkeys((
+    ResultMessage,
+    ProtocolHandler.message_types_by_opcode[ResultMessage.opcode],
+))))
+def test_mapping_truth_change_keeps_namedtuple_fallback(message_class):
+    class MutableMappingMeta(type):
+        def __bool__(cls):
+            return cls.enabled
+
+    class MutableAddress(metaclass=MutableMappingMeta):
+        enabled = True
+
+        def __init__(self, number):
+            self.number = number
+
+    UserType.evict_udt_class(_KEYSPACE, 'address')
+    try:
+        unmapped = _decode_rows(message_class, _udt_rows_body(1))
+        registered_tuple = unmapped.column_metadata[0][3].tuple_type
+        mapping = {_KEYSPACE: {'address': MutableAddress}}
+        initial = _decode_rows(
+            message_class, _udt_rows_body(7), user_type_map=mapping)
+        assert isinstance(initial.parsed_rows[0][0], MutableAddress)
+        descriptor = initial.column_metadata[0][3]
+        original_fallback = descriptor.tuple_type
+
+        MutableAddress.enabled = False
+        response = _decode_rows(
+            message_class, _udt_rows_body(8, no_metadata=True),
+            user_type_map=mapping, result_metadata=initial.column_metadata)
+        value = response.parsed_rows[0][0]
+        assert isinstance(value, tuple)
+        assert value.number == 8
+        assert value._fields == ('number',)
+        assert descriptor.mapped_class is MutableAddress
+        assert descriptor.tuple_type is original_fallback
+        assert getattr(
+            UserType._module, _KEYSPACE + '_address') is registered_tuple
+    finally:
+        UserType.evict_udt_class(_KEYSPACE, 'address')
+
+
 def test_failed_udt_registration_still_invalidates_prepared_metadata():
     cached_metadata = [('ks', 'tbl', 'address', Mock())]
     prepared = _prepared_statement(cached_metadata, b'metadata-id')

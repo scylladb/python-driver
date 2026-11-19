@@ -309,16 +309,22 @@ def test_udt_mapping_truth_callback_can_reenter_cache():
     # Bound a cache-lock regression in its own process; terminate on failure.
     run_isolated_subprocess(
         'from cassandra.cqltypes import UserType, Int32Type\n'
+        'calls = []\n'
         'class Reentrant(type):\n'
         '    def __bool__(cls):\n'
+        '        calls.append(True)\n'
         '        UserType.evict_udt_class("review", "truth")\n'
         '        return True\n'
         'class Mapping(metaclass=Reentrant):\n'
-        '    pass\n'
+        '    def __init__(self, n):\n'
+        '        self.n = n\n'
         'try:\n'
         '    descriptor = UserType.make_udt_class(\n'
         '        "review", "truth", ("n",), (Int32Type,), Mapping)\n'
         '    assert descriptor.mapped_class is Mapping\n'
+        '    encoded = bytes.fromhex("0000000400000007")\n'
+        '    value = descriptor.from_binary(encoded, 4)\n'
+        '    assert value.n == 7 and calls == [True]\n'
         'finally:\n'
         '    UserType.evict_udt_class("review", "truth")\n',
         timeout=10,

@@ -160,8 +160,8 @@ def test_mapped_variants_do_not_replace_picklable_unmapped_tuple():
         KEYSPACE, UDT_NAME, FIELD_NAMES, FIELD_TYPES,
         mapped_class=AddressB)
 
-    assert mapped_a.tuple_type is None
-    assert mapped_b.tuple_type is None
+    assert mapped_a.tuple_type._fields == FIELD_NAMES
+    assert mapped_b.tuple_type._fields == FIELD_NAMES
     assert getattr(
         UserType._module,
         '{}_{}'.format(KEYSPACE, UDT_NAME)) is registered_tuple
