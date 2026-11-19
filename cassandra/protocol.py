@@ -1353,7 +1353,7 @@ _ProtocolHandler._prepared_metadata_cache_config = \
     _prepared_metadata_cache_config(_ProtocolHandler, ResultMessage)
 
 
-def cython_protocol_handler(colparser):
+def cython_protocol_handler(colparser, _prepared_metadata_cache=False):
     """
     Given a column parser to deserialize ResultMessages, return a suitable
     Cython-based protocol handler.
@@ -1392,18 +1392,23 @@ def cython_protocol_handler(colparser):
         message_types_by_opcode = my_opcodes
 
         col_parser = colparser
-        _prepared_metadata_cache_token = object()
 
-    CythonProtocolHandler._prepared_metadata_cache_config = \
-        _prepared_metadata_cache_config(
-            CythonProtocolHandler, FastResultMessage)
+    # Only driver-owned parser construction opts into immutable snapshots.
+    # Application parsers may retain mutable state behind their callables.
+    if _prepared_metadata_cache:
+        CythonProtocolHandler._prepared_metadata_cache_token = object()
+        CythonProtocolHandler._prepared_metadata_cache_config = \
+            _prepared_metadata_cache_config(
+                CythonProtocolHandler, FastResultMessage)
     return CythonProtocolHandler
 
 
 if HAVE_CYTHON:
     from cassandra.obj_parser import ListParser, LazyParser
-    ProtocolHandler = cython_protocol_handler(ListParser())
-    LazyProtocolHandler = cython_protocol_handler(LazyParser())
+    ProtocolHandler = cython_protocol_handler(
+        ListParser(), _prepared_metadata_cache=True)
+    LazyProtocolHandler = cython_protocol_handler(
+        LazyParser(), _prepared_metadata_cache=True)
 else:
     # Use Python-based ProtocolHandler
     ProtocolHandler = _ProtocolHandler

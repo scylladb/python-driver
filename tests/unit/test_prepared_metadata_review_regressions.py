@@ -13,7 +13,24 @@
 # limitations under the License.
 
 
+import pytest
+
+from cassandra._prepared_metadata import protocol_handler_snapshot
+from cassandra.protocol import ProtocolHandler
 from tests.unit.utils import run_isolated_subprocess
+
+
+def test_application_cython_parser_does_not_gain_cache_eligibility():
+    from cassandra.protocol import HAVE_CYTHON, cython_protocol_handler
+    if not HAVE_CYTHON:
+        pytest.skip('Cython parser unavailable')
+    from cassandra.obj_parser import ListParser
+
+    handler = cython_protocol_handler(ListParser())
+
+    assert protocol_handler_snapshot(handler) is handler
+    assert '_prepared_metadata_cache_token' not in vars(handler)
+    assert protocol_handler_snapshot(ProtocolHandler) is not ProtocolHandler
 
 
 def test_udt_mapping_truth_callback_can_reenter_cache():

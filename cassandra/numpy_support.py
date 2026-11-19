@@ -46,7 +46,8 @@ def get_numpy_protocol_handler():
                 handler = None
                 if HAVE_CYTHON and numpy_available():
                     from cassandra.numpy_parser import NumpyParser
-                    handler = cython_protocol_handler(NumpyParser())
+                    handler = cython_protocol_handler(
+                        NumpyParser(), _prepared_metadata_cache=True)
                 _NUMPY_PROTOCOL_HANDLER = handler
     return _NUMPY_PROTOCOL_HANDLER
 
