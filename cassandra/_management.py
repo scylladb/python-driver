@@ -1636,3 +1636,145 @@ def performing_cleanup():
 
 def _compatibility_reservation(record):
     return _PENDING
+
+
+class _CompatibilityCall:
+    """Admit legacy phases while their state writers still use locks.
+
+    The calling stack performs existing blocking work. A reserved
+    physical obligation holds its credit; C never waits for that
+    stack. Policy wrappers release a completed phase before arbitrary
+    policy reentry, then acquire the next phase after the policy
+    returns. Later migrations replace these bodies with native
+    asynchronous owner continuations.
+    """
+
+    def __init__(self, runtime):
+        self.runtime = runtime
+        self.budget = ('aggregate' if _callback_runtime() is runtime
+                       else 'ordinary')
+        self.record = None
+
+    def acquire(self):
+        if self.record is not None:
+            return
+        if self.budget == 'aggregate' and self.runtime._reentry_active:
+            raise ManagementContextError('Recursive native reentry aggregate')
+        future = self.runtime.submit(_compatibility_reservation, wait=True,
+                                     budget=self.budget, reserve=1)
+        self.record = future._record
+        try:
+            self.record.started.wait()
+            if future.done():
+                future.result()
+        except BaseException:
+            self.release()
+            raise
+
+    def release(self):
+        record, self.record = self.record, None
+        if record is not None:
+            self.runtime._check_pid()
+            with self.runtime._condition:
+                self.runtime._complete_compatibility_locked(record)
+                # started fences admission, not the end of the sentinel's
+                # owner frame. Release the phase before user policy runs.
+                self.runtime._condition.wait_for(lambda: not record.executing)
+
+
+@contextmanager
+def compatibility_call(runtime):
+    previous = getattr(_context, 'call', None)
+    call = _CompatibilityCall(runtime)
+    call.acquire()
+    _context.call = call
+    try:
+        yield
+    finally:
+        try:
+            call.release()
+        finally:
+            _context.call = previous
+
+
+def policy_call(method):
+    """Run user policy between released compatibility phases."""
+    @wraps(method)
+    def call_policy(*args, **kwargs):
+        call = getattr(_context, 'call', None)
+        if call is None:
+            return method(*args, **kwargs)
+        call.release()
+        _context.call = None
+        try:
+            result = method(*args, **kwargs)
+        finally:
+            _context.call = call
+        call.acquire()
+        return result
+    return call_policy
+
+
+@contextmanager
+def compatibility_work(runtime):
+    """Charge physical work; L fanout uses its independent window."""
+    if runtime is None:
+        # Internal tests construct bare Sessions with __new__, without a
+        # registered production lifetime or management admission contract.
+        yield lambda work: None
+        return
+    assert_can_wait()
+    call = getattr(_context, 'call', None)
+    same_call = call is not None and call.runtime is runtime
+    budget = ('reentry' if same_call and call.budget == 'aggregate'
+              else 'ordinary')
+    if same_call and budget == 'ordinary':
+        # Admission cannot retain a phase's credit while waiting for a child
+        # record in a full window, or retain a Session lock needed by workers.
+        call.release()
+    future = runtime.submit(_compatibility_reservation, wait=same_call,
+                            budget=budget, reserve=1)
+    record = future._record
+    attached = False
+    completed = False
+
+    def complete(work):
+        nonlocal completed
+        runtime._check_pid()
+        with runtime._condition:
+            if completed:
+                return
+            completed = True
+            runtime._complete_compatibility_locked(record)
+
+    def attach(work):
+        nonlocal attached
+        if (work is not None and
+                callable(getattr(work, 'add_done_callback', None))):
+            try:
+                attached = True
+                work.add_done_callback(complete)
+            except BaseException:
+                # Registration may have been interrupted before or after
+                # installation. Keep this synchronous caller responsible for
+                # the physical work until it actually settles; the callback
+                # and this fallback share the same once-only retirement.
+                while not work.done():
+                    try:
+                        work.result()
+                    except BaseException:
+                        # Interruptions must not abandon physical ownership;
+                        # retry until completion can retire it exactly once.
+                        pass
+                complete(work)
+                raise
+    try:
+        record.started.wait()
+        if future.done():
+            future.result()
+        yield attach
+    finally:
+        if not attached:
+            complete(None)
+        if same_call and budget == 'ordinary':
+            call.acquire()
