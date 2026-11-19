@@ -1045,6 +1045,8 @@ class UserType(TupleType):
         # hashing. The generated descriptor holds a strong reference to
         # mapped_class, so its id cannot be reused while this entry exists.
         cache_key = (keyspace, udt_name, id(mapped_class))
+        # A metaclass truth callback may re-enter this non-reentrant cache.
+        is_unmapped = not mapped_class
         with cls._cache_lock:
             instance = cls._cache.get(cache_key)
             if (not instance or instance.fieldnames != field_names
@@ -1052,7 +1054,7 @@ class UserType(TupleType):
                 # The decoders select mappings by truth value. Preserve the
                 # registered tuple fallback for unmapped or false mappings.
                 tuple_type = None
-                if not mapped_class:
+                if is_unmapped:
                     tuple_type = cls._make_registered_udt_namedtuple(
                         keyspace, udt_name, field_names)
                 instance = type(udt_name, (cls,), {
