@@ -1136,7 +1136,7 @@ class LifecycleCoordinator:
         if (wait and should_wait and not reactor_context and
                 not getattr(self._local, 'locked', 0) and
                 execution_context() not in ('cluster', 'pool', 'bridge',
-                                            'worker', 'callback')):
+                                            'worker', 'callback', 'cleanup')):
             while not self._idle.wait(0.05):
                 if self.closed:
                     # Closure abandons joining delivery; an active callback

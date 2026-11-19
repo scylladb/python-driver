@@ -5408,7 +5408,7 @@ def test_reactor_channel_legacy_startup_is_safe_on_the_reactor(in_context):
 
 
 @pytest.mark.parametrize('missing', ['dispatch', 'context'])
-def test_reactor_channel_missing_adapter_does_not_start_a_service(missing):
+def test_reactor_channel_missing_hook_owns_only_completion_service(missing):
     attributes = {
         'initialize_reactor': staticmethod(
             lambda: pytest.fail('unsupported adapter started a reactor')
@@ -5421,8 +5421,35 @@ def test_reactor_channel_missing_adapter_does_not_start_a_service(missing):
     if missing != 'context':
         attributes['_management_in_context'] = staticmethod(lambda: False)
     connection = type('Connection', (), attributes)
-    with pytest.raises(ManagementContextError, match='no management'):
-        management.ReactorChannel(connection)
+    channel = management.ReactorChannel(connection)
+    entered, release, delivered, detached = Event(), Event(), Event(), Event()
+    errors = []
+
+    def first():
+        try:
+            with pytest.raises(ManagementContextError, match='own completion'):
+                channel.join(0)
+            entered.set()
+            assert release.wait(5)
+        except BaseException as error:
+            errors.append(error)
+
+    try:
+        channel.dispatch(first)
+        channel.dispatch(delivered.set)
+        assert entered.wait(5)
+        assert not delivered.is_set(), 'owned channel lost serial delivery'
+        channel.close(detached.set)
+        assert not detached.is_set()
+        with pytest.raises(ManagementClosed):
+            channel.dispatch(lambda: pytest.fail('closed channel accepted work'))
+    finally:
+        release.set()
+        channel.close(detached.set)
+        channel.join(5)
+    assert not errors
+    assert delivered.is_set() and detached.is_set()
+    assert not channel._fallback._thread.is_alive()
 
 
 def test_reactor_channel_legacy_startup_failure_is_reported(monkeypatch):
