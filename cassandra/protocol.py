@@ -782,6 +782,8 @@ class ResultMessage(_MessageType):
             def decode_val(val, col_md, col_desc):
                 uses_ce = column_encryption_policy.contains_column(col_desc)
                 if uses_ce:
+                    if val is None:
+                        return None  # NULLs are never encrypted
                     col_type = column_encryption_policy.column_type(col_desc)
                     raw_bytes = column_encryption_policy.decrypt(col_desc, val)
                     return col_type.from_binary(raw_bytes, protocol_version)

@@ -83,7 +83,9 @@ cdef class TupleRowParser(RowParser):
                 deserializer = desc.deserializers[i]
                 coldesc = desc.coldescs[i]
                 uses_ce = ce_policy.contains_column(coldesc)
-                if uses_ce:
+                if uses_ce and buf.size < 0:
+                    val = None  # NULLs are never encrypted
+                elif uses_ce:
                     col_type = ce_policy.column_type(coldesc)
                     decrypted_bytes = ce_policy.decrypt(coldesc, to_bytes(&buf))
                     PyBytes_AsStringAndSize(decrypted_bytes, &newbuf.ptr, &newbuf.size)

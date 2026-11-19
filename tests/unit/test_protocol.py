@@ -632,6 +632,13 @@ class ResultTest(unittest.TestCase):
         self.assertEqual(msg.parsed_rows, [(42, 'hello'), (100, 'world')])
         self.assertEqual(policy.decrypt_calls, 4)  # 2 to build the rows, 2 to decode
 
+    def test_decode_null_in_encrypted_column(self):
+        policy = _XorPolicy('col1')
+        msg, f = self._msg([[None, b'hello']])
+        msg.recv_results_rows(f, ProtocolVersion.V4, {}, None, policy)
+        self.assertEqual(msg.parsed_rows, [(None, 'hello')])
+        self.assertEqual(policy.decrypt_calls, 0)
+
     def test_policy_truthiness_checked_once(self):
         msg, f = self._msg([[int32_pack(i), b'text%d' % i] for i in range(100)])
         policy = _BoolCountingPolicy()
@@ -728,6 +735,15 @@ class CythonParserTest(unittest.TestCase):
             desc = self._desc(policy, coltypes=[BytesType, UTF8Type])
             self.assertEqual(self._parse(parser, desc, rows), [(7, 'test'), (8, None)])
             self.assertEqual(policy.decrypt_calls, 2)
+
+    def test_list_and_lazy_parsers_null_in_encrypted_column(self):
+        from cassandra.obj_parser import ListParser, LazyParser
+        from cassandra.cqltypes import BytesType
+        for parser in (ListParser(), LazyParser()):
+            policy = _XorPolicy('col1')
+            desc = self._desc(policy, coltypes=[BytesType, UTF8Type])
+            self.assertEqual(self._parse(parser, desc, [[None, b'test']]), [(None, 'test')])
+            self.assertEqual(policy.decrypt_calls, 0)
 
     def test_list_parser_policy_without_encrypted_columns(self):
         from cassandra.obj_parser import ListParser
