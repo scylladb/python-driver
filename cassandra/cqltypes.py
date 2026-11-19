@@ -1072,8 +1072,6 @@ class UserType(TupleType):
     @classmethod
     def evict_udt_class(cls, keyspace, udt_name):
         # Registration changes must evict mapped and unmapped variants alike.
-        # Slicing also recognizes two-element keys left by older driver code in
-        # a long-running process that reloads this module.
         with cls._cache_lock:
             cache_keys = [
                 cache_key for cache_key in cls._cache

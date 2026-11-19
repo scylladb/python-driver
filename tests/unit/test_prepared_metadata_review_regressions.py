@@ -489,3 +489,68 @@ def test_extended_metadata_entries_remain_compatible(source, decoder):
         result_class, wire._int_rows_body(7, no_metadata=True),
         result_metadata=frozen)
     assert list(response.parsed_rows) == [(7,)]
+
+
+def test_session_snapshot_survives_in_place_handler_update(monkeypatch):
+    from cassandra.cluster import Session
+    from cassandra.protocol import PrepareMessage
+
+    case = _case()
+    session = case.make_session()
+    metadata = [('ks', 'tbl', 'col', Mock())]
+    prepared = case._make_prepared_statement(metadata, b'id')
+    first = case._create_execute_future(prepared, session=session)
+    snapshot = first._protocol_handler
+    source_result = ProtocolHandler.message_types_by_opcode[
+        ResultMessage.opcode]
+    frozen_result = snapshot.message_types_by_opcode[ResultMessage.opcode]
+    original = source_result.recv_results_metadata
+
+    def changed_metadata(*args, **kwargs):
+        raise AssertionError('source handler was selected')
+
+    monkeypatch.setattr(source_result, 'recv_results_metadata',
+                        changed_metadata)
+    following = case._create_execute_future(prepared, session=session)
+    prepared_futures = []
+    session.default_timeout = 1
+    session._protocol_version = 4
+
+    def make_prepare_future(*args, **kwargs):
+        future = ResponseFuture(*args, **kwargs)
+        future.send_request = Mock(side_effect=RuntimeError('stop before I/O'))
+        prepared_futures.append(future)
+        return future
+
+    with patch('cassandra.cluster.ResponseFuture', make_prepare_future):
+        with pytest.raises(RuntimeError, match='stop before I/O'):
+            Session.prepare(session, 'SELECT * FROM foo')
+    prepare = prepared_futures[0]
+    assert isinstance(prepare.message, PrepareMessage)
+    simple = Session._create_response_future(
+        session, SimpleStatement('SELECT * FROM foo'), parameters=None,
+        trace=False, custom_payload=None, timeout=1)
+    fresh = case._create_execute_future(prepared, session=case.make_session())
+
+    assert following._protocol_handler is snapshot
+    assert following.message.skip_meta is True
+    assert prepare._protocol_handler is snapshot
+    assert frozen_result.recv_results_metadata is original
+    assert source_result.recv_results_metadata is changed_metadata
+    assert simple._protocol_handler is ProtocolHandler
+    assert fresh._protocol_handler is ProtocolHandler
+    assert fresh.message.skip_meta is False
+
+
+def test_direct_non_execute_future_uses_live_session_handler():
+    from cassandra.protocol import PrepareMessage
+
+    class ApplicationHandler(ProtocolHandler):
+        pass
+
+    session = _case().make_session()
+    session.client_protocol_handler = ApplicationHandler
+    future = ResponseFuture(
+        session, PrepareMessage('SELECT * FROM foo'), None, 1)
+
+    assert future._protocol_handler is ApplicationHandler

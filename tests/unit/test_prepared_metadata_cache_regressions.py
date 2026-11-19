@@ -835,19 +835,30 @@ def test_factory_snapshot_survives_registration_before_future_construction():
 
 def test_non_subclassable_result_customization_falls_back_to_full_metadata(
         monkeypatch):
+    from cassandra.protocol import _prepared_metadata_cache_config
+
+    attempts = []
+
     class _NonSubclassableResultMessage(ResultMessage):
 
         def __init_subclass__(cls, **kwargs):
+            attempts.append(True)
             raise TypeError('must not be subclassed')
 
+    class _CanonicalFixtureHandler(ProtocolHandler):
+        _prepared_metadata_cache_token = object()
+        message_types_by_opcode = dict(ProtocolHandler.message_types_by_opcode)
+
     monkeypatch.setitem(
-        ProtocolHandler.message_types_by_opcode,
-        ResultMessage.opcode,
-        _NonSubclassableResultMessage,
-    )
+        _CanonicalFixtureHandler.message_types_by_opcode,
+        ResultMessage.opcode, _NonSubclassableResultMessage)
+    _CanonicalFixtureHandler._prepared_metadata_cache_config = (
+        _prepared_metadata_cache_config(
+            _CanonicalFixtureHandler, _NonSubclassableResultMessage))
 
     assert _prepared_metadata_protocol_handler_snapshot(
-        ProtocolHandler) is ProtocolHandler
+        _CanonicalFixtureHandler) is _CanonicalFixtureHandler
+    assert attempts == [True]
 
 
 def test_custom_result_comparison_error_falls_back_to_full_metadata(

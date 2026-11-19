@@ -20,7 +20,16 @@ Compatibility Changes
   calls deliver the error through their ``ResponseFuture`` (#1164).
 * ``Session.prepare()`` now uses ``client_protocol_handler`` to decode PREPARE
   responses. Custom handlers must support PREPARE responses as well as query
-  execution responses. Internal trace lookups retain the built-in decoder.
+  execution responses. Directly constructed ``ResponseFuture`` instances
+  without an explicit handler also default to the Session's application
+  handler, including background prepares on other hosts. Public
+  ``Session.prepare()`` and prepared execution use the Session's captured
+  configuration; direct non-EXECUTE futures use the live handler. Internal
+  trace lookups retain the built-in decoder.
+* Result metadata column entries are frozen before publication and must have
+  at least four items: keyspace, table, name and type. Additional application
+  fields remain supported. Shorter entries raise ``ValueError`` during
+  construction, metadata updates or pickle restoration.
 
 Removed
 -------
@@ -52,9 +61,10 @@ Bug Fixes
   their request snapshot before fetching another page or after re-prepare.
   Metadata getters return defensive list copies.
 * Restrict ``skip_meta`` to immutable snapshots of built-in protocol handlers.
-  A Session keeps using the immutable configuration it captured, while modified
-  built-in handlers and custom handlers cannot create an eligible snapshot and
-  continue to receive full result metadata.
+  A Session keeps using the immutable configuration it captured for prepared
+  requests, even after an in-place update to the source class. Simple statements
+  use the live handler. Custom handlers and built-in configurations modified
+  before capture cannot create an eligible snapshot and receive full metadata.
 * Restore an evicted prepared-statement cache entry through the Cluster's
   lock-protected ``add_prepared()`` path during UNPREPARED recovery.
 * Schema metadata reads no longer fail with ``AttributeError`` when a later

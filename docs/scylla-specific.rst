@@ -257,8 +257,8 @@ negotiated, the server includes a hash of the result metadata in the ``PREPARE``
 response. The driver sends this hash back with every ``EXECUTE`` request. If the
 schema has changed, the server sets the ``METADATA_CHANGED`` flag and returns the
 new metadata hash together with the updated column definitions. The driver
-automatically updates its cache and uses the new metadata to decode the current
-response — all transparently, with no application code change required.
+decodes the current response with its column definitions, then updates its cache
+from those definitions. No application code change is required.
 
 The metadata id describes the server-side result shape. It does not represent
 client-side decoding configuration, such as a newly registered Python class for a
@@ -267,8 +267,11 @@ of the built-in protocol handler and the Cluster-side UDT mapping that decoded i
 change in either context forces a full-metadata response before ``skip_meta`` can be
 used again. Custom protocol handlers always receive full result metadata because
 their opcode and type maps are application-mutable. A Session that has captured
-a built-in handler snapshot keeps using that immutable configuration; a modified
-built-in configuration cannot create a new eligible snapshot.
+a built-in handler snapshot keeps using that immutable configuration for prepared
+requests, even if the source handler is later modified in place. Simple statements
+use the live handler. A configuration modified before capture cannot create a new
+eligible snapshot. Assign a different client protocol handler or create a new
+Session to select another configuration.
 
 **Behaviour summary:**
 
@@ -297,9 +300,10 @@ built-in configuration cannot create a new eligible snapshot.
 
 **Current scope:** statement type is unrestricted when the eligibility conditions
 above are met and the statement has non-empty cached result columns. Custom
-handlers, modified built-in configurations, and other ineligible execution
-contexts continue to receive full result metadata. Eligible statements include
-SELECT queries and conditional
+handlers, built-in configurations modified before Session capture, and other
+ineligible execution contexts continue to receive full result metadata. Later
+in-place changes do not replace an existing Session snapshot. Eligible statements
+include SELECT queries and conditional
 INSERT, UPDATE, and DELETE statements (lightweight transactions), whose results
 include an ``[applied]`` column and may include values from the existing row.
 Ordinary DML statements that produce no result columns remain ineligible. There is
