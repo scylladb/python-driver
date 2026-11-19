@@ -26,11 +26,13 @@ from cassandra import (ConsistencyLevel, DriverException, InvalidRequest, Unavai
 from cassandra._lifecycle import LifecycleCoordinator
 from cassandra.metadata import Metadata
 from cassandra.cqltypes import Int32Type, ListType
+from cassandra._prepared_metadata import (
+    decoder_context as _prepared_metadata_decoder_context,
+    protocol_handler_snapshot as _prepared_metadata_protocol_handler_snapshot,
+)
 from cassandra.cluster import (
     Cluster, Session, ResponseFuture, NoHostAvailable, ProtocolVersion,
     ControlConnection, ControlConnectionQueryFallback, _NOT_SET,
-    _prepared_metadata_decoder_context,
-    _prepared_metadata_protocol_handler_snapshot,
 )
 from cassandra.connection import (Connection, ConnectionBusy, ConnectionException,
                                   ConnectionSendError, ConnectionShutdown,
@@ -3961,11 +3963,10 @@ class ResponseFutureTests(unittest.TestCase):
             [('ks', 'tbl', 'col', Mock())], b'meta_hash')
 
         with patch(
-                'cassandra.cluster.'
-                '_prepared_metadata_protocol_handler_snapshot',
+                'cassandra._prepared_metadata.protocol_handler_snapshot',
                 wraps=_prepared_metadata_protocol_handler_snapshot
         ) as snapshot, patch(
-                'cassandra.cluster._prepared_metadata_decoder_context',
+                'cassandra._prepared_metadata.decoder_context',
                 wraps=_prepared_metadata_decoder_context) as decoder_context:
             self._create_execute_future(ps, session=session)
             self._create_execute_future(ps, session=session)

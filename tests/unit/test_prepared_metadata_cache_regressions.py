@@ -21,13 +21,15 @@ from unittest.mock import Mock, patch
 import pytest
 
 from cassandra import ConsistencyLevel, type_codes as type_code_constants
+from cassandra._prepared_metadata import (
+    _PREPARED_METADATA_HANDLER_SNAPSHOTS,
+    decoder_context as _prepared_metadata_decoder_context,
+    protocol_handler_snapshot as _prepared_metadata_protocol_handler_snapshot,
+)
 from cassandra.cluster import (
     Cluster,
     Session,
     ResponseFuture,
-    _PREPARED_METADATA_HANDLER_SNAPSHOTS,
-    _prepared_metadata_decoder_context,
-    _prepared_metadata_protocol_handler_snapshot,
 )
 from cassandra.cqltypes import Int32Type, UserType
 from cassandra.protocol import (
@@ -680,8 +682,7 @@ def test_session_reuses_its_protocol_handler_snapshot():
     session.cluster._prepared_metadata_context = cluster_context
 
     with patch(
-            'cassandra.cluster.'
-            '_prepared_metadata_protocol_handler_snapshot',
+            'cassandra._prepared_metadata.protocol_handler_snapshot',
             wraps=_prepared_metadata_protocol_handler_snapshot) as snapshot:
         first_message, _ = _capture_execute(session, prepared)
         second_message, _ = _capture_execute(session, prepared)

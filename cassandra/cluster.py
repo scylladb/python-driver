@@ -31,7 +31,6 @@ from itertools import groupby, count, chain
 import enum
 import logging
 import os
-from types import MappingProxyType
 from typing import Any, Dict, Optional, Union, Tuple
 from warnings import warn
 from random import random
@@ -78,10 +77,8 @@ from cassandra.protocol import (QueryMessage, ResultMessage,
                                 BatchMessage, RESULT_KIND_PREPARED,
                                 RESULT_KIND_SET_KEYSPACE, RESULT_KIND_ROWS,
                                 RESULT_KIND_SCHEMA_CHANGE, ProtocolHandler,
-                                RESULT_KIND_VOID, ProtocolException,
-                                _class_attribute,
-                                _prepared_metadata_cache_config,
-                                _prepared_metadata_result_attributes)
+                                RESULT_KIND_VOID, ProtocolException)
+from cassandra import _prepared_metadata
 from cassandra.metadata import Metadata, Token, protect_name, murmur3, _NodeInfo
 from cassandra.policies import (TokenAwarePolicy, DCAwareRoundRobinPolicy, SimpleConvictionPolicy,
                                 ExponentialReconnectionPolicy, HostDistance,
@@ -152,190 +149,6 @@ _GRAPH_PAGING_MIN_DSE_VERSION = Version('6.8.0')
 
 _NOT_SET = object()
 
-_PREPARED_METADATA_HANDLER_SNAPSHOTS = {}
-_PREPARED_METADATA_HANDLER_SNAPSHOT_LOCK = Lock()
-
-
-def _prepared_metadata_protocol_handler_snapshot(protocol_handler):
-    """
-    Freeze the result-decoder configuration of a driver-owned handler.
-
-    The public handler maps are intentionally customizable. Only the canonical
-    driver-owned configuration is eligible: application changes fall back to
-    full metadata because arbitrary decoder class state cannot be frozen
-    safely. An eligible prepared future receives a private snapshot so a later
-    source mutation cannot produce a hybrid old-metadata/new-decoder request.
-
-    Custom or modified handlers are returned unchanged and remain ineligible
-    for skip-metadata.
-    """
-    try:
-        handler_vars = vars(protocol_handler)
-    except TypeError:
-        log.debug(
-            "Cannot inspect protocol handler %r; prepared executions will "
-            "request full result metadata.", protocol_handler,
-            exc_info=True)
-        return protocol_handler
-
-    if handler_vars.get('_prepared_metadata_handler_snapshot'):
-        return protocol_handler
-
-    handler_token = handler_vars.get('_prepared_metadata_cache_token')
-    if handler_token is None:
-        return protocol_handler
-
-    try:
-        message_types = dict(protocol_handler.message_types_by_opcode)
-        result_message_type = message_types[ResultMessage.opcode]
-        if not isinstance(result_message_type, type):
-            return protocol_handler
-        type_codes = dict(getattr(result_message_type, 'type_codes', {}))
-        cqltypes_by_code = dict(
-            getattr(result_message_type, '_cqltypes_by_code', {}))
-        decode_message = _class_attribute(
-            protocol_handler, 'decode_message')
-        result_attributes = \
-            _prepared_metadata_result_attributes(result_message_type)
-        column_encryption_policy = getattr(
-            protocol_handler, 'column_encryption_policy', None)
-        handler_config = _prepared_metadata_cache_config(
-            protocol_handler,
-            result_message_type,
-            message_types,
-            type_codes,
-            cqltypes_by_code,
-            decode_message,
-            result_attributes,
-            column_encryption_policy,
-        )
-        canonical_config = handler_vars.get(
-            '_prepared_metadata_cache_config')
-        if (canonical_config is None
-                or handler_config[:-1] != canonical_config[:-1]
-                or column_encryption_policy is not canonical_config[-1]):
-            return protocol_handler
-        cache_key = (
-            protocol_handler,
-            handler_token,
-            handler_config[:-1],
-            id(column_encryption_policy),
-        )
-        # A malformed in-place customization should fall back to full metadata,
-        # not make request construction fail or create an uncached snapshot
-        # whose identity never matches the PREPARE provenance.
-        hash(cache_key)
-    except Exception:
-        log.debug(
-            "Cannot validate protocol handler %r; prepared executions will "
-            "request full result metadata.", protocol_handler,
-            exc_info=True)
-        return protocol_handler
-
-    with _PREPARED_METADATA_HANDLER_SNAPSHOT_LOCK:
-        try:
-            cached = _PREPARED_METADATA_HANDLER_SNAPSHOTS.get(
-                protocol_handler)
-            if cached is not None and cached[0] == cache_key:
-                return cached[1]
-        except Exception:
-            log.debug(
-                "Cannot compare the cached protocol handler snapshot for %r; "
-                "prepared executions will request full result metadata.",
-                protocol_handler, exc_info=True)
-            return protocol_handler
-
-        try:
-            result_attrs = dict(result_attributes)
-            result_attrs.update({
-                '__module__': result_message_type.__module__,
-                'type_codes': MappingProxyType(type_codes),
-                '_cqltypes_by_code': MappingProxyType(cqltypes_by_code),
-            })
-            result_snapshot = type(
-                '_%sPreparedMetadataSnapshot' %
-                result_message_type.__name__,
-                (result_message_type,),
-                result_attrs,
-            )
-
-            message_types[ResultMessage.opcode] = result_snapshot
-            handler_attrs = {
-                '__module__': protocol_handler.__module__,
-                'message_types_by_opcode': MappingProxyType(message_types),
-                'column_encryption_policy': column_encryption_policy,
-                '_prepared_metadata_cache_token': object(),
-                '_prepared_metadata_handler_snapshot': True,
-            }
-            if decode_message is not None:
-                handler_attrs['decode_message'] = decode_message
-            snapshot = type(
-                '%sPreparedMetadataSnapshot' %
-                protocol_handler.__name__,
-                (protocol_handler,),
-                handler_attrs,
-            )
-        except Exception:
-            log.debug(
-                "Cannot freeze protocol handler %r; prepared executions will "
-                "request full result metadata.", protocol_handler,
-                exc_info=True)
-            return protocol_handler
-        # Keep only the latest source configuration in the shared cache.
-        # Futures retain any older snapshot they are already using.
-        _PREPARED_METADATA_HANDLER_SNAPSHOTS[protocol_handler] = (
-            cache_key, snapshot)
-        return snapshot
-
-
-def _prepared_metadata_decoder_context(protocol_handler, cluster_context):
-    """
-    Return cache provenance for a frozen driver-owned protocol handler.
-
-    Custom subclasses can mutate ``message_types_by_opcode`` and their result
-    type maps in place. Class identity alone therefore cannot prove that cached
-    column descriptors are still valid. Eligible handlers are copied into a
-    cached snapshot with read-only maps; inherited tokens deliberately do not
-    opt a custom subclass into skip-metadata.
-    """
-    # ``None`` marks a client-side metadata transition. Responses decoded
-    # while the transition is in progress must never become eligible for
-    # skip-metadata, even if another execute observes the same marker.
-    if cluster_context is None:
-        return None
-
-    try:
-        handler_vars = vars(protocol_handler)
-    except TypeError:
-        return None
-    if not handler_vars.get('_prepared_metadata_handler_snapshot'):
-        return None
-
-    return (
-        handler_vars['_prepared_metadata_cache_token'],
-        protocol_handler,
-        cluster_context,
-    )
-
-
-def _prepared_metadata_session_handler(session, protocol_handler):
-    """
-    Return the Session's immutable snapshot for ``protocol_handler``.
-
-    A Session keeps using the snapshot even if the source class is later
-    mutated in place. Assigning a different client protocol handler invalidates
-    the cache by identity and builds (or rejects) a new snapshot.
-    """
-    cached = vars(session).get('_prepared_metadata_handler_cache')
-    if (cached is not None
-            and (cached[0] is protocol_handler
-                 or cached[1] is protocol_handler)):
-        return cached[1]
-
-    snapshot = _prepared_metadata_protocol_handler_snapshot(protocol_handler)
-    session._prepared_metadata_handler_cache = (protocol_handler, snapshot)
-    return snapshot
-
 
 def _prepared_metadata_request_state(
         prepared_statement, protocol_handler, cluster_context,
@@ -348,7 +161,7 @@ def _prepared_metadata_request_state(
     PreparedStatement cache forces a self-describing response.
     """
     if decoder_context is _NOT_SET:
-        decoder_context = _prepared_metadata_decoder_context(
+        decoder_context = _prepared_metadata.decoder_context(
             protocol_handler, cluster_context)
 
     result_metadata, cached_metadata_id, cached_decoder_context = \
@@ -4208,7 +4021,7 @@ class Session(object):
                 continuous_paging_options, statement_keyspace)
         elif isinstance(query, BoundStatement):
             prepared_statement = query.prepared_statement
-            protocol_handler = _prepared_metadata_session_handler(
+            protocol_handler = _prepared_metadata.session_handler(
                 self, protocol_handler)
             # Snapshot metadata and its id as one atomic pair so the message never
             # carries the id of one schema version alongside a skip_meta decision
@@ -4430,10 +4243,10 @@ class Session(object):
         # PREPARE is client-initiated too: its bind and result type descriptors
         # must be produced by the same handler snapshot that will decode
         # EXECUTE.
-        protocol_handler = _prepared_metadata_session_handler(
+        protocol_handler = _prepared_metadata.session_handler(
             self, self.client_protocol_handler)
         result_metadata_decoder_context = \
-            _prepared_metadata_decoder_context(
+            _prepared_metadata.decoder_context(
                 protocol_handler,
                 self.cluster._prepared_metadata_context)
         future = ResponseFuture(
@@ -7643,7 +7456,7 @@ class ResponseFuture(object):
             if protocol_handler is _NOT_SET else protocol_handler)
         if (prepared_statement is not None
                 and isinstance(message, ExecuteMessage)):
-            protocol_handler = _prepared_metadata_session_handler(
+            protocol_handler = _prepared_metadata.session_handler(
                 session, protocol_handler)
         self._protocol_handler = protocol_handler
         self._prepared_metadata_skip_allowed = \
@@ -7683,7 +7496,7 @@ class ResponseFuture(object):
         elif (prepared_statement is not None
               and isinstance(message, ExecuteMessage)
               and not _prepared_metadata_resolved):
-            decoder_context = _prepared_metadata_decoder_context(
+            decoder_context = _prepared_metadata.decoder_context(
                 self._protocol_handler,
                 session.cluster._prepared_metadata_context)
             if not bound_result_metadata:
@@ -8713,7 +8526,7 @@ class ResponseFuture(object):
         return True
 
     def _reprepare(self, prepare_message, host, connection, pool, query_id=None):
-        decoder_context = _prepared_metadata_decoder_context(
+        decoder_context = _prepared_metadata.decoder_context(
             self._protocol_handler,
             self.session.cluster._prepared_metadata_context)
         cb = partial(self.session.submit, self._execute_after_prepare, host, connection, pool,
