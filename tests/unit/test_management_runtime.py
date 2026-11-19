@@ -31,7 +31,7 @@ class Dispatcher:
 
 
 def complete_physical(manager, future, value):
-    """Bound a controlled Future's synchronous owner-handoff callback."""
+    """Bound a controlled Future's owner-handoff callback."""
     errors = []
     def complete():
         try:
@@ -49,7 +49,7 @@ def complete_physical(manager, future, value):
 
 
 def drain_controlled_callbacks(manager):
-    """Bound callback cleanup in runtimes whose lanes the test drives."""
+    """Bound callback cleanup on runtime lanes driven by the test."""
     assert not manager._threads
     errors = []
     def drain():
@@ -3918,7 +3918,8 @@ def test_physical_captures_retire_on_charged_safe_lane(
                    for kind, context, managed, locked in weak_observed)
         assert all(reference() is None for reference in references)
         assert disposed == ([('value', 'worker')]
-                            if ending in ('discard', 'close', 'closed') else [])
+                            if ending in ('discard', 'close', 'closed')
+                            else [])
     finally:
         for event in (work_release, blocker_release, owner_release,
                       worker_release, capture_release, listener_release):
@@ -3948,3 +3949,383 @@ def test_completed_physical_attempt_keeps_its_unused_reservation(runtime):
     with pytest.raises(ValueError, match='failed before execution'):
         future.result(5)
     wait_for_retirement(manager, future)
+
+
+@pytest.mark.parametrize('budget', ['ordinary', 'reentry', 'aggregate'])
+@pytest.mark.parametrize('bad', ['identity', 'key', 'interrupted-identity'])
+def test_rejected_metadata_keeps_admission(budget, bad):
+    manager = management.ManagementRuntime(
+        lambda callback: callback(), limit=1, reentry_window=1
+    )
+
+    class Interrupted:
+        def __iter__(self):
+            raise KeyboardInterrupt('metadata conversion')
+
+    options = (
+        {'identity': None}
+        if bad == 'identity'
+        else {'key': []}
+        if bad == 'key'
+        else {'identity': Interrupted()}
+    )
+    try:
+        with pytest.raises((TypeError, KeyboardInterrupt)):
+            manager.submit(lambda record: None, budget=budget, **options)
+        assert not manager._records
+        assert manager._credits == manager._reentry_credits == 0
+        assert not manager._reentry_active
+        assert manager.submit(lambda record: 17, budget=budget).result(5) == 17
+    finally:
+        manager.close()
+        manager.join(5)
+
+
+def test_interrupted_final_release_restores_scope(monkeypatch):
+    manager = management.ManagementRuntime(
+        lambda callback: callback(), limit=1
+    )
+    entered, release = (Event(), Event())
+    original = manager._handle
+
+    def hold(record):
+        result = original(record)
+        entered.set()
+        assert release.wait(5)
+        return result
+
+    monkeypatch.setattr(manager, '_handle', hold)
+    previous = getattr(management._context, 'call', None)
+    retired = None
+    stale = False
+    leaked = False
+    original_wait = manager._condition.wait_for
+
+    def interrupt(predicate, timeout=None):
+        raise KeyboardInterrupt('phase fence')
+
+    try:
+        try:
+            with management.compatibility_call(manager):
+                retired = management._context.call
+                assert entered.wait(5)
+                monkeypatch.setattr(manager._condition, 'wait_for', interrupt)
+        except KeyboardInterrupt:
+            stale = getattr(management._context, 'call', None) is not previous
+        finally:
+            monkeypatch.setattr(manager._condition, 'wait_for', original_wait)
+            release.set()
+        with manager._condition:
+            assert manager._condition.wait_for(lambda: not manager._records, 5)
+        monkeypatch.setattr(manager, '_handle', original)
+
+        @management.policy_call
+        def outside():
+            return 19
+
+        assert outside() == 19
+        leaked = retired.record is not None
+    finally:
+        if retired is not None:
+            retired.release()
+        management._context.call = previous
+        manager.close()
+        manager.join(5)
+    assert not stale
+    assert not leaked
+
+
+@pytest.mark.parametrize('budget', ['ordinary', 'reentry', 'aggregate'])
+def test_key_insertion_failure_retires_its_charged_capture(budget):
+    manager = management.ManagementRuntime(
+        lambda callback: callback(), limit=1, reentry_window=1
+    )
+
+    class Key:
+        calls = 0
+
+        def __hash__(self):
+            self.calls += 1
+            if self.calls == 2:
+                raise ValueError('key insertion')
+            return 17
+
+    try:
+        with pytest.raises(ValueError, match='key insertion'):
+            manager.submit(lambda record: None, budget=budget, key=Key())
+        with manager._condition:
+            assert manager._condition.wait_for(lambda: not manager._records, 5)
+        assert manager._credits == manager._reentry_credits == 0
+        assert not manager._reentry_active
+        assert manager.submit(lambda record: 21, budget=budget).result(5) == 21
+    finally:
+        manager.close()
+        manager.join(5)
+
+
+@pytest.mark.parametrize('coalesced', [False, True])
+def test_future_preparation_failure_keeps_admission(monkeypatch, coalesced):
+    manager = management.ManagementRuntime(
+        lambda callback: callback(), limit=2
+    )
+    entered, release = (Event(), Event())
+    first = None
+    try:
+        if coalesced:
+            first = manager.submit(
+                lambda record: (entered.set(), release.wait(5)), key='key'
+            )
+            assert entered.wait(5)
+        with monkeypatch.context() as patch:
+
+            def fail(record):
+                raise KeyboardInterrupt('future allocation')
+
+            patch.setattr(management, 'OperationFuture', fail)
+            with pytest.raises(KeyboardInterrupt, match='future allocation'):
+                manager.submit(lambda record: None, key='key')
+        assert manager._credits == int(coalesced)
+        assert len(manager._records) == int(coalesced)
+        release.set()
+        if first is not None:
+            first.result(5)
+        assert manager.submit(lambda record: 22).result(5) == 22
+    finally:
+        release.set()
+        manager.close()
+        manager.join(5)
+
+
+@pytest.mark.skipif(platform.python_implementation() != 'CPython',
+                    reason='Requires synchronous reference destruction')
+@pytest.mark.parametrize('budget', ['ordinary', 'reentry', 'aggregate'])
+def test_key_insertion_rejection_keeps_credit_through_safe_disposal(budget):
+    manager = management.ManagementRuntime(
+        lambda callback: callback(), limit=2, reentry_window=1
+    )
+    listening, release_listener, disposing, release_capture = (
+        Event(),
+        Event(),
+        Event(),
+        Event(),
+    )
+    seen = []
+
+    class Key:
+        calls = 0
+
+        def __hash__(self):
+            self.calls += 1
+            if self.calls == 2:
+                raise ValueError('key insertion')
+            return 19
+
+    class Handler:
+        def __call__(self, record):
+            pytest.fail('rejected handler executed')
+
+        def __del__(self):
+            seen.append(
+                (
+                    management.execution_context(),
+                    manager._condition._is_owned(),
+                    manager._credits,
+                    manager._reentry_credits,
+                    manager._reentry_active,
+                )
+            )
+            disposing.set()
+            assert release_capture.wait(5)
+
+    try:
+        manager.notify(lambda: (listening.set(), release_listener.wait(5)))
+        assert listening.wait(5)
+        try:
+            manager.submit(Handler(), key=Key(), budget=budget)
+        except ValueError as error:
+            assert str(error) == 'key insertion'
+            error.__traceback__ = None
+        else:
+            pytest.fail('key insertion did not reject')
+        if budget == 'ordinary':
+            assert manager._credits == 2
+            assert not disposing.is_set()
+        else:
+            assert disposing.wait(5)
+        release_listener.set()
+        assert disposing.wait(5)
+        assert seen[0][0] == (
+            'callback' if budget == 'ordinary' else 'cleanup'
+        )
+        assert seen[0][1] is False
+        assert (
+            seen[0][2] > 0
+            if budget == 'ordinary'
+            else seen[0][3] == 1
+            if budget == 'reentry'
+            else seen[0][4]
+        )
+        release_capture.set()
+        with manager._condition:
+            assert manager._condition.wait_for(lambda: not manager._records, 5)
+    finally:
+        release_capture.set()
+        release_listener.set()
+        manager.close()
+        manager.join(5)
+
+
+@pytest.mark.parametrize('budget', ['ordinary', 'reentry', 'aggregate'])
+def test_unhashable_pool_rejection_does_not_charge_admission(runtime, budget):
+    manager, dispatch = runtime
+    with pytest.raises(TypeError):
+        manager.submit(lambda record: None, pool=[], budget=budget)
+    assert not manager._records
+    assert manager.counts()['mailbox'] == 0
+    assert manager._credits == manager._reentry_credits == 0
+    assert not manager._reentry_active
+    assert manager.submit(lambda record: 23, budget=budget).result(5) == 23
+
+
+@pytest.mark.parametrize('budget', ['ordinary', 'reentry', 'aggregate'])
+@pytest.mark.parametrize('failure', range(1, 7))
+def test_pool_hash_failure_cannot_orphan_admission(runtime, budget, failure):
+    manager, dispatch = runtime
+    caller = get_ident()
+
+    class Pool:
+        calls = 0
+        failed = False
+
+        def __hash__(self):
+            if get_ident() == caller:
+                self.calls += 1
+                if self.calls == failure:
+                    self.failed = True
+                    raise KeyboardInterrupt('pool metadata')
+            return 29
+
+    pool = Pool()
+    try:
+        future = manager.submit(lambda record: 24, pool=pool, budget=budget)
+    except KeyboardInterrupt as error:
+        assert str(error) == 'pool metadata'
+        assert pool.failed
+    else:
+        assert not pool.failed
+        assert future.result(5) == 24
+    with manager._condition:
+        assert manager._condition.wait_for(lambda: not manager._records, 5)
+    assert manager.counts()['mailbox'] == 0
+    assert manager._credits == manager._reentry_credits == 0
+    assert not manager._reentry_active
+    assert not manager._pool_credits
+    assert not manager._pools
+
+
+@pytest.mark.parametrize('budget', ['ordinary', 'reentry', 'aggregate'])
+def test_rejected_reserved_pool_has_no_physical_debt(runtime, budget):
+    manager, dispatch = runtime
+    caller = get_ident()
+    failure = 5 if budget == 'ordinary' else 3
+
+    class Pool:
+        calls = 0
+
+        def __hash__(self):
+            if get_ident() == caller:
+                self.calls += 1
+                if self.calls == failure:
+                    raise KeyboardInterrupt('reserved pool metadata')
+            return 31
+
+    with pytest.raises(KeyboardInterrupt, match='reserved pool metadata'):
+        manager.submit(
+            lambda record: pytest.fail('rejected work ran'),
+            pool=Pool(),
+            budget=budget,
+            reserve=1,
+        )
+    with manager._condition:
+        assert manager._condition.wait_for(lambda: not manager._records, 5)
+    assert manager._credits == manager._reentry_credits == 0
+    assert not manager._reentry_active
+    assert manager.counts()['mailbox'] == 0
+
+
+@pytest.mark.parametrize('budget', ['ordinary', 'reentry', 'aggregate'])
+def test_pool_equality_failure_preserves_existing_operation(runtime, budget):
+    manager, dispatch = runtime
+    entered, release = Event(), Event()
+
+    class Pool:
+        def __hash__(self):
+            return 37
+
+        def __eq__(self, other):
+            raise ValueError('pool equality')
+
+    try:
+        first = manager.submit(
+            lambda record: (entered.set(), release.wait(5)), pool=Pool()
+        )
+        assert entered.wait(5)
+        with pytest.raises(ValueError, match='pool equality'):
+            manager.submit(
+                lambda record: pytest.fail('rejected work ran'),
+                pool=Pool(),
+                budget=budget,
+            )
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: len(manager._records) == 1, 5
+            )
+        assert manager._credits == 1
+        assert manager._reentry_credits == 0
+        assert not manager._reentry_active
+        assert manager.counts()['mailbox'] == 0
+    finally:
+        release.set()
+    first.result(5)
+
+
+@pytest.mark.parametrize('budget', ['ordinary', 'reentry', 'aggregate'])
+def test_key_equality_insertion_failure_retires_charge(runtime, budget):
+    manager, dispatch = runtime
+    entered, release = Event(), Event()
+
+    class Key:
+        comparisons = 0
+
+        def __hash__(self):
+            return 41
+
+        def __eq__(self, other):
+            self.comparisons += 1
+            if self.comparisons == 2:
+                raise ValueError('key equality insertion')
+            return False
+
+    try:
+        first = manager.submit(
+            lambda record: (entered.set(), release.wait(5)), key=Key()
+        )
+        assert entered.wait(5)
+        with pytest.raises(ValueError, match='key equality insertion'):
+            manager.submit(
+                lambda record: pytest.fail('rejected work ran'),
+                key=Key(),
+                budget=budget,
+            )
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: len(manager._records) == 1, 5
+            )
+        assert manager._credits == 1
+        assert manager._reentry_credits == 0
+        assert not manager._reentry_active
+        assert manager.counts()['mailbox'] == 0
+        assert len(manager._keys) == 1
+    finally:
+        release.set()
+    first.result(5)

@@ -256,10 +256,11 @@ class OperationFuture(Future):
 
 
 class _CallbackDelivery:
-    """Serialize callbacks while handing delivery between charged records.
+    """Serialize callbacks during handoff between charged records.
 
-    The runtime condition precedes the Future condition whenever both are
-    needed. The standard Future callback list remains on the Future itself.
+    The runtime condition precedes the Future condition whenever both
+    are needed. The standard Future callback list remains on the Future
+    itself.
     """
 
     def __init__(self, future, record):
@@ -325,7 +326,7 @@ class _CallbackDelivery:
             return
 
     def drain(self, record=None):
-        """Drain the adapter's serialized callback stream outside C/P."""
+        """Drain serialized callbacks outside C/P."""
         with self.future._condition:
             if record is None and not self.record.released:
                 # An owner may have adopted this stream after registration
@@ -442,7 +443,7 @@ class _Record:
 
 
 class _Notification:
-    """Transfer a callback from native admission to the callback lane."""
+    """Transfer a native callback to the callback lane."""
 
     def __init__(self, callback):
         self.callbacks = [callback]
@@ -461,10 +462,10 @@ class _Notification:
 class _PhysicalAttempt:
     """Own one worker-to-owner handoff through adoption or disposal.
 
-    Shared state is protected by the runtime condition. Physical credit stays
-    charged until the worker has finished disposing any rejected result.
-    The record keeps callback and result references until they can be dropped
-    on a safe disposal lane.
+    Shared state is protected by the runtime condition. Physical credit
+    stays charged until the worker has finished disposing any rejected
+    result. The record keeps callback and result references until they
+    can be dropped on a safe disposal lane.
     """
 
     def __init__(self, record, function, accept, dispose):
@@ -558,7 +559,7 @@ class _PhysicalAttempt:
             self.returned_to_owner.set()
 
     def retire_captures(self):
-        """Detach application references after the native handoff retires."""
+        """Detach application references after native handoff."""
         captures = [self.function, self.accept, self.dispose,
                     self.value, self.error, self.accepted]
         self.function = self.accept = self.dispose = None
@@ -607,13 +608,14 @@ class ManagementRuntime:
     Normal startup, idle and close use the adapter's lifetime
     guarantee rather than this failure policy.
 
-    Private-native and consumed-health handler captures retire on a dedicated
-    cleanup thread, outside runtime and Future locks. Private reservations
-    cover this disposal; ordinary-coalesced handlers remain covered by ordinary
-    credit on L. Consumed health records have one slot per incarnation and at
-    most ``limit`` active slots, independent of ordinary admission. Pending
-    health observations coalesce while their slot or this capacity is held.
-    Cleanup-context blocking calls reject self-dependent waits.
+    Private-native and consumed-health handler captures retire on a
+    dedicated cleanup thread, outside runtime and Future locks. Private
+    reservations cover this disposal; ordinary-coalesced handlers remain
+    covered by ordinary credit on L. Consumed health records have one
+    slot per incarnation and at most ``limit`` active slots, independent
+    of ordinary admission. Pending health observations coalesce while
+    their slot or this capacity is held. Cleanup-context blocking calls
+    reject self-dependent waits.
     """
 
     def __init__(self, dispatch, limit=1024, pool_limit=64, reentry_window=64,
@@ -748,6 +750,8 @@ class ManagementRuntime:
                 'Physical fanout requires separate admitted records')
         if wait:
             assert_can_wait()
+        if pool is not None:
+            hash(pool)
         self.start()
         deadline = None if timeout is None else time.monotonic() + timeout
         with self._condition:
@@ -767,31 +771,49 @@ class ManagementRuntime:
                 self._condition.wait(remaining)
             if self._closing:
                 raise ManagementClosed('Management lifetime is closed')
-            if budget == 'aggregate':
-                self._reentry_active = True
-            elif budget == 'reentry':
-                self._reentry_credits += 1
-            else:
-                self._credits += 1
-                if pool is not None:
-                    self._pool_credits[pool] = (
-                        self._pool_credits.get(pool, 0) + 1)
             coalesce = (pool, key) if key is not None else None
             record = self._keys.get(coalesce) if coalesce is not None else None
-            if record is None:
+            new_record = record is None
+            if new_record:
                 self._sequence += 1
                 envelope = Envelope(self._sequence, kind, origin,
                                     self.lifetime, tuple(identity))
                 record = _Record(self, envelope, handler, pool, coalesce)
                 record.physical = reserve
-                self._records.add(record)
-                if coalesce is not None:
-                    self._keys[coalesce] = record
-                self._enqueue_locked(record, lambda: self._handle(record))
+            # Prepare fallible metadata and Future state before charging it.
             future = OperationFuture(record)
             future._budget = budget
+            if budget == 'aggregate':
+                self._reentry_active = True
+            elif budget == 'reentry':
+                self._reentry_credits += 1
+            else:
+                if pool is not None:
+                    self._pool_credits[pool] = (
+                        self._pool_credits.get(pool, 0) + 1)
+                self._credits += 1
             record.futures.append(future)
             record.budgets[budget] += 1
+            if new_record:
+                self._records.add(record)
+                key_registered = False
+                try:
+                    if coalesce is not None:
+                        self._keys[coalesce] = record
+                        key_registered = True
+                    self._enqueue_locked(record, lambda: self._handle(record))
+                except BaseException:
+                    if key_registered:
+                        self._keys.pop(coalesce, None)
+                    # Publication did not accept this record. Its existing
+                    # charge covers safe retirement of the rejected captures.
+                    record.key = None
+                    record.handler_done = True
+                    record.started.set()
+                    record.physical = 0
+                    record.futures.clear()
+                    self._release_locked(record)
+                    raise
             self._observe_counts_locked()
             self._condition.notify_all()
             return future
@@ -812,16 +834,18 @@ class ManagementRuntime:
             record.delivery = active
 
     def _enqueue_locked(self, record, callback, retain_on_close=False):
-        self._account_mailbox_locked(record, 1)
-        entry = _MailboxEntry(record, callback, retain_on_close)
         if record.pool is None:
-            self._cluster.append(entry)
+            queue = self._cluster
+            activate = False
         else:
+            activate = (record.pool not in self._active_pools and
+                        record.pool not in self._ready)
             queue = self._pools.setdefault(record.pool, deque())
-            queue.append(entry)
-            if (record.pool not in self._active_pools and
-                    record.pool not in self._ready):
-                self._ready.append(record.pool)
+        entry = _MailboxEntry(record, callback, retain_on_close)
+        queue.append(entry)
+        self._account_mailbox_locked(record, 1)
+        if activate:
+            self._ready.append(record.pool)
         self._condition.notify_all()
 
     def _handle(self, record):
@@ -879,10 +903,11 @@ class ManagementRuntime:
              dispose=lambda value: None):
         """Reserve result delivery before physical work, on C/P only.
 
-        The executor runs work outside C/P. Its completion retains the worker
-        until the owner accepts or rejects the value, then disposes a rejected
-        value there. ``accept`` is a short native state transition, serialized
-        with shutdown and supersession; it must not block or run user code.
+        The executor runs work outside C/P. Its completion retains the
+        worker until the owner accepts or rejects the value, then
+        disposes a rejected value there. ``accept`` is a short native
+        state transition, serialized with shutdown and supersession; it
+        must not block or run user code.
         """
         self.assert_owner(record.pool)
         with self._condition:
@@ -1348,11 +1373,12 @@ class ManagementRuntime:
             record = callback = value = None
 
     def _run_handler_cleanup(self):
-        """Dispose bounded native captures without borrowing L or workers.
+        """Dispose native captures without borrowing L or workers.
 
-        Disposal owns the record's private credit or health slot until it
-        finishes. Blocking management reentry from this lane is rejected:
-        it could otherwise wait for the very credit being disposed.
+        Disposal owns the record's private credit or health slot until
+        it finishes. Blocking management reentry from this lane is
+        rejected: it could otherwise wait for the very credit being
+        disposed.
         """
         while True:
             with self._condition:
@@ -1373,10 +1399,10 @@ class ManagementRuntime:
             record = None
 
     def retain_cleanup(self):
-        """Retain one explicit cleanup obligation in the ``close`` count.
+        """Retain an explicit cleanup obligation in the ``close`` count.
 
-        Callback-capture retirement is tracked separately and does not change
-        this count's units or its high-water sampling points.
+        Callback-capture retirement is tracked separately and does not
+        change this count's units or its high-water sampling points.
         """
         self._check_pid()
         with self._condition:
@@ -1395,12 +1421,13 @@ class ManagementRuntime:
         return release
 
     def close(self, wait=False):
-        """Begin admission retirement and return the shared ``closed`` event.
+        """Retire admission and return the shared ``closed`` event.
 
-        The outermost call sets the event after native retirement. A reentrant
-        call may return it before the outer call finishes. ``wait`` checks the
-        synchronous context and waits for this event. Use :meth:`join` to wait
-        for cleanup, callback delivery and runner termination.
+        The outermost call sets the event after native retirement. A
+        reentrant call may return it before the outer call finishes.
+        ``wait`` checks the synchronous context and waits for this
+        event. Use :meth:`join` to wait for cleanup, callback delivery
+        and runner termination.
         """
         self._check_pid()
         if wait:
@@ -1489,10 +1516,10 @@ class ManagementRuntime:
 class ReactorChannel:
     """Borrow dispatch without owning the process-global I/O service.
 
-    The libev adapter supplied by the later reactor integration must keep its
-    I/O runner live until the final admitted delivery drains. Its startup must
-    finish before runtime admission. Closing one channel releases only its
-    borrow, never another Cluster's reactor.
+    The libev adapter supplied by the later reactor integration must
+    keep its I/O runner live until the final admitted delivery drains.
+    Its startup must finish before runtime admission. Closing one
+    channel releases only its borrow, never another Cluster's reactor.
     """
 
     def __init__(self, connection_class):
@@ -1614,8 +1641,10 @@ def compatibility_call(runtime):
     try:
         yield
     finally:
-        call.release()
-        _context.call = previous
+        try:
+            call.release()
+        finally:
+            _context.call = previous
 
 
 def policy_call(method):

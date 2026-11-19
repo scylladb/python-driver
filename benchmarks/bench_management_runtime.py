@@ -8,11 +8,12 @@ Run from a checkout with the driver dependencies installed::
     python benchmarks/bench_management_runtime.py
     python benchmarks/bench_management_runtime.py --module-source baseline.py
 
-Each size uses two warm-ups and seven measured runs. Startup, owner progress,
-and cleanup are excluded from timing. Admission holds the runtime condition
-through a burst to measure admission bookkeeping without owner scheduling
-noise. Snapshots run with the indicated number of retained pending records.
-Results are descriptive medians; there is no timing-based pass/fail threshold.
+Each size uses two warm-ups and seven measured runs. Startup, owner
+progress, and cleanup are excluded from timing. Admission holds the
+runtime condition through a burst to measure admission bookkeeping
+without owner scheduling noise. Snapshots run with the indicated number
+of retained pending records. Results are descriptive medians; there is
+no timing-based pass/fail threshold.
 """
 
 import argparse
