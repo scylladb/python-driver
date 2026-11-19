@@ -7540,7 +7540,7 @@ class ResponseFuture(object):
                 self._timer = self.session.cluster.connection_class.create_timer(0.01, self._on_speculative_execute)
                 return
 
-            self.send_request(error_no_hosts=False)
+            self.send_request(error_no_hosts=False, is_speculative=True)
             self._start_timer()
 
     def _make_query_plan(self):
@@ -7555,7 +7555,7 @@ class ResponseFuture(object):
             # they last left off
             self.query_plan = iter(self._load_balancer.make_query_plan(self.session.keyspace, self.query))
 
-    def send_request(self, error_no_hosts=True):
+    def send_request(self, error_no_hosts=True, is_speculative=False):
         """ Internal """
         # query_plan is an iterator, so this will resume where we last left
         # off if send_request() is called multiple times
@@ -7585,7 +7585,10 @@ class ResponseFuture(object):
                           host.host_id)
                 req_id = None
             else:
-                req_id = self._query(host)
+                req_id = self._query(host, is_speculative=is_speculative)
+            if req_id is _NOT_SET:
+                # The failed send has a retry decision or final result.
+                return True
             if req_id is not None:
                 self._req_id = req_id
                 return True
@@ -8062,9 +8065,13 @@ class ResponseFuture(object):
             request_id=request_id,
             provisional_session=provisional_session)
 
-    def _query(self, host, message=None, cb=None):
+    def _query(self, host, message=None, cb=None, is_speculative=False):
         if message is None:
             message = self.message
+
+        use_retry_policy = (not is_speculative and
+                            message is self.message and cb is None and
+                            not isinstance(message, PrepareMessage))
 
         self._control_connection_query_attempted = False
 
@@ -8087,6 +8094,7 @@ class ResponseFuture(object):
         request_id = None
         request_sent = False
         replace_failed_connection = False
+        send_error = None
         try:
             # TODO get connectTimeout from cluster settings
             borrow_options = {'allow_keyspace_mismatch': True} \
@@ -8160,6 +8168,7 @@ class ResponseFuture(object):
         except ConnectionSendError as exc:
             log.debug("Error pushing request to host %s", host, exc_info=True)
             self._errors[host] = exc
+            send_error = exc
             if self._metrics is not None:
                 self._metrics.on_connection_error()
             if connection:
@@ -8199,6 +8208,16 @@ class ResponseFuture(object):
                     pool.return_connection(connection, replace_only=True)
                 else:
                     pool.return_connection(connection)
+
+        if send_error is not None and use_retry_policy:
+            # A failed push may have queued bytes. Finish cleanup before
+            # consulting application policy or scheduling a retry.
+            try:
+                if not self._is_final():
+                    self._handle_request_error(send_error, host)
+            except Exception as exc:
+                self._set_final_exception(exc)
+            return _NOT_SET
 
         return None
 
@@ -8504,10 +8523,7 @@ class ResponseFuture(object):
                     self._metrics.on_connection_error()
                 if not isinstance(response, ConnectionShutdown):
                     self._connection.defunct(response)
-                cl = getattr(self.message, 'consistency_level', None)
-                retry = self._retry_policy.on_request_error(
-                    self.query, cl, error=response, retry_num=self._query_retries)
-                self._handle_retry_decision(retry, response, host)
+                self._handle_request_error(response, host)
             elif isinstance(response, Exception):
                 if hasattr(response, 'to_exception'):
                     self._set_final_exception(response.to_exception())
@@ -8690,6 +8706,12 @@ class ResponseFuture(object):
         # apply each callback
         for callback_partial in to_call:
             callback_partial()
+
+    def _handle_request_error(self, response, host):
+        cl = getattr(self.message, 'consistency_level', None)
+        retry = self._retry_policy.on_request_error(
+            self.query, cl, error=response, retry_num=self._query_retries)
+        self._handle_retry_decision(retry, response, host)
 
     def _handle_retry_decision(self, retry_decision, response, host):
 
