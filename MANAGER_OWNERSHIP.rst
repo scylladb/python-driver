@@ -895,15 +895,17 @@ does not itself establish an accepted change to public behavior.
        Keep the ordinary caller contract and valid async/terminal-result paths.
    * - Cleanup-context blocking calls and close
      - The candidate rejects pending waits and blocking close with
-       ``ManagementContextError`` on its cleanup thread, before a blocking
-       close changes state. Terminal reads and nonblocking close remain valid.
+       ``ManagementContextError`` on its cleanup thread. The runtime primitive
+       ``close(wait=True)`` rejects before changing native state; terminal reads
+       and ``close(wait=False)`` remain valid.
        This is a new API restriction, including when destruction reenters an API.
      - Resolve compatibility before #1257. Destructor-driven Session/Cluster
-       cleanup must initiate reserved nonblocking retirement before any wait
-       guard can abort it. A swallowed exception from ``Session.__del__`` must
-       not abandon pool closure. Test actual Session/pool captures and pending
-       initial-connect futures in the #1259/#1262 adapters; runtime-only tests
-       do not establish that integration.
+       adapters must first initiate reserved nonblocking retirement, then apply
+       a guard to any remaining wait. This adapter sequence does not call the
+       primitive's guarded blocking close before retirement. A swallowed
+       exception from ``Session.__del__`` must not abandon pool closure. Test
+       actual Session/pool captures and pending initial-connect futures in the
+       #1259/#1262 adapters; runtime-only tests do not establish that integration.
    * - Combined shutdown and measurement
      - Every arrangement retains late-result disposal, idempotent close,
        original resource ownership and no self/cyclic join. Thread counts,
@@ -1110,15 +1112,20 @@ Shutdown and resource ownership
    running -> closing/admission rejected -> state retired/leases revoked
        -> waiters terminal + pools/control detached
        -> cancel timers/queued work + close detached resources
-       -> late-result sink drained -> stop runners/owner/bridges -> closed
+       -> transport/ordinary callbacks/executor work retired
+       -> this Cluster's completion channel detached -> external shutdown returns
+   remaining capture disposal -> all candidate threads exit -> finalized/join
 
 C first closes admission, retires Sessions/hosts, revokes leases and settles
 accepted operations. P retires member slots and hands detached resources to
 cleanup. Cancel timers and work not yet started; running workers retain the
 late-result sink until they hand back or close their candidates. Keep cleanup
-execution available until the last resource obligation is discharged. Only
-then stop executors, owner threads and completion bridges. Repeated close is
-idempotent and joins the same close record.
+execution available for every retained resource obligation. Preserve ordinary
+transport, operation, callback and executor completion before external shutdown
+returns. Capture-only disposal can continue after that return; keep its cleanup
+execution and accounting until disposal finishes. Stop each execution resource
+only after its own obligations drain. Repeated close is idempotent and joins the
+same close record.
 
 Start the cleanup service before the other management threads so it can dispose
 captures after a later startup failure. Failed or interrupted startup must
@@ -1133,8 +1140,8 @@ Keep native close, physical/resource cleanup and final execution-resource
 retirement distinct. The candidate runtime's nonblocking close returns a shared
 native closed event; that event does not certify physical or capture disposal.
 Its finalization/join barrier waits for physical obligations, actual capture
-disposal, all five runner exits and reactor-channel detachment. A non-returning
-destructor can therefore prevent that final barrier from completing.
+disposal, all five candidate thread exits and reactor-channel detachment. A
+non-returning destructor can therefore prevent that final barrier from completing.
 
 Normal external shutdown must preserve its existing transport/operation cleanup
 and executor-wait behavior. In the baseline, ``Cluster.shutdown()`` normally
@@ -1142,18 +1149,24 @@ waits for its executor, so an active listener on another executor worker can
 block it. The callback-origin self-join exemption depends on delivery in the
 calling thread; closing the lifecycle coordinator alone does not join callbacks
 and does not define the whole Cluster shutdown boundary. Moving notifications
-to L must not silently change that external wait behavior. For the worked
-candidate, normal external ``Cluster.shutdown()`` must return after native and
-reactor shutdown completes, without waiting for capture disposal. The dedicated
-bounded cleanup service finishes that disposal separately. This selected API
-boundary does not make the native closed event a physical-resource barrier or
+to L must not silently change that external wait behavior: normal external
+shutdown must still wait for an active callback whose baseline execution the
+ordinary executor shutdown would join. That callback's return is distinct from
+later disposal of its captures. For the worked candidate, normal external
+``Cluster.shutdown()`` must return after native resource retirement and this
+Cluster's completion-channel detachment, without waiting for capture disposal.
+Detachment drains this Cluster's accepted completion deliveries; it does not
+stop an I/O loop shared with other Clusters. The dedicated bounded cleanup
+service finishes capture disposal separately. This selected API boundary does
+not make the native closed event a physical-resource barrier or
 make shutdown wait for the runtime's finalization/join barrier. Adapter
-integration must establish the native/reactor completion boundary while
+integration must establish that native/completion-channel boundary while
 preserving the existing transport/operation cleanup and executor-wait rules;
 the runtime primitive alone does not establish it. Test real Cluster shutdown
-with capture cleanup paused: native/reactor shutdown must finish and the caller
-must return while disposal remains held. Then release cleanup and verify final
-disposal and thread exit before integrating the affected #1259/#1262 adapters.
+with capture cleanup paused: native retirement and channel detachment must
+finish, and the caller must return while disposal remains held. Then release
+cleanup and verify final disposal and thread exit before integrating the
+affected #1259/#1262 adapters.
 This choice does not settle the other pre-#1257 architecture, workload and budget
 agreement requirements.
 Retire/cancel queued notifications. Where the shutdown-origin and executor
@@ -1299,9 +1312,6 @@ workers, fake timers and barriers, not timing sleeps, for the new scenarios.
        aggregate bounds, overload before any state change when old captures
        exist, empty-pair success at a full quota, successful producer retry
        after capacity returns, queue-admission failure and shutdown debt.
-       Pause cleanup while delivering DOWN/REMOVE: distinguish ordinary-only
-       saturation from consumed-window deferral and pending-disposal rejection;
-       observe the retained routing view and eventual application after retry.
        Check destructor/weakref reentry, terminal reads, nonblocking submission
        and close, and reject self-dependent waits on cleanup. Inject failure at
        each of the five thread-start phases and verify final capture/thread
@@ -1333,6 +1343,11 @@ workers, fake timers and barriers, not timing sleeps, for the new scenarios.
        no debt, plus full-domain retirement/re-add/new-UUID deferral with paused
        cleanup. #1258 owns that publication gate; #1259/#1261 extend its tests
        through query/keyspace/schema admission and completion.
+       Pause cleanup while delivering integrated DOWN/REMOVE: distinguish
+       ordinary-only saturation from consumed-window deferral and
+       pending-disposal rejection; observe the retained routing view and eventual
+       application after producer retry. #1257 tests the native capacity primitive;
+       #1258 owns these real health/publication effects.
    * - Session pools / #1259
      - ``test_pool_metadata_ownership.py`` covers displacement during distance,
        construction and keyspace sync; ``test_host_connection_pool.py`` covers
@@ -1369,10 +1384,10 @@ workers, fake timers and barriers, not timing sleeps, for the new scenarios.
      - Close from each owner/worker/callback/bridge, during every initialization
        phase and with full mailboxes; assert terminal waiters and exact resource
        disposition. Pause capture disposal during normal external Cluster
-       shutdown; assert native/reactor completion and caller return before
-       releasing disposal, then verify final cleanup and thread exit. Preserve
-       ordinary executor/callback wait behavior. Repeat create/connect/close
-       and test a surviving Session.
+       shutdown; assert native retirement/channel detachment and caller return
+       before releasing disposal, then verify final cleanup and thread exit.
+       Preserve ordinary executor/callback wait behavior. Repeat
+       create/connect/close and test a surviving Session.
    * - Combined / #1263
      - ``tests/integration/long/test_topology_change.py`` plus standard routing,
        tablet, schema and client-route suites; #921 closure's live coverage
@@ -1396,8 +1411,10 @@ Run focused manager/ownership tests and the unit suite with asyncio against
 rebuilt Cython and pure-Python modules. Run libev and asyncore compatibility
 tests on their supported Python/platforms, and PyPy's pure-Python path where
 supported. Asyncore is limited to the Python versions supported by current CI.
-Free-threaded 3.14t/3.15t CI cells are disabled pending
-`#718 <https://github.com/scylladb/python-driver/issues/718>`_; do not claim
+Free-threaded 3.14t/3.15t CI cells are disabled. The broader audit in
+`#718 <https://github.com/scylladb/python-driver/issues/718>`_ closed as a
+duplicate of canonical shutdown-race tracker
+`#717 <https://github.com/scylladb/python-driver/issues/717>`_; do not claim
 existing free-threaded coverage. Exercise a restored supported cell separately:
 owner identity does not remove reader publication requirements. Pin versions and unsupported matrix
 cells to the repository CI configuration, not an assumed universal reactor

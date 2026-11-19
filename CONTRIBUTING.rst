@@ -287,7 +287,7 @@ PyPI publication and GitHub release creation are not atomic.
 
 The ``Classify release notes`` workflow uses ``actions/labeler`` and the
 filename rules in ``.github/labeler.yml`` to manage ``omit-from-release-notes``.
-Documentation (``docs/``, ``CONTRIBUTING.rst``), tests
+Documentation (``docs/``, ``CONTRIBUTING.rst``, ``MANAGER_OWNERSHIP.rst``), tests
 (``tests/``), the explicitly listed support files and workflows in ``.github/``,
 ``.gitignore``, ``.gitattributes``, and the coverage/import-check scripts qualify
 when all changed files match this support-only union. The labeler configuration
