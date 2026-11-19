@@ -19,7 +19,8 @@ import unittest
 from typing import ClassVar
 from unittest.mock import Mock
 
-from cassandra import ConsistencyLevel, ProtocolVersion, UnsupportedOperation
+from cassandra import ConsistencyLevel, DriverException, ProtocolVersion, UnsupportedOperation
+from cassandra.cqltypes import Int32Type, UTF8Type
 from cassandra.protocol import (
     PrepareMessage, QueryMessage, ExecuteMessage,
     BatchMessage, StartupMessage, OptionsMessage, RegisterMessage,
@@ -28,8 +29,11 @@ from cassandra.protocol import (
 )
 from cassandra.protocol_features import ProtocolFeatures
 from cassandra.query import BatchType
+from cassandra.marshal import int32_pack
 import pytest
 
+from cassandra.policies import ColDesc
+from tests.unit.cython.utils import cythontest, numpytest
 
 class MessageTest(unittest.TestCase):
 
@@ -555,3 +559,215 @@ class FrameByteIdentityTest(unittest.TestCase):
 
     def test_frames_with_default_features(self):
         self._assert_frames(ProtocolFeatures())
+
+
+class _BoolCountingPolicy:
+    """Policy whose truthiness checks are counted; encrypts no columns."""
+
+    def __init__(self):
+        self.bool_call_count = 0
+        self.contains_column_call_count = 0
+
+    def __bool__(self):
+        self.bool_call_count += 1
+        return True
+
+    def contains_column(self, col_desc):
+        self.contains_column_call_count += 1
+        return False
+
+
+class _XorPolicy:
+    """Encrypts the named columns (stored as blobs) by XOR-ing bytes with 0x5a."""
+
+    def __init__(self, *cols, col_type=Int32Type):
+        self.cols = set(cols)
+        self.col_type = col_type
+        self.decrypt_calls = 0
+
+    def contains_column(self, col_desc):
+        return col_desc.col in self.cols
+
+    def column_type(self, col_desc):
+        return self.col_type
+
+    def decrypt(self, col_desc, data):
+        self.decrypt_calls += 1
+        return bytes(b ^ 0x5a for b in data)
+
+    encrypt = decrypt
+
+
+class ResultTest(unittest.TestCase):
+    """Pure-Python recv_results_rows: policy is checked once per result, not per value."""
+
+    def _msg(self, rows):
+        msg = ResultMessage(kind=RESULT_KIND_ROWS)
+        msg.column_metadata = [
+            ('keyspace1', 'table1', 'col1', Int32Type),
+            ('keyspace1', 'table1', 'col2', UTF8Type),
+        ]
+        msg.recv_results_metadata = Mock()
+        msg.recv_row = Mock(side_effect=rows)
+        return msg, io.BytesIO(int32_pack(len(rows)))
+
+    def test_decode_without_encryption_policy(self):
+        msg, f = self._msg([[int32_pack(42), b'hello'], [int32_pack(100), None]])
+        msg.recv_results_rows(f, ProtocolVersion.V4, {}, None, None)
+        self.assertEqual(msg.parsed_rows, [(42, 'hello'), (100, None)])
+
+    def test_decode_with_encryption_policy_no_encrypted_columns(self):
+        msg, f = self._msg([[int32_pack(42), b'hello'], [int32_pack(100), b'world']])
+        policy = Mock()
+        policy.contains_column = Mock(return_value=False)
+        msg.recv_results_rows(f, ProtocolVersion.V4, {}, None, policy)
+        self.assertEqual(msg.parsed_rows, [(42, 'hello'), (100, 'world')])
+        self.assertEqual(policy.contains_column.call_count, 4)
+
+    def test_decode_with_encrypted_column(self):
+        policy = _XorPolicy('col1')
+        enc = lambda v: policy.decrypt(None, int32_pack(v))
+        msg, f = self._msg([[enc(42), b'hello'], [enc(100), b'world']])
+        msg.recv_results_rows(f, ProtocolVersion.V4, {}, None, policy)
+        self.assertEqual(msg.parsed_rows, [(42, 'hello'), (100, 'world')])
+        self.assertEqual(policy.decrypt_calls, 4)  # 2 to build the rows, 2 to decode
+
+    def test_policy_truthiness_checked_once(self):
+        msg, f = self._msg([[int32_pack(i), b'text%d' % i] for i in range(100)])
+        policy = _BoolCountingPolicy()
+        msg.recv_results_rows(f, ProtocolVersion.V4, {}, None, policy)
+        self.assertEqual(policy.contains_column_call_count, 200)
+        self.assertEqual(policy.bool_call_count, 1)
+
+    def test_bad_column_error_names_column(self):
+        for policy in (None, _XorPolicy()):
+            msg, f = self._msg([[int32_pack(1), b'\xff']])
+            with self.assertRaisesRegex(DriverException, 'Failed decoding result column "col2"'):
+                msg.recv_results_rows(f, ProtocolVersion.V4, {}, None, policy)
+
+
+@cythontest
+class CythonParserTest(unittest.TestCase):
+    """Cython row parsers: plain and column-encryption paths."""
+
+    colnames = ['col1', 'col2']
+    coltypes = [Int32Type, UTF8Type]
+
+    def _rows(self, rows):
+        data = int32_pack(len(rows))
+        for row in rows:
+            for raw in row:
+                data += int32_pack(-1) if raw is None else int32_pack(len(raw)) + raw
+        return data
+
+    def _desc(self, policy=None, coltypes=None):
+        from cassandra.parsing import ParseDesc
+        from cassandra.deserializers import make_deserializers
+        coltypes = coltypes or self.coltypes
+        coldescs = [ColDesc('ks', 'tbl', c) for c in self.colnames] if policy else None
+        return ParseDesc(self.colnames, coltypes, policy, coldescs,
+                         make_deserializers(coltypes), ProtocolVersion.V4)
+
+    def _parse(self, parser, desc, rows):
+        from cassandra.bytesio import BytesIOReader
+        return list(parser.parse_rows(BytesIOReader(self._rows(rows)), desc))
+
+    def _recv(self, colparser, policy, rows, coltypes=None):
+        from cassandra.row_parser import make_recv_results_rows
+
+        class _Msg(ResultMessage):
+            recv_results_rows = make_recv_results_rows(colparser)
+
+        msg = _Msg(kind=RESULT_KIND_ROWS)
+        msg.column_metadata = [('ks', 'tbl', c, t) for c, t in zip(self.colnames, coltypes or self.coltypes)]
+        msg.recv_results_metadata = Mock()
+        msg.recv_results_rows(io.BytesIO(self._rows(rows)), ProtocolVersion.V4, {}, None, policy)
+        return msg
+
+    def test_parse_desc_rejects_length_mismatch(self):
+        from cassandra.parsing import ParseDesc
+        from cassandra.deserializers import make_deserializers
+        des = make_deserializers(self.coltypes)
+        coldescs = [ColDesc('ks', 'tbl', c) for c in self.colnames]
+        bad = [
+            (self.colnames, self.coltypes, None, None, make_deserializers(self.coltypes[:1])),
+            (self.colnames, self.coltypes[:1], None, None, des),
+            (self.colnames, self.coltypes, object(), None, des),
+            (self.colnames, self.coltypes, object(), coldescs[:1], des),
+        ]
+        for args in bad:
+            with self.assertRaises(ValueError):
+                ParseDesc(*args, ProtocolVersion.V4)
+        ParseDesc(self.colnames, self.coltypes, None, None, des, ProtocolVersion.V4)
+        ParseDesc(self.colnames, self.coltypes, object(), coldescs, des, ProtocolVersion.V4)
+        ParseDesc([], [], None, None, (), ProtocolVersion.V4)
+
+    def test_unpack_row_compat(self):
+        from cassandra.bytesio import BytesIOReader
+        from cassandra.obj_parser import TupleRowParser
+        for policy in (None, _XorPolicy('col1')):
+            raw = int32_pack(7) if policy is None else policy.decrypt(None, int32_pack(7))
+            reader = BytesIOReader(self._rows([[raw, b'x']])[4:])
+            self.assertEqual(TupleRowParser().unpack_row(reader, self._desc(policy)), (7, 'x'))
+
+    def test_list_and_lazy_parsers_plain(self):
+        from cassandra.obj_parser import ListParser, LazyParser
+        rows = [[int32_pack(42), b'hello'], [None, b'world'], [int32_pack(1), None]]
+        for parser in (ListParser(), LazyParser()):
+            self.assertEqual(self._parse(parser, self._desc(), rows),
+                             [(42, 'hello'), (None, 'world'), (1, None)])
+
+    def test_list_and_lazy_parsers_encrypted(self):
+        from cassandra.obj_parser import ListParser, LazyParser
+        from cassandra.cqltypes import BytesType
+        for parser in (ListParser(), LazyParser()):
+            policy = _XorPolicy('col1')
+            rows = [[policy.decrypt(None, int32_pack(7)), b'test'], [policy.decrypt(None, int32_pack(8)), None]]
+            policy.decrypt_calls = 0
+            # Encrypted columns are blobs in the schema; the policy supplies the real type.
+            desc = self._desc(policy, coltypes=[BytesType, UTF8Type])
+            self.assertEqual(self._parse(parser, desc, rows), [(7, 'test'), (8, None)])
+            self.assertEqual(policy.decrypt_calls, 2)
+
+    def test_list_parser_policy_without_encrypted_columns(self):
+        from cassandra.obj_parser import ListParser
+        policy = _BoolCountingPolicy()
+        desc = self._desc(policy)
+        policy.bool_call_count = 0  # ignore ParseDesc validation
+        rows = [[int32_pack(i), b'v%d' % i] for i in range(5)]
+        self.assertEqual(self._parse(ListParser(), desc, rows), [(i, 'v%d' % i) for i in range(5)])
+        self.assertEqual(policy.bool_call_count, 1)
+        self.assertEqual(policy.contains_column_call_count, 10)
+
+    def test_bad_column_error_names_column(self):
+        from cassandra.obj_parser import ListParser
+        for policy in (None, _XorPolicy('col1')):
+            raw = int32_pack(1) if policy is None else policy.decrypt(None, int32_pack(1))
+            with self.assertRaisesRegex(DriverException, 'Failed decoding result column "col2" of type text'):
+                self._recv(ListParser(), policy, [[raw, b'ok'], [raw, b'\xff']])
+
+    def test_recv_results_rows_raises_when_only_colparser_fails(self):
+        from cassandra.parsing import ColumnParser
+
+        class _Failing(ColumnParser):
+            def parse_rows(self, reader, desc):
+                raise ValueError("boom")
+
+        with self.assertRaisesRegex(ValueError, "boom"):
+            self._recv(_Failing(), None, [[int32_pack(1), b'x']])
+
+    @numpytest
+    def test_numpy_parser_allows_policy_without_encrypted_columns(self):
+        from cassandra.numpy_parser import NumpyParser
+        policy = _BoolCountingPolicy()
+        result = self._recv(NumpyParser(), policy, [[int32_pack(1), b'x']]).parsed_rows
+        self.assertEqual(list(result['col1']), [1])
+        self.assertEqual(list(result['col2']), ['x'])
+
+    @numpytest
+    def test_numpy_parser_rejects_encrypted_columns(self):
+        from cassandra.numpy_parser import NumpyParser
+        policy = _XorPolicy('col1')
+        # The TupleRowParser re-parse succeeds here; the error must still surface.
+        with self.assertRaises(NotImplementedError):
+            self._recv(NumpyParser(), policy, [[policy.decrypt(None, int32_pack(1)), b'x']])

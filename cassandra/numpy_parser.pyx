@@ -24,7 +24,6 @@ as numpy is an optional dependency.
 
 include "ioutils.pyx"
 
-cimport cython
 from libc.stdint cimport uint64_t, uint8_t
 from cpython.ref cimport Py_INCREF, PyObject
 
@@ -82,6 +81,14 @@ cdef class NumpyParser(ColumnParser):
         cdef ArrDesc[::1] array_descs
         cdef ArrDesc *arrs
 
+        # Policies are selective; only reject results that actually contain encrypted columns.
+        ce_policy = desc.column_encryption_policy
+        if ce_policy:
+            for coldesc in desc.coldescs:
+                if ce_policy.contains_column(coldesc):
+                    raise NotImplementedError(
+                        "NumpyParser does not support column encryption")
+
         rowcount = read_int(reader)
         array_descs, arrays = make_arrays(desc, rowcount)
         arrs = &array_descs[0]
@@ -98,7 +105,7 @@ cdef _parse_rows(BytesIOReader reader, ParseDesc desc,
     cdef Py_ssize_t i
 
     for i in range(rowcount):
-        unpack_row(reader, desc, arrs)
+        unpack_plain_row(reader, desc, arrs)
 
 
 ### Helper functions to create NumPy arrays and array descriptors
@@ -143,9 +150,7 @@ def make_array(coltype, array_size):
 
 #### Parse rows into NumPy arrays
 
-@cython.boundscheck(False)
-@cython.wraparound(False)
-cdef inline int unpack_row(
+cdef inline int unpack_plain_row(
         BytesIOReader reader, ParseDesc desc, ArrDesc *arrays) except -1:
     cdef Buffer buf
     cdef Py_ssize_t i, rowsize = desc.rowsize

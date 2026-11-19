@@ -20,6 +20,11 @@ cdef class ParseDesc:
     """Description of what structure to parse"""
 
     def __init__(self, colnames, coltypes, column_encryption_policy, coldescs, deserializers, protocol_version):
+        # Row parsers index these per column; reject mismatches up front.
+        if len(coltypes) != len(colnames) or len(deserializers) != len(colnames):
+            raise ValueError("coltypes and deserializers must have one entry per column (%d)" % len(colnames))
+        if column_encryption_policy and (coldescs is None or len(coldescs) != len(colnames)):
+            raise ValueError("coldescs must have one entry per column when a column_encryption_policy is set")
         self.colnames = colnames
         self.coltypes = coltypes
         self.column_encryption_policy = column_encryption_policy
@@ -42,5 +47,20 @@ cdef class RowParser:
     cpdef unpack_row(self, BytesIOReader reader, ParseDesc desc):
         """
         Unpack a single row of data in a ResultMessage.
+        """
+        # Compat entry point; hot paths call the split methods directly.
+        if desc.column_encryption_policy:
+            return self.unpack_col_encrypted_row(reader, desc)
+        return self.unpack_plain_row(reader, desc)
+
+    cpdef unpack_plain_row(self, BytesIOReader reader, ParseDesc desc):
+        """
+        Unpack a single row of data in a ResultMessage.
+        """
+        raise NotImplementedError
+
+    cpdef unpack_col_encrypted_row(self, BytesIOReader reader, ParseDesc desc):
+        """
+        Unpack a single row of data in a ResultMessage, with column encryption support.
         """
         raise NotImplementedError
