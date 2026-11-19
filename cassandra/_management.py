@@ -1259,6 +1259,19 @@ class ManagementRuntime:
             try:
                 callback()
             except BaseException as exc:
+                if record.health_slot is not None:
+                    # Native health has no Future to report failure. Suppress
+                    # only this failed observation's notification; a newer
+                    # pending observation retains its own paired callback.
+                    log.exception('Error applying management health update')
+                    with self._condition:
+                        slot = record.health_slot
+                        if slot.apply is None:
+                            notification, slot.notification = (
+                                slot.notification, None)
+                            self._retire_captures_locked(
+                                [notification], record, native=True)
+                            notification = None
                 if not self._finish(record, error=exc):
                     log.exception('Error in retired management continuation')
             finally:

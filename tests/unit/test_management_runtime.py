@@ -3693,3 +3693,37 @@ def test_interrupt_after_thread_start_return_keeps_runner_owned(
         manager.join(5)
         for thread in starts:
             thread.join(5)
+
+
+@pytest.mark.parametrize('newer', [False, True])
+def test_failed_health_apply_logs_and_suppresses_its_notification(
+        runtime, caplog, newer):
+    manager, dispatch = runtime
+    incarnation = object()
+    entered, release = Event(), Event()
+    applied, notifications = [], []
+    def fail():
+        entered.set()
+        assert release.wait(5)
+        raise ValueError('health state was not applied')
+    manager.register_health(incarnation)
+    try:
+        manager.observe_negative(incarnation, fail,
+                                 lambda: notifications.append('failed'))
+        assert entered.wait(5)
+        if newer:
+            manager.observe_negative(
+                incarnation, lambda: applied.append('newer'),
+                lambda: notifications.append(tuple(applied)))
+        release.set()
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: not manager._health_active and
+                manager._health[id(incarnation)].apply is None, 5)
+        manager.submit(lambda record: None).result(5)
+        manager.notify(lambda: None).result(5)
+        assert notifications == ([('newer',)] if newer else [])
+        assert 'Error applying management health update' in caplog.text
+        assert 'health state was not applied' in caplog.text
+    finally:
+        release.set()
