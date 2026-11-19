@@ -1198,12 +1198,18 @@ class ManagementRuntime:
                     self._exited += 1
                     self._maybe_finalized_locked()
 
+    def _pending_health_notification(self):
+        if not self._capacity(None, 'ordinary'):
+            return None
+        return next((slot for slot in self._health.values()
+                     if slot.apply is None and slot.notification is not None),
+                    None)
+
     def _health_ready(self):
-        return any((self._health_active < self.limit and
-                    not slot.active and slot.apply is not None) or
-                   (slot.apply is None and slot.notification is not None and
-                    self._capacity(None, 'ordinary'))
-                   for slot in self._health.values())
+        return ((self._health_active < self.limit and
+                 any(not slot.active and slot.apply is not None
+                     for slot in self._health.values())) or
+                self._pending_health_notification() is not None)
 
     def _run_cluster(self):
         while True:
@@ -1234,10 +1240,7 @@ class ManagementRuntime:
                     record.executing = True
                     native_health = True
                 else:
-                    pending = next((slot for slot in self._health.values()
-                                    if slot.apply is None and
-                                    slot.notification is not None and
-                                    self._capacity(None, 'ordinary')), None)
+                    pending = self._pending_health_notification()
                     if pending is not None:
                         notification, pending.notification = (
                             pending.notification, None)
