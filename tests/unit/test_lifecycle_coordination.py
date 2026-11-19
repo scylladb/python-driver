@@ -60,6 +60,11 @@ def close_test_coordinators(monkeypatch):
         raise errors[0]
 
 
+def callback_thread(coordinator):
+    return next(thread for thread in coordinator._runtime._threads
+                if thread.name == 'cassandra-management-callback')
+
+
 def await_lifecycle(coordinator):
     """Observe delivery after asynchronous physical completion admission."""
     observed, returned = Event(), Event()
@@ -164,7 +169,7 @@ def test_pool_results_are_aggregated_by_the_active_lifecycle_drainer():
     assert not drainer.is_alive()
     assert len(observations) == 1
     thread_id, results = observations[0]
-    assert thread_id == coordinator._runtime._threads[3].ident
+    assert thread_id == callback_thread(coordinator).ident
     assert sorted(results) == list(range(8))
 
 
@@ -252,8 +257,8 @@ def test_pool_removal_reconciliation_waits_for_lifecycle_delivery(
     session.remove_pool.assert_called_once_with(host)
     session.update_created_pools.assert_called_once_with()
     assert observations == [
-        ('notification', cluster._lifecycle._runtime._threads[3].ident),
-        ('reconcile', cluster._lifecycle._runtime._threads[3].ident)]
+        ('notification', callback_thread(cluster._lifecycle).ident),
+        ('reconcile', callback_thread(cluster._lifecycle).ident)]
 
 
 @pytest.mark.parametrize('completion', ['queued', 'late'])
@@ -405,8 +410,9 @@ def test_readiness_reconciles_newly_eligible_pools_at_full_capacity(
             assert fence.is_set()
             with manager._condition:
                 assert manager._reentry_credits == 1
-                assert any(slot[1] is not None and slot[3] == 'reentry'
-                           for _, slot in manager._health.values())
+                assert any(slot.notification is not None and
+                           slot.admission_budget == 'reentry'
+                           for slot in manager._health.values())
             release.set()
             with manager._condition:
                 assert manager._condition.wait_for(
@@ -492,8 +498,9 @@ def test_callback_pool_fanout_retains_unadmitted_work(
             assert manager._condition.wait_for(
                 lambda: manager._credits == 0, 5)
             assert manager._reentry_credits == 1
-            assert any(slot[1] is not None and slot[3] == 'reentry'
-                       for _, slot in manager._health.values())
+            assert any(slot.notification is not None and
+                       slot.admission_budget == 'reentry'
+                       for slot in manager._health.values())
         deferred_session, = [session for session in sessions
                              if session._pool_intents[host]._deferred_work]
         deferred = deferred_session._pool_intents[host]
@@ -525,9 +532,9 @@ def test_callback_pool_fanout_retains_unadmitted_work(
         assert not repeats[1].done()
         with manager._condition:
             key = deferred._completion
-            assert manager._health[id(key)][0] is key
-            assert sum(slot[3] == 'reentry'
-                       for _, slot in manager._health.values()) == 1
+            assert manager._health[id(key)].incarnation is key
+            assert sum(slot.admission_budget == 'reentry'
+                       for slot in manager._health.values()) == 1
         if finish == 'remove':
             cluster.remove_host(host, refresh_nodes=False)
             listener.on_remove.assert_called_once_with(host)
@@ -4213,7 +4220,7 @@ def test_lifecycle_delivery_failure_logs_and_releases_active_state(
             else:
                 owner = Mock(_reconcile_pools=fail)
                 coordinator.submit_reconciliation(owner)
-                assert manager._health[id(owner)][1][1] is not None
+                assert manager._health[id(owner)].notification is not None
             release.set()
         assert failed.wait(5)
         if delivery == 'reconciliation':
@@ -4336,9 +4343,9 @@ def test_completion_producers_retain_demand_at_full_capacity(
         physical.set_result(True)
         assert not completed.is_set()
         if producer == 'preparation':
-            assert manager._health[id(host)][1][1] is not None
+            assert manager._health[id(host)].notification is not None
         else:
-            assert all(manager._health[id(session)][1][1] is not None
+            assert all(manager._health[id(session)].notification is not None
                        for session in sessions)
         release.set()
         assert completed.wait(5), (
@@ -4540,6 +4547,8 @@ def test_first_connect_policy_reentry_does_not_compete_with_waiter(
 
 
 def test_later_deferred_batch_follows_intervening_admission(topology):
+    from cassandra._management import compatibility_work
+
     cluster, _ = topology
     host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
     coordinator = cluster._lifecycle
@@ -4556,13 +4565,7 @@ def test_later_deferred_batch_follows_intervening_admission(topology):
             super().add_done_callback(callback)
             self.registered.set()
 
-    physical = [ControlledFuture(), ControlledFuture()]
-    class ControlledExecutor:
-        def submit(self, function):
-            return physical.pop(0)
-    executor = ControlledExecutor()
-    # Preserve the actual physical results independently of the work queue.
-    results = tuple(physical)
+    results = (ControlledFuture(), ControlledFuture())
 
     def complete_physical(future):
         errors = []
@@ -4584,31 +4587,31 @@ def test_later_deferred_batch_follows_intervening_admission(topology):
     order = []
     try:
         assert entered.wait(5)
-        work = [manager.submit(
-                    lambda r: manager.work(r, executor, lambda: None))
-                for _ in range(2)]
+        # Capture-free compatibility reservations hold admission without
+        # requiring L to dispose completed worker-attempt captures. This test
+        # controls the ordering of admissions while L remains occupied.
+        for result in results:
+            with compatibility_work(manager) as attach:
+                attach(result)
         assert all(result.registered.wait(5) for result in results)
-        with manager._condition:
-            assert manager._condition.wait_for(
-                lambda: all(f._record.physical for f in work), 5)
         coordinator.submit_observation(
-            host, 'readiness', lambda: order.append('A'))
+            host, 'readiness', lambda: order.append('A'), wait=False)
         with manager._condition:
-            first_delivery = manager._health[id(host)][1][1]
+            first_delivery = manager._health[id(host)].notification
         complete_physical(results[0])
         with manager._condition:
             assert manager._condition.wait_for(
                 lambda: any(item[1] is first_delivery
                             for item in manager._notifications), 5)
         complete_physical(results[1])
-        work[1].result(5)
         with manager._condition:
             assert manager._condition.wait_for(
                 lambda: manager._credits == 2, 5)
         with coordinator.transaction(drain=False):
             coordinator.submit(lambda: order.append('C'))
         coordinator.submit_observation(
-            host, 'location', lambda: (order.append('B'), completed.set()))
+            host, 'location', lambda: (order.append('B'), completed.set()),
+            wait=False)
         release.set()
         drain_lifecycle(coordinator)
         assert completed.wait(5)
@@ -4883,7 +4886,7 @@ def test_closed_session_old_pool_aggregate_cannot_replace_current_up(topology):
         assert entered.wait(5)
         manager.limit = 1
         work[0][1].set_result(True)
-        assert manager._health[id(host)][1][1] is not None
+        assert manager._health[id(host)].notification is not None
         old_second.set_result(True)
         assert not completed.is_set()
         release.set()
@@ -5172,9 +5175,9 @@ def test_session_reconciliation_survives_retained_host_removal(topology):
     try:
         assert entered.wait(5)
         coordinator._retain_negative(host, lambda: None, removed=True)
-        assert manager._health[id(host)][1][2]
+        assert manager._health[id(host)].removed
         physical.set_result(None)
-        assert manager._health[id(session)][1][1] is not None
+        assert manager._health[id(session)].notification is not None
         release.set()
         assert completed.wait(5), (
             'removed host suppressed Session reconciliation')
@@ -5247,7 +5250,7 @@ def test_replacement_reconnect_is_retained_under_overload(topology):
         assert entered.wait(5)
         # The metadata swap has already happened when this finally block runs.
         coordinator._notify_replacements([], reconnected.set)
-        assert manager._health[id(coordinator)][1][1] is not None
+        assert manager._health[id(coordinator)].notification is not None
         assert not reconnected.is_set()
         release.set()
         assert reconnected.wait(5)
@@ -5489,8 +5492,8 @@ def test_completed_pool_retry_chain_retires_after_repeated_eligibility_changes(
             assert intent.completion.result(5) is True
             with manager._condition:
                 assert id(intent._completion) not in manager._health
-                assert not any(slot[3] == 'reentry'
-                               for _, slot in manager._health.values())
+                assert not any(slot.admission_budget == 'reentry'
+                               for slot in manager._health.values())
                 assert manager._reentry_credits == 1
             previous = intent._completion
         session.submit.assert_not_called()
@@ -5565,7 +5568,7 @@ def test_session_shutdown_does_not_join_retained_reconciliation(topology):
         assert occupied.wait(5)
         coordinator.submit_reconciliation(session)
         with manager._condition:
-            assert manager._health[id(session)][1][1] is not None
+            assert manager._health[id(session)].notification is not None
         release_lane.set()
         assert entered.wait(5)
         with manager._condition:
@@ -5577,8 +5580,14 @@ def test_session_shutdown_does_not_join_retained_reconciliation(topology):
         assert intent.completion.result(5) is None
         assert not coordinator.closed
         assert not release_policy.is_set()
+        # Shutdown returned while both controlled obligations were held.
+        # Release that artificial pressure before fencing later delivery.
+        physical.set_result(False)
         release_policy.set()
         active.result(5)
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: manager._credits < manager.limit, 5)
         await_lifecycle(coordinator)
         with manager._condition:
             assert id(session) not in manager._health
@@ -5594,3 +5603,118 @@ def test_session_shutdown_does_not_join_retained_reconciliation(topology):
         cluster.shutdown()
         assert not producer.is_alive()
         assert not caller.is_alive()
+
+
+def test_cleanup_capture_session_destructor_defers_pending_pool_wait(
+        topology, monkeypatch):
+    from concurrent.futures import Future
+    from cassandra.cluster import Session
+    from cassandra._management import execution_context
+
+    cluster, _ = topology
+    manager = cluster._lifecycle._ensure_runtime()
+    session = new_session_with_pool_state()
+    session.cluster = cluster
+    session._management_runtime = manager
+    session.is_shutdown = False
+    pending = Future()
+    assert pending.set_running_or_notify_cancel()
+    session._initial_connect_futures = {pending}
+    session._pool_creation_work = {}
+    pool_closed, handler_entered, release_handler, returned = (
+        Event(), Event(), Event(), Event())
+    pool = Mock()
+    pool_contexts = []
+
+    def close_pool():
+        pool_contexts.append((execution_context(),
+                              manager._condition._is_owned(),
+                              pending._condition._is_owned()))
+        pool_closed.set()
+
+    pool.shutdown.side_effect = close_pool
+    session._pools[object()] = pool
+    cluster.sessions.add(session)
+    contexts = []
+    shutdown = Session.shutdown
+
+    def observed_shutdown(self):
+        if self._initial_connect_futures == {pending}:
+            contexts.append(execution_context())
+            try:
+                return shutdown(self)
+            finally:
+                returned.set()
+        return shutdown(self)
+
+    monkeypatch.setattr(Session, 'shutdown', observed_shutdown)
+
+    def retain(record, captured=session):
+        handler_entered.set()
+        assert release_handler.wait(5)
+
+    future = manager.submit(retain, budget='reentry')
+    del retain, session
+    try:
+        assert handler_entered.wait(5)
+        release_handler.set()
+        future.result(5)
+        assert returned.wait(5), 'Session destructor waited on cleanup lane'
+        assert contexts == ['cleanup']
+        assert not pool_closed.is_set()
+        assert manager._cleanup_obligations == 1
+        pending.set_result(None)
+        assert pool_closed.wait(5)
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: manager._cleanup_obligations == 0, 5)
+        pool.shutdown.assert_called_once_with()
+        assert pool_contexts == [('worker', False, False)]
+    finally:
+        release_handler.set()
+        if not pending.done():
+            pending.set_result(None)
+
+
+def test_cleanup_capture_drain_does_not_wait_for_notification_lane(monkeypatch):
+    from cassandra._management import execution_context
+
+    coordinator = LifecycleCoordinator()
+    manager = coordinator._ensure_runtime()
+    entered, release, disposed, delivered = Event(), Event(), Event(), Event()
+    active = manager.notify(lambda: (entered.set(), release.wait(5)))
+    assert entered.wait(5)
+    with coordinator.transaction(drain=False):
+        coordinator.submit(delivered.set)
+    errors, contexts = [], []
+    idle_wait = coordinator._idle.wait
+
+    def guarded_wait(timeout=None):
+        if execution_context() == 'cleanup':
+            raise AssertionError('cleanup capture waited for lifecycle delivery')
+        return idle_wait(timeout)
+
+    monkeypatch.setattr(coordinator._idle, 'wait', guarded_wait)
+
+    class Capture:
+        def __del__(self):
+            contexts.append(execution_context())
+            try:
+                coordinator.drain()
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                disposed.set()
+
+    future = manager.submit(
+        lambda record, captured=Capture(): None, budget='reentry')
+    try:
+        future.result(5)
+        assert disposed.wait(5)
+        assert contexts == ['cleanup']
+        assert not errors
+        assert not delivered.is_set()
+    finally:
+        release.set()
+        active.result(5)
+    assert delivered.wait(5)

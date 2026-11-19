@@ -899,8 +899,9 @@ def test_internal_pool_continuation_retains_full_reserved_admission(
         assert host.is_up and session._pools[host] is failed
         with manager._condition:
             assert manager._reentry_credits == 1
-            assert any(slot[1] is not None and slot[3] == 'reentry'
-                       for _, slot in manager._health.values())
+            assert any(slot.notification is not None and
+                       slot.admission_budget == 'reentry'
+                       for slot in manager._health.values())
         physical.set_result(True)
         assert work_ready.wait(5)
         _finish_pool_recovery_work(work)
