@@ -3642,3 +3642,54 @@ def test_health_capture_retirement_releases_outside_runtime_lock(action):
         assert observed == [('callback', False), True, True]
         assert manager._capture_obligations == 0
     assert all(value == 0 for value in assert_runtime_counts(manager).values())
+
+
+@pytest.mark.parametrize('failed_phase', [1, 2, 3, 4, 5])
+def test_interrupt_after_thread_start_return_keeps_runner_owned(
+        monkeypatch, failed_phase):
+    import sys
+    manager = ManagementRuntime(Dispatcher())
+    real_start = Thread.start
+    starts = []
+    entered, release = Event(), Event()
+    run = manager._run
+    def held_run(kind, target):
+        if len(starts) == failed_phase and current_thread() is starts[-1]:
+            entered.set()
+            release.wait(5)
+        run(kind, target)
+    manager._run = held_run
+    old_trace = sys.gettrace()
+    def interrupt(frame, event, arg):
+        if frame.f_code is ManagementRuntime.start.__code__ and event == 'line':
+            sys.settrace(old_trace)
+            frame.f_trace = old_trace
+            raise KeyboardInterrupt('after native start returned')
+        return interrupt
+    def start(thread):
+        starts.append(thread)
+        real_start(thread)
+        if len(starts) == failed_phase:
+            assert entered.wait(5)
+            frame = sys._getframe(1)
+            frame.f_trace = interrupt
+            sys.settrace(interrupt)
+    try:
+        with monkeypatch.context() as patcher:
+            patcher.setattr(Thread, 'start', start)
+            with pytest.raises(KeyboardInterrupt,
+                               match='after native start returned'):
+                manager.start()
+        assert not manager.finalized.is_set()
+        with pytest.raises(TimeoutError):
+            manager.join(0.01)
+        release.set()
+        manager.join(5)
+        assert all(not thread.is_alive() for thread in starts)
+    finally:
+        sys.settrace(old_trace)
+        release.set()
+        manager.close()
+        manager.join(5)
+        for thread in starts:
+            thread.join(5)

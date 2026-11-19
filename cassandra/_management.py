@@ -398,7 +398,7 @@ class _DeliveryTicket:
 
 
 class _ThreadStart:
-    """Revoke an unentered target without guessing whether native launch ran."""
+    """Revoke an unentered target independently of native launch."""
 
     def __init__(self, callback):
         self._lock = Lock()
@@ -685,15 +685,17 @@ class ManagementRuntime:
                                     name='cassandra-management-' + kind,
                                     daemon=True)
                     try:
+                        # Publish ownership before native launch: interruption
+                        # after start returns must not hide an entered runner.
+                        self._threads.append(thread)
                         thread.start()
                     except BaseException:
                         # Only an entered target owns runtime resources. A
                         # late bootstrap sees the revoked entry and exits
                         # without retaining or touching this runtime.
-                        if entry.revoke():
-                            self._threads.append(thread)
+                        if not entry.revoke() and thread in self._threads:
+                            self._threads.remove(thread)
                         raise
-                    self._threads.append(thread)
             except BaseException:
                 self._begin_close_locked()
                 # Started threads exit once this startup lock is released.
