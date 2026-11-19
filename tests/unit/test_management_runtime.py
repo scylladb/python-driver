@@ -127,6 +127,27 @@ def runtime(monkeypatch):
     assert all(value == 0 for value in assert_runtime_counts(runtime).values())
 
 
+def test_coalesced_cancellation_bookkeeping_is_linear(monkeypatch):
+    manager = ManagementRuntime(Dispatcher(), limit=64)
+    done_checks = 0
+    done = management.OperationFuture.done
+    def counted_done(future):
+        nonlocal done_checks
+        done_checks += 1
+        return done(future)
+    try:
+        futures = [manager.submit(lambda record: management._PENDING,
+                                  key='shared') for _ in range(64)]
+        assert futures[0]._record.started.wait(5)
+        monkeypatch.setattr(management.OperationFuture, 'done', counted_done)
+        for future in futures:
+            assert future.cancel()
+        assert done_checks <= 2 * len(futures)
+    finally:
+        manager.close()
+        manager.join(5)
+
+
 @pytest.mark.skipif(platform.python_implementation() != 'CPython',
                     reason='Requires synchronous reference destruction')
 @pytest.mark.parametrize('pool', [None, 'pool'])
@@ -1466,6 +1487,403 @@ faulthandler.cancel_dump_traceback_later()
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+@pytest.mark.parametrize('plain', [False, True])
+@pytest.mark.parametrize('inherited_first', [False, True])
+def test_mixed_bulk_fork_rejection_preserves_fresh_locks(
+        runtime, plain, inherited_first):
+    import os
+    import select
+    import signal
+    from concurrent.futures import as_completed
+    from concurrent.futures._base import _AcquireFutures
+    if not hasattr(os, 'fork'):
+        pytest.skip('fork unavailable')
+    manager, dispatch = runtime
+    inherited = manager.submit(lambda record: 1)
+    assert inherited.result(5) == 1
+    locked, release = Event(), Event()
+
+    def hold_parent_condition():
+        with inherited._condition:
+            locked.set()
+            assert release.wait(25)
+
+    holder = Thread(target=hold_parent_condition)
+    holder.start()
+    try:
+        assert locked.wait(5)
+        read_fd, write_fd = os.pipe()
+        try:
+            pid = os.fork()
+        except BaseException:
+            os.close(read_fd)
+            os.close(write_fd)
+            raise
+    except BaseException:
+        release.set()
+        holder.join(5)
+        raise
+    if pid == 0:
+        os.close(read_fd)
+        try:
+            fresh_manager = None
+            gate = Event()
+            if plain:
+                fresh = Future()
+            else:
+                fresh_manager = ManagementRuntime(lambda callback: None)
+                fresh = fresh_manager.submit(lambda record: gate.wait(5))
+
+            def inherited_lock_access(*args, **kwargs):
+                raise AssertionError('touched an inherited condition lock')
+
+            inherited._condition._acquire = inherited_lock_access
+            inherited._condition._release = inherited_lock_access
+            try:
+                with inherited._condition:
+                    raise AssertionError('entered inherited condition context')
+            except ManagementClosed:
+                pass
+            fresh._condition.acquire()
+            for consumer in (
+                    lambda: wait([fresh, inherited], timeout=0),
+                    lambda: next(as_completed([fresh, inherited], timeout=0))):
+                try:
+                    consumer()
+                except ManagementClosed:
+                    pass
+                else:
+                    raise AssertionError('bulk wait accepted inherited future')
+            # Exercise both possible ID-sorted acquisition permutations without
+            # assuming an allocator order or patching any stdlib function.
+            ordered = _AcquireFutures([fresh, inherited])
+            ordered.futures = ([inherited, fresh] if inherited_first
+                               else [fresh, inherited])
+            try:
+                with ordered:
+                    inherited._state
+            except ManagementClosed:
+                pass
+            else:
+                raise AssertionError('bulk context accepted inherited state')
+            attempts = []
+
+            def probe_outer_depth():
+                acquired = fresh._condition.acquire(blocking=False)
+                attempts.append(acquired)
+                if acquired:
+                    fresh._condition.release()
+
+            probe = Thread(target=probe_outer_depth)
+            probe.start()
+            probe.join(5)
+            assert attempts == [False], 'bulk rejection released outer lock'
+            fresh._condition.release()
+            settled = Event()
+
+            def settle():
+                fresh.set_result(23)
+                settled.set()
+
+            worker = Thread(target=settle)
+            worker.start()
+            assert settled.wait(5), 'bulk rejection leaked fresh condition'
+            worker.join(5)
+            assert fresh.result(0) == 23
+            if fresh_manager is not None:
+                gate.set()
+                fresh_manager.close()
+                fresh_manager.join(5)
+            os.write(write_fd, b'ok')
+        except BaseException as exc:
+            os.write(write_fd, repr(exc).encode()[:4000])
+        finally:
+            os._exit(0)
+    os.close(write_fd)
+    try:
+        ready, _, _ = select.select([read_fd], [], [], 20)
+        if not ready:
+            os.kill(pid, signal.SIGKILL)
+        assert ready, 'mixed bulk wait entered a parent-held condition'
+        outcome = os.read(read_fd, 4096)
+        assert outcome == b'ok', outcome.decode()
+    finally:
+        release.set()
+        holder.join(5)
+        os.close(read_fd)
+        os.waitpid(pid, 0)
+
+
+def test_count_snapshots_do_not_enumerate_retained_records():
+    class NoIteration(set):
+        def __iter__(self):
+            pytest.fail('telemetry enumerated admitted records')
+
+    dispatch = Dispatcher()
+    manager = ManagementRuntime(dispatch)
+    manager._started = True
+    futures = [manager.submit(lambda record: None) for _ in range(64)]
+    records = manager._records
+    try:
+        manager._records = NoIteration(records)
+        assert manager.counts()['mailbox'] == 64
+        assert manager.high_waters['mailbox'] == 64
+        for future in futures:
+            future.add_done_callback(lambda future: None)
+            manager._finish(future._record)
+        assert manager.counts()['delivery'] == 64
+        assert manager.high_waters['delivery'] == 64
+    finally:
+        manager._records = records
+        manager.close()
+        dispatch.drain()
+        drain_controlled_callbacks(manager)
+        manager.join(5)
+    assert all(future.done() for future in futures)
+    assert all(value == 0 for value in assert_runtime_counts(manager).values())
+
+
+@pytest.mark.parametrize('pool', [None, 'pool'])
+def test_shutdown_prunes_handlers_but_retains_result_mailbox_counts(pool):
+    from cassandra._management import _PENDING
+
+    dispatch = Dispatcher()
+    manager = ManagementRuntime(dispatch)
+    manager._started = True
+    results = []
+    future = manager.submit(lambda record: _PENDING, pool=pool)
+    record = future._record
+    future.add_done_callback(lambda future: results.append('callback'))
+    with manager._condition:
+        manager._enqueue_locked(record, lambda: results.append('result'),
+                                retain_on_close=True)
+        assert assert_runtime_counts(manager)['mailbox'] == 2
+    manager.close()
+    counts = assert_runtime_counts(manager)
+    assert counts['mailbox'] == counts['delivery'] == 1
+    queue = manager._cluster if pool is None else manager._pools[pool]
+    with manager._condition:
+        entry = manager._dequeue_locked(queue)
+        assert entry.retain_on_close
+    manager._execute(entry.record, entry.callback,
+                     'cluster' if pool is None else 'pool')
+    with manager._condition:
+        manager._release_locked(record)
+    assert assert_runtime_counts(manager)['mailbox'] == 0
+    dispatch.drain()
+    drain_controlled_callbacks(manager)
+    manager.join(5)
+    assert results == ['result', 'callback']
+    assert all(value == 0 for value in assert_runtime_counts(manager).values())
+
+
+def test_delivery_counts_retain_active_ticket_after_dispatch_failure(
+        runtime, monkeypatch):
+    manager, dispatch = runtime
+    entered, release = Event(), Event()
+    with manager._condition:
+        first = manager.submit(lambda record: 1)
+        first.add_done_callback(
+            lambda future: (entered.set(), release.wait(5)))
+    assert first.result(5) == 1
+    with manager._condition:
+        assert first._record.delivery_ticket is not None
+    reactor = Thread(target=dispatch.drain)
+    reactor.start()
+    try:
+        assert entered.wait(5)
+        assert assert_runtime_counts(manager)['delivery'] == 1
+
+        def reject(ticket):
+            raise RuntimeError('reactor lost with an active delivery')
+        monkeypatch.setattr(manager, '_dispatch', reject)
+        with manager._condition:
+            second = manager.submit(lambda record: 2)
+            second.add_done_callback(
+                lambda future: pytest.fail('delivery ran'))
+        assert second.result(5) == 2
+        assert manager.closed.wait(5)
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: second._record.released, 5)
+        counts = assert_runtime_counts(manager)
+        assert counts['ordinary'] == counts['delivery'] == 1
+        assert counts['mailbox'] == 0
+        assert manager.high_waters['delivery'] == 2
+        assert not manager.finalized.is_set()
+    finally:
+        release.set()
+        reactor.join(5)
+        assert not reactor.is_alive()
+    manager.join(5)
+    assert all(value == 0 for value in assert_runtime_counts(manager).values())
+
+
+@pytest.mark.parametrize('charged', [False, True])
+def test_delivered_callbacks_release_captured_objects_outside_locks(
+        runtime, charged):
+    import gc
+    import weakref
+
+    manager, dispatch = runtime
+    calls, released, references = [], [], []
+    class Payload:
+        def __del__(self):
+            released.append((future._condition._is_owned(),
+                             manager._condition._is_owned()))
+
+    def register(index):
+        payload = Payload()
+        references.append(weakref.ref(payload))
+        future.add_done_callback(
+            lambda future, payload=payload: calls.append(index))
+
+    if charged:
+        with manager._condition:
+            future = manager.submit(lambda record: 7)
+            for index in range(16):
+                register(index)
+        assert future.result(5) == 7
+        assert all(reference() is not None for reference in references)
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: future._record.delivery_ticket is not None, 5)
+        dispatch.drain()
+    else:
+        future = manager.submit(lambda record: 7)
+        assert future.result(5) == 7
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: future._record.released, 5)
+        for index in range(16):
+            register(index)
+    gc.collect()
+    assert calls == list(range(16))
+    assert all(reference() is None for reference in references)
+    assert released == [(False, False)] * 16
+    assert not future._done_callbacks
+    assert future.result() == 7
+
+
+def test_runtime_fixture_cleans_up_after_counter_invariant_failure(
+        monkeypatch):
+    from cassandra._management import _PENDING
+
+    resources = runtime.__wrapped__(monkeypatch)
+    manager, dispatch = next(resources)
+    delivered = []
+    try:
+        future = manager.submit(lambda record: _PENDING)
+        future.add_done_callback(lambda future: delivered.append(True))
+        assert future._record.started.wait(5)
+        with manager._condition:
+            manager._mailbox_pending += 1
+        with pytest.raises(AssertionError):
+            next(resources)
+        assert manager.closed.is_set() and manager.finalized.is_set()
+        assert all(not thread.is_alive() for thread in manager._threads)
+        assert not manager._records and not dispatch.queue
+        assert delivered == [True]
+    finally:
+        # Also protect a failed setup/assertion in this regression itself.
+        resources.close()
+
+
+def test_runtime_fixture_reports_owner_counter_failure_without_stranding(
+        monkeypatch):
+    resources = runtime.__wrapped__(monkeypatch)
+    manager, dispatch = next(resources)
+    observe = manager._observe_counts_locked
+    def inconsistent_counts():
+        if execution_context() != 'cluster':
+            return observe()
+        manager._mailbox_pending += 1
+        try:
+            return observe()
+        finally:
+            manager._mailbox_pending -= 1
+    monkeypatch.setattr(manager, '_observe_counts_locked', inconsistent_counts)
+    delivered = []
+    def handler(record):
+        manager._observe_counts_locked()
+        return 7
+    try:
+        with manager._condition:
+            future = manager.submit(handler)
+            future.add_done_callback(
+                lambda done: delivered.append(done.result()))
+        assert future.result(5) == 7
+        dispatch.drain()
+        with pytest.raises(AssertionError, match='mailbox count:'):
+            next(resources)
+        assert delivered == [7]
+        assert not manager._records and not dispatch.queue
+        assert all(not thread.is_alive() for thread in manager._threads)
+    finally:
+        resources.close()
+
+
+def test_callback_rejects_wait_for_its_active_aggregate(runtime):
+    manager, dispatch = runtime
+    def callback():
+        with manager.synchronous_reentry():
+            with pytest.raises(ManagementContextError, match='own credit'):
+                manager.submit(lambda record: None, budget='aggregate',
+                               wait=True, timeout=5)
+    manager.notify(callback).result(5)
+    assert not manager._reentry_active
+
+
+@pytest.mark.parametrize('pool', [None, 'pool'])
+def test_superseded_handler_retains_admission_until_it_returns(pool):
+    manager = ManagementRuntime(Dispatcher(), limit=1, pool_limit=1)
+    entered, release = Event(), Event()
+    def handler(record):
+        entered.set()
+        assert release.wait(5)
+        return 7
+    try:
+        future = manager.submit(handler, pool=pool)
+        assert entered.wait(5)
+        manager.supersede(future)
+        with pytest.raises(management.ManagementSuperseded):
+            future.result(5)
+        assert manager.counts()['ordinary'] == 1
+        assert future._record.handler is handler
+        with pytest.raises(ManagementOverloaded):
+            manager.submit(lambda record: None, pool=pool)
+        release.set()
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: not manager._records, 5)
+        assert manager.submit(lambda record: 9, pool=pool).result(5) == 9
+    finally:
+        release.set()
+        manager.close()
+        manager.join(5)
+
+
+def test_retired_handler_failure_is_logged(runtime, caplog):
+    manager, dispatch = runtime
+    entered, release = Event(), Event()
+    def handler(record):
+        entered.set()
+        assert release.wait(5)
+        raise ValueError('late handler failure')
+    try:
+        future = manager.submit(handler)
+        assert entered.wait(5)
+        manager.supersede(future)
+        release.set()
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: not manager._records, 5)
+        assert 'Error in retired management handler' in caplog.text
+        assert 'late handler failure' in caplog.text
+    finally:
+        release.set()
+
+
 @pytest.mark.parametrize('still_alive', [False, True])
 def test_join_uses_one_deadline_and_reports_live_runners(
         monkeypatch, still_alive):
@@ -1492,6 +1910,269 @@ def test_join_uses_one_deadline_and_reports_live_runners(
     else:
         manager.join(5)
         assert observed == [3, 1]
+
+
+def test_retired_foreign_delivery_does_not_retain_later_results(runtime):
+    import gc
+    import weakref
+
+    manager, dispatch = runtime
+    class Payload:
+        pass
+    first = manager.submit(lambda record: Payload())
+    first.result(5)
+    previous, references = first, []
+    for _ in range(16):
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: previous._record.released, 5)
+        following = manager.submit(lambda record, previous=previous: (
+            previous.add_done_callback(lambda future: None), Payload())[1])
+        following.result(5)
+        dispatch.drain()
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: following._record.released, 5)
+        references.append(weakref.ref(following.result()))
+        previous = following
+    del previous, following
+    gc.collect()
+    assert all(reference() is None for reference in references)
+    assert first._delivery.record is first._record
+
+
+def test_caller_drain_defers_to_owner_adopted_before_claim(
+        runtime, monkeypatch):
+    manager, dispatch = runtime
+    future = manager.submit(lambda record: 7)
+    assert future.result(5) == 7
+    with manager._condition:
+        assert manager._condition.wait_for(lambda: future._record.released, 5)
+    before_claim, resume = Event(), Event()
+    calls = []
+    drain = future._delivery.drain
+    def paused(record=None):
+        if record is None:
+            before_claim.set()
+            assert resume.wait(5)
+        return drain(record)
+    monkeypatch.setattr(future._delivery, 'drain', paused)
+    caller = Thread(target=lambda: future.add_done_callback(
+        lambda future: calls.append(('caller', execution_context()))))
+    caller.start()
+    try:
+        assert before_claim.wait(5)
+        owner = manager.submit(lambda record: future.add_done_callback(
+            lambda future: calls.append(('owner', execution_context()))))
+        owner.result(5)
+        resume.set()
+        caller.join(5)
+        assert not caller.is_alive()
+        assert not calls
+        assert assert_runtime_counts(manager)['ordinary'] == 1
+        dispatch.drain()
+        assert calls == [('caller', 'bridge'), ('owner', 'bridge')]
+        wait_for_retirement(manager, owner)
+        assert owner._record.released
+        assert assert_runtime_counts(manager)['ordinary'] == 0
+    finally:
+        resume.set()
+        caller.join(5)
+        assert not caller.is_alive()
+
+
+@pytest.mark.skipif(platform.python_implementation() != 'CPython',
+                    reason='Requires synchronous reference destruction')
+def test_failed_delivery_releases_captures_on_callback_lane_outside_locks():
+    import gc
+    import weakref
+
+    dispatch = Dispatcher()
+    manager = ManagementRuntime(dispatch)
+    observed, probes = [], []
+    released, entered, cleanup_release = Event(), Event(), Event()
+    class Payload:
+        def __del__(self):
+            observed.append((execution_context(),
+                             future._condition._is_owned(),
+                             manager._condition._is_owned()))
+            probe = Thread(target=lambda: (manager.counts(), released.set()))
+            probes.append(probe)
+            probe.start()
+            probe.join(2)
+            observed.append(released.is_set())
+            entered.set()
+            observed.append(cleanup_release.wait(5))
+
+    def reject(ticket):
+        raise RuntimeError('reactor failed')
+    manager._dispatch = reject
+    try:
+        with manager._condition:
+            future = manager.submit(lambda record: 7)
+            payload = Payload()
+            reference = weakref.ref(payload)
+            future.add_done_callback(lambda future, payload=payload: None)
+            del payload
+        assert future.result(5) == 7
+        assert entered.wait(5)
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: future._record.handler is None, 5)
+        manager.close()
+        assert not manager.finalized.is_set()
+        assert assert_runtime_counts(manager)['close'] == 0
+        assert manager._capture_obligations == 2  # Callback and handler.
+        assert manager.high_waters['close'] == 0
+        cleanup_release.set()
+        manager.join(5)
+        gc.collect()
+        assert reference() is None
+        assert observed == [('callback', False, False), True, True]
+        assert released.is_set()
+        assert not manager._callback_garbage
+        assert all(value == 0
+                   for value in assert_runtime_counts(manager).values())
+    finally:
+        cleanup_release.set()
+        manager.close()
+        dispatch.drain()
+        manager.join(5)
+        for probe in probes:
+            probe.join(5)
+            assert not probe.is_alive()
+
+
+@pytest.mark.skipif(platform.python_implementation() != 'CPython',
+                    reason='Requires synchronous reference destruction')
+@pytest.mark.parametrize('stage', ['normal', 'queued', 'unadmitted'])
+def test_notification_capture_retires_on_callback_lane_outside_lock(stage):
+    manager = ManagementRuntime(Dispatcher())
+    entered, resume, retired = Event(), Event(), Event()
+    observed, calls, probes = [], [], []
+    class Callback:
+        def __call__(self):
+            calls.append(True)
+            entered.set()
+            assert resume.wait(5)
+            return 7
+
+        def __del__(self):
+            observed.append((execution_context(),
+                             manager._condition._is_owned()))
+            if stage == 'normal':
+                try:
+                    observed.append(manager.submit(lambda record: 9).result(2))
+                except BaseException as exc:
+                    observed.append(type(exc))
+            else:
+                progressed = Event()
+                probe = Thread(target=lambda: (manager.counts(),
+                                               progressed.set()))
+                probes.append(probe)
+                probe.start()
+                probe.join(2)
+                observed.append(progressed.is_set())
+            retired.set()
+
+    def block(*args):
+        entered.set()
+        assert resume.wait(5)
+    try:
+        if stage == 'queued':
+            manager.notify(block)
+            assert entered.wait(5)
+        elif stage == 'unadmitted':
+            manager.submit(block)
+            assert entered.wait(5)
+        future = manager.notify(Callback())
+        if stage == 'normal':
+            assert entered.wait(5)
+        if stage != 'unadmitted':
+            # Fence admission before releasing L or pruning its queue.
+            assert manager.submit(lambda record: 1).result(5) == 1
+        if stage != 'normal':
+            manager.close()
+        resume.set()
+        if stage == 'normal':
+            assert future.result(5) == 7
+        else:
+            with pytest.raises(ManagementClosed):
+                future.result(5)
+        assert retired.wait(5)
+        assert calls == ([True] if stage == 'normal' else [])
+        assert observed == [('callback', False),
+                            9 if stage == 'normal' else True]
+    finally:
+        resume.set()
+        manager.close()
+        manager.join(5)
+        for probe in probes:
+            probe.join(5)
+            assert not probe.is_alive()
+    assert all(value == 0 for value in assert_runtime_counts(manager).values())
+
+
+@pytest.mark.skipif(platform.python_implementation() != 'CPython',
+                    reason='Requires synchronous reference destruction')
+@pytest.mark.parametrize('mode', [
+    'result', 'exception', 'wait', 'as_completed', 'admission'])
+def test_open_notification_retirement_guards_same_lane_waits(mode):
+    manager = ManagementRuntime(Dispatcher())
+    entered, resume, retired = Event(), Event(), Event()
+    observed, nested = [], []
+    class Callback:
+        def __call__(self):
+            pytest.fail('superseded notification ran')
+
+        def __del__(self):
+            try:
+                # One slot retains this capture; one admits its child.
+                manager.limit = 2
+                nested.append(manager.notify(lambda: 7))
+                try:
+                    if mode == 'result':
+                        nested[0].result(2)
+                    elif mode == 'exception':
+                        nested[0].exception(2)
+                    elif mode == 'wait':
+                        wait(nested, timeout=2)
+                    elif mode == 'as_completed':
+                        next(as_completed(nested, timeout=2))
+                    else:
+                        manager.submit(lambda record: 1, wait=True, timeout=2)
+                except ManagementContextError:
+                    observed.append(True)
+                except BaseException as exc:
+                    observed.append(type(exc))
+                else:
+                    observed.append(False)
+                try:
+                    with manager.synchronous_reentry() as budget:
+                        observed.append((budget, manager.submit(
+                            lambda record: 9, budget=budget).result(2)))
+                except BaseException as exc:
+                    observed.append(type(exc))
+            finally:
+                retired.set()
+
+    def block(record):
+        entered.set()
+        assert resume.wait(5)
+    try:
+        manager.submit(block)
+        assert entered.wait(5)
+        future = manager.notify(Callback())
+        manager.supersede(future)
+        resume.set()
+        assert retired.wait(5)
+        assert observed == [True, ('reentry', 9)]
+        assert nested[0].result(5) == 7
+    finally:
+        resume.set()
+        manager.close()
+        manager.join(5)
+    assert all(value == 0 for value in assert_runtime_counts(manager).values())
 
 
 def test_private_capture_retirement_is_bounded_while_callback_is_occupied():
@@ -1532,6 +2213,108 @@ def test_private_capture_retirement_is_bounded_while_callback_is_occupied():
         manager.join(5)
     gc.collect()
     assert all(ref() is None for ref in references)
+
+
+@pytest.mark.skipif(platform.python_implementation() != 'CPython',
+                    reason='Requires synchronous reference destruction')
+def test_private_cleanup_weakref_callback_allows_terminal_reads_and_close():
+    import weakref
+
+    manager = ManagementRuntime(Dispatcher(), limit=2, reentry_window=1)
+    entered, release, run, retired = Event(), Event(), Event(), Event()
+    observations, children = [], []
+
+    class Payload:
+        pass
+
+    def listener():
+        entered.set()
+        assert release.wait(5)
+
+    def retirement(reference):
+        try:
+            observations.append((execution_context(),
+                                 manager._condition._is_owned(),
+                                 future._condition._is_owned()))
+            observations.append(future.result(0))
+            children.append(manager.submit(lambda record: 9))
+            manager.close()
+            observations.append(manager.finalized.is_set())
+        except BaseException as exc:
+            observations.append(type(exc))
+        finally:
+            retired.set()
+
+    try:
+        manager.notify(listener)
+        assert entered.wait(5)
+        payload = Payload()
+        reference = weakref.ref(payload, retirement)
+        future = manager.submit(lambda record, owned=payload: run.wait(5),
+                                budget='reentry')
+        del payload
+        run.set()
+        assert future.result(5) is True
+        assert retired.wait(5)
+        assert reference() is None
+        assert observations == [('cleanup', False, False), True, False]
+    finally:
+        run.set()
+        release.set()
+        manager.close()
+        manager.join(5)
+
+
+@pytest.mark.parametrize('failed_phase', [1, 2, 3, 4, 5])
+def test_interrupt_after_thread_start_return_keeps_runner_owned(
+        monkeypatch, failed_phase):
+    import sys
+    manager = ManagementRuntime(Dispatcher())
+    real_start = Thread.start
+    starts = []
+    entered, release = Event(), Event()
+    run = manager._run
+    def held_run(kind, target):
+        if len(starts) == failed_phase and current_thread() is starts[-1]:
+            entered.set()
+            release.wait(5)
+        run(kind, target)
+    manager._run = held_run
+    old_trace = sys.gettrace()
+    def interrupt(frame, event, arg):
+        if (frame.f_code is ManagementRuntime.start.__code__ and
+                event == 'line'):
+            sys.settrace(old_trace)
+            frame.f_trace = old_trace
+            raise KeyboardInterrupt('after native start returned')
+        return interrupt
+    def start(thread):
+        starts.append(thread)
+        real_start(thread)
+        if len(starts) == failed_phase:
+            assert entered.wait(5)
+            frame = sys._getframe(1)
+            frame.f_trace = interrupt
+            sys.settrace(interrupt)
+    try:
+        with monkeypatch.context() as patcher:
+            patcher.setattr(Thread, 'start', start)
+            with pytest.raises(KeyboardInterrupt,
+                               match='after native start returned'):
+                manager.start()
+        assert not manager.finalized.is_set()
+        with pytest.raises(TimeoutError):
+            manager.join(0.01)
+        release.set()
+        manager.join(5)
+        assert all(not thread.is_alive() for thread in starts)
+    finally:
+        sys.settrace(old_trace)
+        release.set()
+        manager.close()
+        manager.join(5)
+        for thread in starts:
+            thread.join(5)
 
 
 @pytest.mark.parametrize('budget', ['ordinary', 'reentry', 'aggregate'])
