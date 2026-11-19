@@ -1,4 +1,5 @@
 import threading
+from collections import deque
 
 from cassandra.connection import Connection, ConnectionShutdown
 import sys
@@ -7,7 +8,7 @@ import logging
 import os
 import socket
 import ssl
-from threading import Lock, Thread
+from threading import Event, Lock, Thread, current_thread
 
 
 log = logging.getLogger(__name__)
@@ -133,6 +134,7 @@ class AsyncioConnection(Connection):
 
     _lock = Lock()
     _loop_thread = None
+    _management_state = None
 
     _write_queue = None
     _write_queue_lock = None
@@ -258,13 +260,72 @@ class AsyncioConnection(Connection):
                 cls._pid = os.getpid()
             if cls._loop is None:
                 assert cls._loop_thread is None
-                cls._loop = asyncio.new_event_loop()
-                # daemonize so the loop will be shut down on interpreter
-                # shutdown
-                cls._loop_thread = Thread(
-                    target=cls._loop.run_forever, daemon=True, name="asyncio_thread"
-                )
-                cls._loop_thread.start()
+                loop = asyncio.new_event_loop()
+                pending, management_lock = deque(), Lock()
+                accepting = [True]
+
+                def drain(final=False):
+                    count = 0
+                    while final or count < 64:
+                        with management_lock:
+                            if not pending:
+                                return
+                            callback = pending.popleft()
+                        count += 1
+                        try:
+                            callback()
+                        except BaseException:
+                            log.exception("Error in management reactor dispatch")
+                    with management_lock:
+                        if pending and accepting[0]:
+                            loop.call_soon(drain)
+
+                def run():
+                    try:
+                        loop.run_forever()
+                    finally:
+                        with management_lock:
+                            accepting[0] = False
+                        drain(final=True)
+
+                thread = Thread(target=run, daemon=True,
+                                name="asyncio_thread")
+                ready = Event()
+                try:
+                    loop.call_soon(ready.set)
+                    thread.start()
+                    if not ready.wait(5):
+                        raise RuntimeError("Asyncio reactor startup did not complete")
+                except BaseException:
+                    if thread.is_alive():
+                        loop.call_soon_threadsafe(loop.stop)
+                        thread.join(5)
+                    if not thread.is_alive():
+                        loop.close()
+                    raise
+                cls._loop, cls._loop_thread = loop, thread
+                cls._management_state = (pending, management_lock, accepting, drain)
+
+    @classmethod
+    def _management_dispatch(cls, callback):
+        loop = cls._loop
+        if cls._management_state is None:
+            raise RuntimeError("Asyncio reactor is unavailable")
+        pending, lock, accepting, drain = cls._management_state
+        with lock:
+            if (not accepting[0] or loop is None or loop.is_closed() or
+                    not cls._loop_thread.is_alive()):
+                raise RuntimeError("Asyncio reactor is unavailable")
+            pending.append(callback)
+            try:
+                loop.call_soon_threadsafe(drain)
+            except BaseException:
+                pending.remove(callback)
+                raise
+
+    @classmethod
+    def _management_in_context(cls):
+        return current_thread() is cls._loop_thread
 
     @classmethod
     def create_timer(cls, timeout, callback):
@@ -381,3 +442,12 @@ class AsyncioConnection(Connection):
                 log.debug("Connection %s closed by server", self)
                 self.close()
                 return
+
+
+def _reset_management_startup_lock_after_fork():
+    # A parent thread may own this lock when another thread forks.
+    AsyncioConnection._lock = Lock()
+
+
+if hasattr(os, 'register_at_fork'):
+    os.register_at_fork(after_in_child=_reset_management_startup_lock_after_fork)

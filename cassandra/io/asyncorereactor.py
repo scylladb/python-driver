@@ -18,7 +18,7 @@ import logging
 import os
 import socket
 import sys
-from threading import Lock, Thread, Event
+from threading import Lock, RLock, Thread, Event, current_thread
 import time
 import sys
 import ssl
@@ -137,6 +137,14 @@ class _AsyncorePipeDispatcher(_AsyncoreDispatcher):
             self._notified = True
             os.write(self.write_fd, b'x')
 
+    def close(self):
+        try:
+            asyncore.dispatcher.close(self)
+        finally:
+            if self.write_fd is not None:
+                os.close(self.write_fd)
+                self.write_fd = None
+
 
 class _AsyncoreUDPDispatcher(_AsyncoreDispatcher):
     """
@@ -210,8 +218,12 @@ class AsyncoreLoop(object):
     def __init__(self):
         self._pid = os.getpid()
         self._loop_lock = Lock()
+        self._state_lock = RLock()
+        self._management_callbacks = deque()
+        self._management_failed = False
         self._started = False
         self._shutdown = False
+        self._cleanup_started = False
 
         self._thread = None
 
@@ -228,36 +240,84 @@ class AsyncoreLoop(object):
         self._loop_dispatcher = dispatcher
 
     def maybe_start(self):
-        should_start = False
-        did_acquire = False
-        try:
-            did_acquire = self._loop_lock.acquire(False)
-            if did_acquire and not self._started:
-                self._started = True
-                should_start = True
-        finally:
-            if did_acquire:
-                self._loop_lock.release()
+        with self._state_lock:
+            if self._shutdown or self._started:
+                return
+            self._started = True
+            self._thread = Thread(target=self._run_loop_if_current,
+                                  name="asyncore_cassandra_driver_event_loop", daemon=True)
+            try:
+                self._thread.start()
+            except BaseException:
+                if not self._thread.is_alive():
+                    self._started = False
+                    self._thread = None
+                raise
 
-        if should_start:
-            self._thread = Thread(target=self._run_loop, name="asyncore_cassandra_driver_event_loop")
-            self._thread.daemon = True
-            self._thread.start()
+    def call_soon(self, callback):
+        with self._state_lock:
+            if self._shutdown or self._management_failed:
+                raise RuntimeError("Asyncore reactor is shutting down")
+            self._management_callbacks.append(callback)
+            try:
+                self.maybe_start()
+                self.wake_loop()
+            except BaseException:
+                try:
+                    self._management_callbacks.remove(callback)
+                except ValueError:
+                    return
+                raise
+
+    def _dispatch_management(self):
+        for _ in range(64):
+            with self._state_lock:
+                if not self._management_callbacks:
+                    return
+                callback = self._management_callbacks.popleft()
+            try:
+                callback()
+            except BaseException:
+                log.exception("Error in management reactor dispatch")
+        # Terminal draining owns every remaining callback; cleanup may already
+        # have closed the notifier after its bounded runner join.
+        if not self._management_failed:
+            self.wake_loop()
 
     def wake_loop(self):
         self._loop_dispatcher.notify_loop()
 
+    def _run_loop_if_current(self):
+        # A failed start can leave a native thread waiting to bootstrap.
+        # Check ownership under rollback's lock before polling or retirement.
+        with self._state_lock:
+            if current_thread() is not self._thread:
+                return
+        self._run_loop()
+
     def _run_loop(self):
         log.debug("Starting asyncore event loop")
         with self._loop_lock:
-            while not self._shutdown:
-                try:
+            try:
+                while not self._shutdown:
                     self._loop_dispatcher.loop(self.timer_resolution)
                     self._timers.service_timeouts()
-                except Exception as exc:
+                    self._dispatch_management()
+            except BaseException as exc:
+                if isinstance(exc, Exception):
                     self._maybe_log_debug("Asyncore event loop stopped unexpectedly", exc_info=exc)
-                    break
-            self._started = False
+                else:
+                    log.error("Asyncore event loop stopped unexpectedly", exc_info=exc)
+            finally:
+                # Management service loss is permanent for existing channels.
+                # Ordinary I/O can restart after this runner drains accepted
+                # completions and relinquishes ownership.
+                with self._state_lock:
+                    self._management_failed = True
+                while self._management_callbacks:
+                    self._dispatch_management()
+                with self._state_lock:
+                    self._started = False
 
         self._maybe_log_debug("Asyncore event loop ended")
 
@@ -281,13 +341,17 @@ class AsyncoreLoop(object):
     def _cleanup(self):
         global _dispatcher_map
 
-        self._shutdown = True
-        if not self._thread:
-            return
+        with self._state_lock:
+            if self._cleanup_started:
+                return
+            self._cleanup_started = True
+            self._shutdown = True
+        self.wake_loop()
 
         log.debug("Waiting for event loop thread to join...")
-        self._thread.join(timeout=1.0)
-        if self._thread.is_alive():
+        if self._thread is not None and self._thread is not current_thread():
+            self._thread.join(timeout=1.0)
+        if self._thread is not None and self._thread.is_alive():
             log.warning(
                 "Event loop thread could not be joined, so shutdown may not be clean. "
                 "Please call Cluster.shutdown() to avoid this.")
@@ -306,6 +370,7 @@ class AsyncoreLoop(object):
 
 
 _global_loop = None
+_initialization_lock = Lock()
 atexit.register(partial(_cleanup, _global_loop))
 
 
@@ -320,15 +385,42 @@ class AsyncoreConnection(Connection, asyncore.dispatcher):
 
     @classmethod
     def initialize_reactor(cls):
-        global _global_loop
-        if not _global_loop:
-            _global_loop = AsyncoreLoop()
-        else:
-            current_pid = os.getpid()
-            if _global_loop._pid != current_pid:
-                log.debug("Detected fork, clearing and reinitializing reactor state")
-                cls.handle_fork()
-                _global_loop = AsyncoreLoop()
+        global _global_loop, _dispatcher_map
+        with _initialization_lock:
+            if _global_loop is not None and _global_loop._pid != os.getpid():
+                # Close descriptors directly: Connection.close() can acquire
+                # parent-owned locks or schedule timers on a vanished runner.
+                for dispatcher in tuple(_dispatcher_map.values()):
+                    try:
+                        if dispatcher is _global_loop._loop_dispatcher:
+                            dispatcher.close()
+                        else:
+                            dispatcher.socket.close()
+                    except OSError:
+                        pass
+                _dispatcher_map = {}
+                _global_loop = None
+            if _global_loop is None:
+                candidate = AsyncoreLoop()
+                ready = Event()
+                try:
+                    candidate.call_soon(ready.set)
+                    if not ready.wait(5):
+                        raise RuntimeError("Asyncore reactor startup did not complete")
+                except BaseException:
+                    candidate._cleanup()
+                    raise
+                _global_loop = candidate
+
+    @classmethod
+    def _management_dispatch(cls, callback):
+        if _global_loop is None:
+            raise RuntimeError("Asyncore reactor is unavailable")
+        _global_loop.call_soon(callback)
+
+    @classmethod
+    def _management_in_context(cls):
+        return _global_loop is not None and current_thread() is _global_loop._thread
 
     @classmethod
     def handle_fork(cls):
@@ -476,3 +568,12 @@ class AsyncoreConnection(Connection, asyncore.dispatcher):
 
     def readable(self):
         return self._readable or ((self.is_control_connection or self._continuous_paging_sessions) and not (self.is_defunct or self.is_closed))
+
+
+def _reset_management_startup_lock_after_fork():
+    global _initialization_lock
+    _initialization_lock = Lock()
+
+
+if hasattr(os, 'register_at_fork'):
+    os.register_at_fork(after_in_child=_reset_management_startup_lock_after_fork)
