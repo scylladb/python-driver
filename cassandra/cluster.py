@@ -7491,36 +7491,44 @@ class ResponseFuture(object):
             message = copy(message)
             message.result_metadata_id = result_metadata_id
             message.skip_meta = (
-                skip_meta and self._prepared_metadata_skip_allowed)
+                message.skip_meta and skip_meta
+                and self._prepared_metadata_skip_allowed)
             self.message = message
         elif (prepared_statement is not None
               and isinstance(message, ExecuteMessage)
               and not _prepared_metadata_resolved):
-            decoder_context = _prepared_metadata.decoder_context(
-                self._protocol_handler,
-                session.cluster._prepared_metadata_context)
-            if not bound_result_metadata:
+            (trusted_metadata, trusted_id, trusted_skip,
+             decoder_context) = _prepared_metadata_request_state(
+                prepared_statement, self._protocol_handler,
+                session.cluster._prepared_metadata_context,
+                requested_metadata_id=message.result_metadata_id)
+            explicit_metadata = PreparedStatement._freeze_result_metadata(
+                bound_result_metadata)
+            if not explicit_metadata:
                 if message.skip_meta:
                     message = copy(message)
                     message.skip_meta = False
                     self.message = message
                 result_metadata_decoder_context = decoder_context
             elif (decoder_context is None
-                  or result_metadata_decoder_context != decoder_context):
-                # An explicit snapshot with unknown or stale provenance cannot
-                # safely decode a NO_METADATA response. Keep the caller's
-                # message immutable in case another attempt already shares it.
+                  or result_metadata_decoder_context != decoder_context
+                  or explicit_metadata != trusted_metadata):
+                # Provenance alone cannot establish a metadata/id pair. A
+                # direct caller must match the same trusted statement state.
                 bound_result_metadata = ()
                 message = copy(message)
                 message.skip_meta = False
                 message.result_metadata_id = None
                 self.message = message
                 result_metadata_decoder_context = decoder_context
-            elif (message.skip_meta
-                  and not self._prepared_metadata_skip_allowed):
-                message = copy(message)
-                message.skip_meta = False
-                self.message = message
+            else:
+                bound_result_metadata = trusted_metadata
+                if (message.skip_meta
+                        and (not trusted_skip
+                             or not self._prepared_metadata_skip_allowed)):
+                    message = copy(message)
+                    message.skip_meta = False
+                    self.message = message
         elif bound_result_metadata is _NOT_SET:
             bound_result_metadata = []
         self._bound_result_metadata = bound_result_metadata

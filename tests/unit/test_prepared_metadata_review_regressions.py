@@ -12,12 +12,69 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from unittest.mock import Mock
 
 import pytest
 
+from cassandra import ConsistencyLevel
 from cassandra._prepared_metadata import protocol_handler_snapshot
-from cassandra.protocol import ProtocolHandler
+from cassandra.cluster import ResponseFuture
+from cassandra.protocol import ExecuteMessage, ProtocolHandler
+from cassandra.query import SimpleStatement
+from tests.unit import test_response_future as fixtures
 from tests.unit.utils import run_isolated_subprocess
+
+
+
+def _case():
+    case = fixtures.ResponseFutureTests()
+    case.setUp()
+    return case
+
+
+def test_direct_future_preserves_explicit_full_metadata_request():
+    case = _case()
+    session = case.make_session()
+    metadata = [('ks', 'tbl', 'col', Mock())]
+    prepared = case._make_prepared_statement(metadata, b'id')
+    message = ExecuteMessage(
+        prepared.query_id, [], ConsistencyLevel.ONE,
+        skip_meta=False, result_metadata_id=b'id')
+
+    future = ResponseFuture(
+        session, message, SimpleStatement('SELECT * FROM foo'), 1,
+        prepared_statement=prepared)
+
+    assert future.message.skip_meta is False
+    assert message.skip_meta is False
+
+
+@pytest.mark.parametrize('mismatch', [False, True])
+def test_direct_future_validates_and_freezes_explicit_metadata(mismatch):
+    case = _case()
+    session = case.make_session()
+    metadata = [('ks', 'tbl', 'current_col', Mock())]
+    prepared = case._make_prepared_statement(metadata, b'id')
+    supplied = list(metadata)
+    if mismatch:
+        supplied = [('ks', 'tbl', 'old_col', Mock())]
+    message = ExecuteMessage(
+        prepared.query_id, [], ConsistencyLevel.ONE,
+        skip_meta=True, result_metadata_id=b'id')
+
+    future = ResponseFuture(
+        session, message, SimpleStatement('SELECT * FROM foo'), 1,
+        prepared_statement=prepared, bound_result_metadata=supplied,
+        result_metadata_decoder_context=fixtures._decoder_context())
+    supplied.clear()
+
+    if mismatch:
+        assert future.message.skip_meta is False
+        assert not future._bound_result_metadata
+    else:
+        assert future.message.skip_meta is True
+        assert future._bound_result_metadata == tuple(metadata)
+    assert message.skip_meta is True
 
 
 def test_application_cython_parser_does_not_gain_cache_eligibility():
