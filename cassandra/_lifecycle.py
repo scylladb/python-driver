@@ -526,7 +526,11 @@ class LifecycleCoordinator:
 
     def _deliver_callbacks(self, callbacks, error_message, event=None,
                            raise_errors=False):
-        """Track serial delivery and isolate each callback's failure."""
+        """Track serial delivery and log ordinary callback failures.
+
+        Continue after each Exception by default. With ``raise_errors=True``,
+        stop at the first such failure and propagate it to the caller.
+        """
         with self._lock:
             if self.closed:
                 return
