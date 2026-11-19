@@ -508,6 +508,42 @@ def test_callback_rejects_saturated_ordinary_admission(notification):
         manager.join(5)
 
 
+def test_health_and_close_bypass_full_delivery_and_io_capacity(runtime):
+    manager, dispatch = runtime
+    # Fill ordinary credits with terminal records awaiting callback delivery.
+    gate = Event()
+    futures = [manager.submit(lambda record: gate.wait(5)) for _ in range(4)]
+    for future in futures:
+        future.add_done_callback(lambda f: None)
+    gate.set()
+    for future in futures:
+        future.result(5)
+    assert manager._credits == 4
+    incarnation = object()
+    manager.register_health(incarnation)
+    native, notified = Event(), Event()
+    assert manager.observe_negative(
+        incarnation, native.set, notified.set, removed=True)
+    assert native.wait(5)
+    assert not notified.is_set()
+    # A pending removal cannot be overwritten by a positive/less terminal
+    # event.
+    assert manager.observe_negative(
+        incarnation, lambda: pytest.fail('old health'))
+    child_one = manager.register_lifetime()
+    child_two = manager.register_lifetime()
+    effects = []
+    one = manager.close_lifetime(child_one, lambda: effects.append(1))
+    repeated = manager.close_lifetime(
+        child_one, lambda: pytest.fail('duplicate'))
+    assert repeated is one
+    two = manager.close_lifetime(child_two, lambda: effects.append(2))
+    assert two.is_set()
+    assert effects == [1, 2]
+    dispatch.drain()
+    assert notified.wait(5)
+
+
 def test_callback_reserved_window_progresses_at_full_delivery_capacity(
         runtime):
     manager, dispatch = runtime
@@ -2431,6 +2467,19 @@ def test_retired_handler_failure_is_logged(runtime, caplog):
         release.set()
 
 
+def test_health_notification_failure_is_logged(runtime, caplog):
+    manager, dispatch = runtime
+    incarnation = object()
+    def fail():
+        raise ValueError('health notification failure')
+    manager.register_health(incarnation)
+    manager.observe_negative(incarnation, lambda: None, fail)
+    manager.submit(lambda record: None).result(5)
+    manager.notify(lambda: None).result(5)
+    assert 'Error in management notification callback' in caplog.text
+    assert 'health notification failure' in caplog.text
+
+
 @pytest.mark.parametrize('still_alive', [False, True])
 def test_join_uses_one_deadline_and_reports_live_runners(
         monkeypatch, still_alive):
@@ -2874,6 +2923,105 @@ def test_private_cleanup_progresses_with_all_physical_workers_waiting():
 
 @pytest.mark.skipif(platform.python_implementation() != 'CPython',
                     reason='Requires synchronous reference destruction')
+def test_health_incarnation_churn_retains_bounded_cleanup_slots():
+    manager = ManagementRuntime(Dispatcher(), limit=2)
+    entered, release, second_applied = Event(), Event(), Event()
+    applied = []
+
+    class Apply:
+        def __init__(self, number):
+            self.number = number
+
+        def __call__(self):
+            applied.append(self.number)
+            if self.number == 1:
+                second_applied.set()
+
+        def __del__(self):
+            if self.number == 0:
+                entered.set()
+                release.wait(5)
+
+    try:
+        incarnation = object()
+        manager.register_health(incarnation)
+        manager.observe_negative(incarnation, Apply(0))
+        assert entered.wait(5)
+        manager.unregister_health(incarnation)
+        incarnation = object()
+        manager.register_health(incarnation)
+        manager.observe_negative(incarnation, Apply(1))
+        assert second_applied.wait(5)
+        manager.unregister_health(incarnation)
+        for number in range(2, 102):
+            incarnation = object()
+            manager.register_health(incarnation)
+            manager.observe_negative(incarnation, Apply(number))
+            manager.unregister_health(incarnation)
+        assert applied == [0, 1]
+        with manager._condition:
+            assert manager._health_active == manager.limit
+            assert len(manager._health) == manager.limit
+            assert len(manager._records) == manager.limit
+        manager.close()
+        assert not manager.finalized.is_set()
+        release.set()
+        manager.join(5)
+        assert not manager._health
+        assert manager._health_active == 0
+    finally:
+        release.set()
+        manager.close()
+        manager.join(5)
+
+
+@pytest.mark.skipif(platform.python_implementation() != 'CPython',
+                    reason='Requires synchronous reference destruction')
+@pytest.mark.parametrize('same_incarnation', [True, False])
+def test_deferred_health_apply_precedes_its_notification(same_incarnation):
+    manager = ManagementRuntime(Dispatcher(), limit=1)
+    entered, release, applied, notified = Event(), Event(), Event(), Event()
+    observations = []
+
+    class First:
+        def __call__(self):
+            pass
+
+        def __del__(self):
+            entered.set()
+            release.wait(5)
+
+    def notification():
+        observations.append(applied.is_set())
+        notified.set()
+
+    try:
+        first = object()
+        manager.register_health(first)
+        manager.observe_negative(first, First())
+        assert entered.wait(5)
+        target = first if same_incarnation else object()
+        manager.register_health(target)
+        manager.observe_negative(target, applied.set, notification)
+        # A native mailbox fence lets C examine the deferred health demand.
+        # With capacity held, it must skip both apply and paired notification.
+        fence = manager.submit(lambda record: None)
+        fence.result(5)
+        wait_for_retirement(manager, fence)
+        with manager._condition:
+            assert manager._health[id(target)].notification is notification
+        assert not notified.is_set()
+        release.set()
+        assert notified.wait(5)
+        assert observations == [True]
+    finally:
+        release.set()
+        manager.close()
+        manager.join(5)
+
+
+@pytest.mark.skipif(platform.python_implementation() != 'CPython',
+                    reason='Requires synchronous reference destruction')
 def test_private_cleanup_weakref_callback_allows_terminal_reads_and_close():
     import weakref
 
@@ -2972,6 +3120,40 @@ def test_interrupt_after_thread_start_return_keeps_runner_owned(
         manager.join(5)
         for thread in starts:
             thread.join(5)
+
+
+@pytest.mark.parametrize('newer', [False, True])
+def test_failed_health_apply_logs_and_suppresses_its_notification(
+        runtime, caplog, newer):
+    manager, dispatch = runtime
+    incarnation = object()
+    entered, release = Event(), Event()
+    applied, notifications = [], []
+    def fail():
+        entered.set()
+        assert release.wait(5)
+        raise ValueError('health state was not applied')
+    manager.register_health(incarnation)
+    try:
+        manager.observe_negative(incarnation, fail,
+                                 lambda: notifications.append('failed'))
+        assert entered.wait(5)
+        if newer:
+            manager.observe_negative(
+                incarnation, lambda: applied.append('newer'),
+                lambda: notifications.append(tuple(applied)))
+        release.set()
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: not manager._health_active and
+                manager._health[id(incarnation)].apply is None, 5)
+        manager.submit(lambda record: None).result(5)
+        manager.notify(lambda: None).result(5)
+        assert notifications == ([('newer',)] if newer else [])
+        assert 'Error applying management health update' in caplog.text
+        assert 'health state was not applied' in caplog.text
+    finally:
+        release.set()
 
 
 @pytest.mark.skipif(platform.python_implementation() != 'CPython',
@@ -3683,6 +3865,593 @@ def test_active_delivery_ticket_cannot_be_cancelled():
         runner.join(5)
     assert not runner.is_alive()
     assert ticket.cancel()
+
+
+@pytest.mark.skipif(
+    platform.python_implementation() != 'CPython',
+    reason='Requires synchronous reference destruction',
+)
+@pytest.mark.parametrize('pool', [None, 'pool'])
+@pytest.mark.parametrize('action', ['replace', 'unregister'])
+def test_pending_health_owner_captures_retire_on_cleanup(
+    runtime, pool, action
+):
+    manager, dispatch = runtime
+    blocked, release, retired = Event(), Event(), Event()
+    incarnation, observations, references = object(), [], []
+    terminal = Future()
+    terminal.set_result('done')
+
+    def observe_finalizer(label, mechanism):
+        observations.append(
+            (
+                label,
+                mechanism,
+                execution_context(),
+                manager._condition._is_owned(),
+                terminal._condition._is_owned(),
+                terminal.result(),
+            )
+        )
+        if len(observations) == 4:
+            retired.set()
+
+    class Capture:
+        def __init__(self, label):
+            self.label = label
+
+        def __call__(self):
+            pytest.fail('retired pending capture was invoked')
+
+        def __del__(self):
+            observe_finalizer(self.label, 'del')
+
+    def capture(label):
+        callback = Capture(label)
+        references.append(
+            weakref.ref(
+                callback, lambda ref: observe_finalizer(label, 'weakref')
+            )
+        )
+        return callback
+
+    def block(record):
+        blocked.set()
+        assert release.wait(5)
+
+    def owner(record):
+        assert manager.observe_negative(
+            incarnation, capture('apply'), capture('notification')
+        )
+        if action == 'replace':
+            assert manager.observe_negative(incarnation, lambda: None)
+        else:
+            manager.unregister_health(incarnation)
+
+    try:
+        manager.register_health(incarnation)
+        if pool is not None:
+            manager.submit(block)
+            assert blocked.wait(5)
+        future = manager.submit(owner, pool=pool)
+        future.result(5)
+        assert retired.wait(5)
+        assert sorted(
+            (label, mechanism) for label, mechanism, *_ in observations
+        ) == [
+            ('apply', 'del'),
+            ('apply', 'weakref'),
+            ('notification', 'del'),
+            ('notification', 'weakref'),
+        ]
+        assert all(
+            item[2:] == ('cleanup', False, False, 'done')
+            for item in observations
+        )
+        assert all(ref() is None for ref in references)
+    finally:
+        release.set()
+        dispatch.drain()
+
+
+@pytest.mark.skipif(
+    platform.python_implementation() != 'CPython',
+    reason='Requires synchronous reference destruction',
+)
+@pytest.mark.parametrize('pool', [None, 'pool'])
+@pytest.mark.parametrize('action', ['replace', 'unregister'])
+def test_pending_health_owner_disposal_bounds_preserve_retry_state(
+    runtime, pool, action
+):
+    manager, dispatch = runtime
+    blocked, release = Event(), Event()
+    cleanup_entered, cleanup_release = Event(), Event()
+    incarnations = [object() for _ in range(manager.limit + 1)]
+    slots, references, observations, applied = [], [], [], []
+    owner_ready, retry_allowed = Event(), Event()
+    current = [
+        (lambda number=number: applied.append(number), lambda: None)
+        for number in range(manager.limit + 1)
+    ]
+    rejected_apply, rejected_notification = lambda: None, lambda: None
+
+    class Capture:
+        def __init__(self, number):
+            self.number = number
+
+        def __call__(self):
+            pytest.fail('retired capture was invoked')
+
+        def __del__(self):
+            observations.append(
+                (execution_context(), manager._condition._is_owned())
+            )
+            if self.number == 0:
+                cleanup_entered.set()
+                cleanup_release.wait(5)
+
+    def block(record):
+        blocked.set()
+        assert release.wait(5)
+
+    def owner(record):
+        for number, incarnation in enumerate(incarnations):
+            manager.register_health(incarnation)
+            old = Capture(number)
+            references.append(weakref.ref(old))
+            assert manager.observe_negative(incarnation, old)
+            old = None
+            slot = manager._health[id(incarnation)]
+            slots.append(slot)
+            if number == manager.limit:
+                with pytest.raises(ManagementOverloaded):
+                    if action == 'replace':
+                        manager.observe_negative(incarnation, *current[number])
+                    else:
+                        manager.unregister_health(incarnation)
+                assert slot.apply is references[number]()
+                assert slot.notification is None
+                assert slot.registered and not slot.removed
+                assert not slot.pending_disposal
+                continue
+            if action == 'replace':
+                assert manager.observe_negative(incarnation, *current[number])
+            else:
+                manager.unregister_health(incarnation)
+                assert not slot.registered
+                assert manager._health[id(incarnation)] is slot
+                # Empty repeated unregister/register never creates another slot.
+                manager.unregister_health(incarnation)
+                manager.register_health(incarnation)
+                assert manager._health[id(incarnation)] is slot
+                assert manager.observe_negative(incarnation, *current[number])
+            if number == 0:
+                assert cleanup_entered.wait(5)
+            for attempt in range(5):
+                with pytest.raises(ManagementOverloaded):
+                    if action == 'replace':
+                        manager.observe_negative(
+                            incarnation,
+                            rejected_apply,
+                            rejected_notification,
+                            removed=True,
+                        )
+                    else:
+                        manager.unregister_health(incarnation)
+                assert manager._health[id(incarnation)] is slot
+                assert (slot.apply, slot.notification) == current[number]
+                assert slot.registered and not slot.removed
+                assert slot.pending_disposal
+            assert manager._pending_health_disposals == number + 1
+        assert manager._pending_health_disposals == manager.limit
+        assert manager._health_active == 0
+        assert len(manager._handler_garbage) == manager.limit - 1
+        assert manager._capture_obligations == manager.limit
+        owner_ready.set()
+        assert retry_allowed.wait(5)
+        # Retry serially after each reservation has actually drained. Keep C
+        # occupied throughout, so every old pending pair remains unconsumed.
+        for incarnation in incarnations:
+            with manager._condition:
+                assert manager._condition.wait_for(
+                    lambda: manager._pending_health_disposals == 0, 5
+                )
+            manager.unregister_health(incarnation)
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: manager._pending_health_disposals == 0, 5
+            )
+
+    try:
+        if pool is not None:
+            manager.submit(block)
+            assert blocked.wait(5)
+        future = manager.submit(owner, pool=pool)
+        assert owner_ready.wait(5)
+        assert manager._pending_health_disposals == manager.limit
+        # First destructor is active, all other old captures remain queued.
+        assert (
+            sum(ref() is not None for ref in references) == manager.limit + 1
+        )
+        assert observations == [('cleanup', False)]
+        cleanup_release.set()
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: manager._pending_health_disposals == 0, 5
+            )
+        retry_allowed.set()
+        future.result(5)
+        assert all(not slot.pending_disposal for slot in slots)
+    finally:
+        cleanup_release.set()
+        retry_allowed.set()
+        release.set()
+        dispatch.drain()
+    with manager._condition:
+        assert manager._condition.wait_for(
+            lambda: manager._pending_health_disposals == 0
+            and manager._health_active == 0,
+            5,
+        )
+    gc.collect()
+    assert all(ref() is None for ref in references)
+    assert all(
+        context == 'cleanup' and not locked for context, locked in observations
+    )
+    assert not manager._health
+
+
+@pytest.mark.skipif(
+    platform.python_implementation() != 'CPython',
+    reason='Requires synchronous reference destruction',
+)
+@pytest.mark.parametrize('pool', [None, 'pool'])
+def test_pending_health_cleanup_close_holds_debt_and_guards_reentry(
+    runtime, pool
+):
+    manager, dispatch = runtime
+    blocked, release = Event(), Event()
+    cleanup_entered, cleanup_release = Event(), Event()
+    incarnation, observations = object(), []
+    weakrefs = []
+
+    class Capture:
+        def __call__(self):
+            pytest.fail('retired pending handler was invoked')
+
+        def __del__(self):
+            observations.append(
+                (execution_context(), manager._condition._is_owned())
+            )
+            for operation in (
+                lambda: manager.join(0),
+                lambda: manager.submit(lambda r: None, wait=True),
+                management.assert_can_wait,
+            ):
+                try:
+                    operation()
+                except ManagementContextError:
+                    observations.append('rejected')
+                else:
+                    observations.append('allowed')
+            # Closing during disposal retains this very reservation.
+            manager.close()
+            observations.append(manager._pending_health_disposals)
+            cleanup_entered.set()
+            cleanup_release.wait(5)
+
+    def block(record):
+        blocked.set()
+        assert release.wait(5)
+
+    def owner(record):
+        old = Capture()
+        weakrefs.append(weakref.ref(old))
+        assert manager.observe_negative(incarnation, old)
+        old = None
+        manager.unregister_health(incarnation)
+
+    try:
+        manager.register_health(incarnation)
+        slot = manager._health[id(incarnation)]
+        if pool is not None:
+            manager.submit(block)
+            assert blocked.wait(5)
+        future = manager.submit(owner, pool=pool)
+        assert cleanup_entered.wait(5)
+        assert observations == [
+            ('cleanup', False),
+            'rejected',
+            'rejected',
+            'rejected',
+            1,
+        ]
+        assert slot.pending_disposal
+        assert manager.closed.is_set()
+        assert not manager.finalized.is_set()
+        assert manager._capture_obligations >= 1
+        assert manager._pending_health_disposals == 1
+        cleanup_release.set()
+        release.set()
+        dispatch.drain()
+        manager.join(5)
+        assert not slot.pending_disposal
+        assert manager._pending_health_disposals == 0
+        assert manager._capture_obligations == 0
+        assert manager._health_active == 0
+        assert all(ref() is None for ref in weakrefs)
+    finally:
+        cleanup_release.set()
+        release.set()
+        dispatch.drain()
+
+
+@pytest.mark.skipif(
+    platform.python_implementation() != 'CPython',
+    reason='Requires synchronous reference destruction',
+)
+def test_pending_and_consumed_health_disposals_keep_the_same_slot(
+    runtime, monkeypatch
+):
+    manager, dispatch = runtime
+    cleanup_started, start_cleanup = Event(), Event()
+    pending_entered, release_pending = Event(), Event()
+    latest_entered, release_latest = Event(), Event()
+    first_applied, latest_applied, latest_notified = Event(), Event(), Event()
+    incarnation, observations, applied = object(), [], []
+    cleanup = manager._run_handler_cleanup
+
+    def held_cleanup():
+        cleanup_started.set()
+        assert start_cleanup.wait(5)
+        cleanup()
+
+    monkeypatch.setattr(manager, '_run_handler_cleanup', held_cleanup)
+
+    class Apply:
+        def __init__(self, number):
+            self.number = number
+
+        def __call__(self):
+            applied.append(self.number)
+            if self.number == 0:
+                first_applied.set()
+            elif self.number == 3:
+                latest_applied.set()
+
+        def __del__(self):
+            observations.append(
+                (
+                    self.number,
+                    execution_context(),
+                    manager._condition._is_owned(),
+                )
+            )
+            if self.number == 1:
+                pending_entered.set()
+                release_pending.wait(5)
+            elif self.number == 3:
+                latest_entered.set()
+                release_latest.wait(5)
+
+    def owner(record):
+        assert manager.observe_negative(incarnation, Apply(1))
+        assert manager.observe_negative(incarnation, lambda: None)
+        with pytest.raises(ManagementOverloaded):
+            manager.unregister_health(incarnation)
+
+    try:
+        manager.register_health(incarnation)
+        assert cleanup_started.wait(5)
+        assert manager.observe_negative(incarnation, Apply(0))
+        assert first_applied.wait(5)
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: bool(manager._handler_garbage), 5
+            )
+        manager.submit(owner, pool='pool').result(5)
+        slot = manager._health[id(incarnation)]
+        assert slot.active and slot.pending_disposal
+        assert manager._health_active == 1
+        assert manager._pending_health_disposals == 1
+        # A nonowner keeps immediate outside-lock disposal even when this
+        # incarnation already has both independently charged batches.
+        manager.unregister_health(incarnation)
+        assert not slot.registered
+        assert manager._health[id(incarnation)] is slot
+        start_cleanup.set()
+        assert pending_entered.wait(5)
+        # The consumed record drained first; its release must retain the
+        # unregistered tombstone while the pending destructor still runs.
+        assert not slot.active and slot.pending_disposal
+        assert manager._health[id(incarnation)] is slot
+        assert manager._health_active == 0
+        assert manager._pending_health_disposals == 1
+        manager.register_health(incarnation)
+        assert manager._health[id(incarnation)] is slot
+        assert manager.observe_negative(
+            incarnation, Apply(3), latest_notified.set
+        )
+        assert latest_applied.wait(5)
+        assert latest_notified.wait(5)
+        assert applied == [0, 3]
+        manager.unregister_health(incarnation)
+        release_pending.set()
+        assert latest_entered.wait(5)
+        # Pending disposal drained; the separately charged consumed record
+        # now keeps the same tombstone until its destructor returns.
+        assert slot.active and not slot.pending_disposal
+        assert manager._health[id(incarnation)] is slot
+        assert manager._health_active == 1
+        assert manager._pending_health_disposals == 0
+        manager.close()
+        assert not manager.finalized.is_set()
+        release_latest.set()
+        dispatch.drain()
+        manager.join(5)
+        assert manager._capture_obligations == 0
+        assert manager._health_active == 0
+        assert manager._pending_health_disposals == 0
+        assert observations == [
+            (0, 'cleanup', False),
+            (1, 'cleanup', False),
+            (3, 'cleanup', False),
+        ]
+    finally:
+        start_cleanup.set()
+        release_pending.set()
+        release_latest.set()
+        dispatch.drain()
+
+
+@pytest.mark.parametrize('pool', [None, 'pool'])
+def test_pending_health_owner_overload_is_independent_of_gc(
+    runtime, monkeypatch, pool
+):
+    manager, dispatch = runtime
+    cleanup_started, cleanup_release = Event(), Event()
+    blocked, release = Event(), Event()
+    cleanup = manager._run_handler_cleanup
+    incarnation, first, second = object(), lambda: None, lambda: None
+
+    def held_cleanup():
+        cleanup_started.set()
+        assert cleanup_release.wait(5)
+        cleanup()
+
+    monkeypatch.setattr(manager, '_run_handler_cleanup', held_cleanup)
+
+    def block(record):
+        blocked.set()
+        assert release.wait(5)
+
+    def owner(record):
+        assert manager.observe_negative(incarnation, first)
+        manager.unregister_health(incarnation)
+        slot = manager._health[id(incarnation)]
+        assert not slot.registered and slot.pending_disposal
+        for number in range(20):
+            manager.register_health(incarnation)
+            assert manager._health[id(incarnation)] is slot
+            if number == 0:
+                assert manager.observe_negative(incarnation, second)
+            else:
+                with pytest.raises(ManagementOverloaded):
+                    manager.observe_negative(incarnation, second)
+            with pytest.raises(ManagementOverloaded):
+                manager.unregister_health(incarnation)
+            assert slot.registered and slot.apply is second
+            assert manager._pending_health_disposals == 1
+        assert not slot.active
+        assert manager._capture_obligations == 1
+
+    try:
+        manager.register_health(incarnation)
+        assert cleanup_started.wait(5)
+        if pool is not None:
+            manager.submit(block)
+            assert blocked.wait(5)
+        manager.submit(owner, pool=pool).result(5)
+        cleanup_release.set()
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: manager._pending_health_disposals == 0, 5
+            )
+        manager.unregister_health(incarnation)
+    finally:
+        cleanup_release.set()
+        release.set()
+        dispatch.drain()
+
+
+@pytest.mark.parametrize('action', ['replace', 'unregister'])
+def test_pending_health_disposal_append_failure_preserves_retry_state(
+    runtime, monkeypatch, action
+):
+    from collections import deque
+
+    manager, dispatch = runtime
+    cleanup_started, cleanup_release = Event(), Event()
+    incarnation = object()
+    old_apply, old_notification = lambda: None, lambda: None
+    new_apply, new_notification = lambda: None, lambda: None
+    cleanup = manager._run_handler_cleanup
+    failures = []
+
+    class FailOnce(deque):
+        fail = True
+
+        def append(self, entry):
+            if entry[2] is not None and self.fail:
+                self.fail = False
+                raise RuntimeError('pending-health append failed')
+            super().append(entry)
+
+    garbage = FailOnce()
+    monkeypatch.setattr(manager, '_handler_garbage', garbage)
+
+    def held_cleanup():
+        cleanup_started.set()
+        assert cleanup_release.wait(5)
+        cleanup()
+
+    monkeypatch.setattr(manager, '_run_handler_cleanup', held_cleanup)
+
+    def change():
+        if action == 'replace':
+            manager.observe_negative(
+                incarnation, new_apply, new_notification, removed=True
+            )
+        else:
+            manager.unregister_health(incarnation)
+
+    def owner(record):
+        assert manager.observe_negative(
+            incarnation, old_apply, old_notification
+        )
+        slot = manager._health[id(incarnation)]
+        try:
+            change()
+        except RuntimeError as error:
+            failures.append(error)
+        else:
+            pytest.fail('injected queue append did not fail')
+        assert (slot.apply, slot.notification) == (old_apply, old_notification)
+        assert slot.registered and not slot.removed
+        assert not slot.pending_disposal
+        assert manager._pending_health_disposals == 0
+        assert manager._capture_obligations == 0
+        assert not garbage
+        change()
+        assert slot.pending_disposal
+        assert manager._pending_health_disposals == 1
+        assert manager._capture_obligations == 1
+        assert len(garbage) == 1
+        if action == 'replace':
+            assert slot.registered and slot.removed
+            assert (slot.apply, slot.notification) == (
+                new_apply,
+                new_notification,
+            )
+        else:
+            assert not slot.registered
+            assert slot.apply is slot.notification is None
+
+    try:
+        manager.register_health(incarnation)
+        assert cleanup_started.wait(5)
+        manager.submit(owner).result(5)
+        assert len(failures) == 1
+        assert failures[0].__traceback__ is not None
+        cleanup_release.set()
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: manager._pending_health_disposals == 0, 5
+            )
+    finally:
+        cleanup_release.set()
+        failures.clear()
+        dispatch.drain()
 
 
 def test_reactor_channel_returns_only_its_borrow_after_detach():
