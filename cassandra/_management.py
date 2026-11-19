@@ -25,19 +25,23 @@ batch. State not yet migrated still requires its original publication
 locks.
 """
 
-from concurrent.futures import Future
+from collections import deque
+from concurrent.futures import Future, TimeoutError
 from contextlib import contextmanager
 from dataclasses import dataclass
-from functools import wraps
+from functools import partial, wraps
+from itertools import chain
 import logging
 import os
-from threading import Condition, Event, Lock, local
+from threading import Condition, Event, Lock, Thread, current_thread, local
+import time
 from typing import NamedTuple
 
 from cassandra import DriverException
 
 log = logging.getLogger(__name__)
 _context = local()
+_PENDING = object()
 
 
 class ManagementClosed(DriverException):
@@ -430,3 +434,803 @@ class _Record:
         self.delivery_again = False
         self.notification = False
         self.released = False
+
+
+class _Notification:
+    """Transfer a native callback to the callback lane."""
+
+    def __init__(self, callback):
+        self.callbacks = [callback]
+
+    def __call__(self, record):
+        runtime = record.runtime
+        with runtime._condition:
+            if runtime._closing or record.handler_done or record.released:
+                return _PENDING
+            record.notification = True
+            runtime._notifications.append((record, self.callbacks.pop()))
+            runtime._condition.notify_all()
+        return _PENDING
+
+
+
+
+class _LifetimeHandle:
+    def __init__(self, runtime):
+        self.runtime = runtime
+        self.closed = Event()
+
+
+class ManagementRuntime:
+    """One C owner, two P runners, one callback and one cleanup lane.
+
+    ``dispatch`` schedules a callable on the shared reactor, never inline
+    on C/P. It must remain usable until ``finalized``. Catastrophic loss
+    closes admission and records ``completion_error``; native terminal
+    outcomes stay immutable while physical cleanup continues.
+
+    Private-native handler captures retire on the dedicated cleanup lane
+    outside runtime and Future locks. Private reservations cover disposal;
+    ordinary and coalesced handlers retain ordinary credit on L. Cleanup
+    rejects self-dependent blocking management calls.
+    """
+
+    def __init__(self, dispatch, limit=1024, pool_limit=64, reentry_window=64,
+                 on_finalized=None):
+        self._dispatch = dispatch
+        self.limit, self.pool_limit = limit, pool_limit
+        self.reentry_window = reentry_window
+        self.lifetime = object()
+        self._pid = os.getpid()
+        self._condition = Condition()
+        self._cluster = deque()
+        self._pools = {}
+        self._ready = deque()
+        self._active_pools = set()
+        self._notifications = deque()
+        self._callback_garbage = deque()
+        self._handler_garbage = deque()
+        self._records = set()
+        self._keys = {}
+        self._pool_credits = {}
+        self._credits = 0
+        self._mailbox_pending = 0
+        self._delivery_batches = 0
+        self._reentry_credits = 0
+        self._reentry_active = False
+        self._sequence = 0
+        self._started = False
+        self._closing = False
+        self.completion_error = None
+        self.cleanup_error = None
+        self._threads = []
+        self._exited = 0
+        self._cleanup_obligations = 0
+        self._capture_obligations = 0
+        self._finalizing = False
+        self._on_finalized = on_finalized
+        self._lifetimes = set()
+        self.closed = Event()
+        self.finalized = Event()
+        self.high_waters = dict.fromkeys(
+            ('ordinary', 'reentry', 'aggregate', 'health', 'close', 'delivery',
+             'mailbox'), 0)
+
+    def _observe_counts_locked(self):
+        counts = {
+            'ordinary': self._credits, 'reentry': self._reentry_credits,
+            'aggregate': int(self._reentry_active),
+            'health': 0,
+            'close': len(self._lifetimes) + self._cleanup_obligations,
+            'delivery': self._delivery_batches,
+            'mailbox': self._mailbox_pending}
+        for kind, count in counts.items():
+            self.high_waters[kind] = max(self.high_waters[kind], count)
+        return counts
+
+    def counts(self):
+        self._check_pid()
+        with self._condition:
+            return self._observe_counts_locked()
+
+    def start(self):
+        self._check_pid()
+        with self._condition:
+            self._check_pid()
+            if self._closing:
+                raise ManagementClosed('Management lifetime is closed')
+            if self._started:
+                return
+            self._started = True
+            # Start disposal first: a later partial-start failure may retire
+            # accepted captures without ever starting the callback lane.
+            targets = [('cleanup', self._run_handler_cleanup),
+                       ('cluster', self._run_cluster),
+                       ('pool', self._run_pool), ('pool', self._run_pool),
+                       ('callback', self._run_notifications)]
+            try:
+                for kind, target in targets:
+                    entry = _ThreadStart(partial(self._run, kind, target))
+                    thread = Thread(target=entry,
+                                    name='cassandra-management-' + kind,
+                                    daemon=True)
+                    try:
+                        # Publish ownership before native launch: interruption
+                        # after start returns must not hide an entered runner.
+                        self._threads.append(thread)
+                        thread.start()
+                    except BaseException:
+                        # Only an entered target owns runtime resources. A
+                        # late bootstrap sees the revoked entry and exits
+                        # without retaining or touching this runtime.
+                        if not entry.revoke() and thread in self._threads:
+                            self._threads.remove(thread)
+                        raise
+            except BaseException:
+                self._begin_close_locked()
+                # Started threads exit once this startup lock is released.
+                raise
+
+    def _check_pid(self):
+        if self._pid != os.getpid():
+            raise ManagementClosed(
+                'Inherited management runtime cannot run after fork')
+
+    def assert_owner(self, pool=None):
+        self._check_pid()
+        record = getattr(_context, 'record', None)
+        if (execution_context() != ('cluster' if pool is None else 'pool') or
+                record is None or record.runtime is not self or
+                record.pool is not pool):
+            raise ManagementContextError(
+                'Management state accessed outside its owner')
+
+    def _capacity(self, pool, budget):
+        if budget == 'aggregate':
+            return not self._reentry_active
+        if budget == 'reentry':
+            return self._reentry_credits < self.reentry_window
+        return (self._credits < self.limit and
+                (pool is None or
+                 self._pool_credits.get(pool, 0) < self.pool_limit))
+
+    def submit(self, handler, *, pool=None, key=None, identity=(),
+               kind='operation', origin=None, wait=False, timeout=None,
+               budget='ordinary', reserve=0):
+        if budget not in ('ordinary', 'reentry', 'aggregate'):
+            raise ManagementContextError('Unknown management admission budget')
+        if reserve not in (0, 1) or (reserve and key is not None):
+            raise ManagementContextError(
+                'Physical fanout requires separate admitted records')
+        if reserve:
+            raise ManagementContextError(
+                'Physical work is not available in this foundation')
+        if wait:
+            assert_can_wait()
+        if pool is not None:
+            hash(pool)
+        self.start()
+        deadline = None if timeout is None else time.monotonic() + timeout
+        with self._condition:
+            self._check_pid()
+            while not self._closing and not self._capacity(pool, budget):
+                if not wait:
+                    raise ManagementOverloaded(
+                        'Management admission capacity exhausted')
+                if (_callback_runtime() is self and
+                        budget in ('ordinary', 'aggregate')):
+                    raise ManagementContextError(
+                        'Callback admission cannot wait behind its own credit')
+                remaining = (None if deadline is None
+                             else deadline - time.monotonic())
+                if remaining is not None and remaining <= 0:
+                    raise TimeoutError()
+                self._condition.wait(remaining)
+            if self._closing:
+                raise ManagementClosed('Management lifetime is closed')
+            coalesce = (pool, key) if key is not None else None
+            record = self._keys.get(coalesce) if coalesce is not None else None
+            new_record = record is None
+            if new_record:
+                self._sequence += 1
+                envelope = Envelope(self._sequence, kind, origin,
+                                    self.lifetime, tuple(identity))
+                record = _Record(self, envelope, handler, pool, coalesce)
+                record.physical = reserve
+            # Prepare fallible metadata and Future state before charging it.
+            future = OperationFuture(record)
+            future._budget = budget
+            if budget == 'aggregate':
+                self._reentry_active = True
+            elif budget == 'reentry':
+                self._reentry_credits += 1
+            else:
+                if pool is not None:
+                    self._pool_credits[pool] = (
+                        self._pool_credits.get(pool, 0) + 1)
+                self._credits += 1
+            record.futures.append(future)
+            record.budgets[budget] += 1
+            if new_record:
+                self._records.add(record)
+                key_registered = False
+                try:
+                    if coalesce is not None:
+                        self._keys[coalesce] = record
+                        key_registered = True
+                    self._enqueue_locked(record, lambda: self._handle(record))
+                except BaseException:
+                    if key_registered:
+                        self._keys.pop(coalesce, None)
+                    # Publication did not accept this record. Its existing
+                    # charge covers safe retirement of the rejected captures.
+                    record.key = None
+                    record.handler_done = True
+                    record.started.set()
+                    record.physical = 0
+                    record.futures.clear()
+                    self._release_locked(record)
+                    raise
+            self._observe_counts_locked()
+            self._condition.notify_all()
+            return future
+
+    def _account_mailbox_locked(self, record, delta):
+        record.mailbox_pending += delta
+        self._mailbox_pending += delta
+
+    def _dequeue_locked(self, queue):
+        entry = queue.popleft()
+        self._account_mailbox_locked(entry.record, -1)
+        entry.record.executing = True
+        return entry
+
+    def _set_delivery_locked(self, record, active):
+        if record.delivery != active:
+            self._delivery_batches += 1 if active else -1
+            record.delivery = active
+
+    def _enqueue_locked(self, record, callback, retain_on_close=False):
+        if record.pool is None:
+            queue = self._cluster
+            activate = False
+        else:
+            activate = (record.pool not in self._active_pools and
+                        record.pool not in self._ready)
+            queue = self._pools.setdefault(record.pool, deque())
+        entry = _MailboxEntry(record, callback, retain_on_close)
+        queue.append(entry)
+        self._account_mailbox_locked(record, 1)
+        if activate:
+            self._ready.append(record.pool)
+        self._condition.notify_all()
+
+    def _handle(self, record):
+        if record.handler_done:
+            return
+        record.started.set()
+        try:
+            outcome = record.handler(record)
+            if outcome is _PENDING:
+                return
+        except BaseException as exc:
+            if not self._finish(record, error=exc):
+                log.exception('Error in retired management handler')
+        else:
+            self._finish(record, outcome)
+
+    def _finish(self, record, result=None, error=None):
+        with self._condition:
+            if record.handler_done:
+                return False
+            record.handler_done = True
+            record.started.set()
+            if record.key is not None:
+                self._keys.pop(record.key, None)
+            for future in record.futures:
+                with future._condition:
+                    if not future.done():
+                        # Keep cancellation and terminal publication atomic,
+                        # but defer the cross-future delivery scan until this
+                        # condition is released. Stdlib bulk waits acquire
+                        # these conditions in a different order.
+                        future._publishing = True
+                        try:
+                            if error is None:
+                                future.set_result(result)
+                            else:
+                                future.set_exception(error)
+                        finally:
+                            future._publishing = False
+            self._queue_delivery_locked(record)
+            self._release_locked(record)
+            return True
+
+    def supersede(self, future):
+        self._check_pid()
+        self._finish(future._record,
+                     error=ManagementSuperseded('Operation superseded'))
+
+
+
+    def notify(self, callback, *, wait=False, timeout=None, budget='ordinary'):
+        self._check_pid()
+        return self.submit(_Notification(callback), wait=wait, timeout=timeout,
+                           budget=budget, kind='notification')
+
+    @contextmanager
+    def synchronous_reentry(self):
+        """Reserve one L aggregate and a bounded prerequisite window."""
+        self._check_pid()
+        assert_can_wait()
+        if _callback_runtime() is not self:
+            yield 'ordinary'
+            return
+        with self._condition:
+            if self._reentry_active:
+                raise ManagementContextError(
+                    'Recursive native reentry aggregate')
+            if self._closing:
+                raise ManagementClosed('Management lifetime is closed')
+            self._reentry_active = True
+        try:
+            yield 'reentry'
+        finally:
+            self._check_pid()
+            with self._condition:
+                self._reentry_active = False
+                self._condition.notify_all()
+
+
+
+
+
+    def register_lifetime(self):
+        """Return a caller-owned handle for an active lifetime."""
+        self._check_pid()
+        with self._condition:
+            if self._closing:
+                raise ManagementClosed('Management lifetime is closed')
+            handle = _LifetimeHandle(self)
+            self._lifetimes.add(handle)
+            self._observe_counts_locked()
+            return handle
+
+    def close_lifetime(self, handle, retire):
+        self._check_pid()
+        if (not isinstance(handle, _LifetimeHandle) or
+                handle.runtime is not self):
+            raise ManagementContextError(
+                'Close handle belongs to another runtime')
+        with self._condition:
+            closed = handle.closed
+            if closed.is_set():
+                return closed
+            # Retirement is native, short and must not run application code.
+            retire()
+            closed.set()
+            self._lifetimes.discard(handle)
+            return closed
+
+    def _schedule_callbacks(self, future):
+        with self._condition:
+            record = future._record
+            self._queue_delivery_locked(record, future)
+
+    def _delivery_failed_locked(self, record, error):
+        for future in chain(record.futures, record.foreign_futures):
+            self._retire_captures_locked(future._delivery.fail(error))
+
+    def _retire_captures_locked(self, captures, record=None, *, native=False):
+        if captures:
+            # Last captures can run arbitrary finalizers. Native private and
+            # health handlers must retire independently of an occupied L.
+            if record is not None:
+                record.notification = True
+            queue = self._handler_garbage if native else self._callback_garbage
+            queue.append((captures, record))
+            self._capture_obligations += 1
+            self._condition.notify_all()
+
+    def _queue_delivery_locked(self, record, future=None):
+        if record.delivery:
+            return
+        futures = ((future,) if future is not None else
+                   chain(record.futures, record.foreign_futures))
+        if not any(
+                future.done() and
+                future._delivery.pending
+                for future in futures):
+            return
+        if self.completion_error is not None:
+            self._delivery_failed_locked(record, self.completion_error)
+            return
+        self._set_delivery_locked(record, True)
+        self._observe_counts_locked()
+        self._dispatch_delivery_locked(record)
+
+    def _resume_delivery(self, record):
+        """Resume a deferred batch when its drainer returns."""
+        self._check_pid()
+        with self._condition:
+            if record.released or not record.delivery:
+                return
+            if record.delivery_ticket is not None:
+                record.delivery_again = True
+            else:
+                self._dispatch_delivery_locked(record)
+
+    def _dispatch_delivery_locked(self, record):
+        if self.completion_error is not None:
+            self._delivery_failed_locked(record, self.completion_error)
+            self._set_delivery_locked(record, False)
+            self._release_locked(record)
+            return
+        record.delivery_ticket = _DeliveryTicket(lambda: self._deliver(record))
+        try:
+            self._dispatch(record.delivery_ticket)
+        except BaseException as exc:
+            self._set_delivery_locked(record, False)
+            error = ManagementDeliveryFailed(
+                'Completion reactor rejected management delivery')
+            error.__cause__ = exc
+            self.completion_error = error
+            for pending in tuple(self._records):
+                self._delivery_failed_locked(pending, error)
+                ticket = pending.delivery_ticket
+                if ticket is None or ticket.cancel():
+                    self._set_delivery_locked(pending, False)
+                    pending.delivery_ticket = None
+                    self._release_locked(pending)
+            # Infrastructure failure closes admission. Native outcomes already
+            # published are immutable; remaining waiters receive shutdown.
+            # Inactive queued tickets are abandoned; an active delivery keeps
+            # its credit until it returns. Undeliverable callbacks are never
+            # retried or executed as application code on an owner.
+            log.exception('Management reactor completion delivery failed')
+            self.close()
+
+    def _deliver(self, record):
+        with _entered('bridge', record):
+            with self._condition:
+                record.delivery_again = False
+            while True:
+                with self._condition:
+                    futures = tuple(chain(record.futures,
+                                          record.foreign_futures))
+                stalled = False
+                for future in futures:
+                    if future.done():
+                        if not future._delivery.drain(record):
+                            stalled = True
+                with self._condition:
+                    if any(
+                            future.done() and (future._delivery.pending or
+                                               future._delivery.running)
+                            for future in chain(record.futures,
+                                                record.foreign_futures)):
+                        if stalled:
+                            # Another caller is executing a callback. Keep the
+                            # charged batch and yield I/O until its handoff.
+                            record.delivery_ticket = None
+                            if record.delivery_again:
+                                record.delivery_again = False
+                                self._dispatch_delivery_locked(record)
+                            return
+                        continue
+                    self._set_delivery_locked(record, False)
+                    record.delivery_ticket = None
+                    record.delivery_again = False
+                    self._release_locked(record)
+                    return
+
+    def _release_private_locked(self, record):
+        if not record.private_released:
+            if record.budgets['aggregate']:
+                self._reentry_active = False
+            self._reentry_credits -= record.budgets['reentry']
+            record.private_released = True
+            self._condition.notify_all()
+
+    def _release_locked(self, record):
+        if (record.released or not record.handler_done or record.physical or
+                record.mailbox_pending or record.executing):
+            return
+        # Ordinary credit bounds a coalesced handler through its L retirement.
+        # Otherwise private credit must cover disposal on the independent
+        # cleanup lane, rather than funding an unbounded uncharged backlog.
+        if record.budgets['ordinary']:
+            self._release_private_locked(record)
+        if record.delivery or record.notification:
+            return
+        captures = []
+        if record.attempt is not None:
+            captures = record.attempt.retire_captures()
+            record.attempt = None
+        notification = isinstance(record.handler, _Notification)
+        if notification:
+            callbacks, record.handler.callbacks = record.handler.callbacks, []
+            if captures:
+                captures.extend(callbacks)
+            else:
+                captures = callbacks
+        elif (record.handler is not None and
+              record.handler is not _compatibility_reservation):
+            captures.append(record.handler)
+        record.handler = None
+        if captures:
+            self._retire_captures_locked(
+                captures, record,
+                native=not record.budgets['ordinary'] and not notification)
+            return
+        self._release_private_locked(record)
+        record.released = True
+        count = record.budgets['ordinary']
+        if count:
+            self._credits -= count
+            if record.pool is not None:
+                remaining = self._pool_credits[record.pool] - count
+                if remaining:
+                    self._pool_credits[record.pool] = remaining
+                else:
+                    del self._pool_credits[record.pool]
+        self._records.discard(record)
+        for future in record.foreign_futures:
+            with future._condition:
+                if future._delivery.record is record:
+                    future._delivery.record = future._record
+        record.foreign_futures.clear()
+        self._condition.notify_all()
+        self._maybe_finalized_locked()
+
+    def _run(self, kind, target):
+        with _entered(kind, runtime=self):
+            try:
+                target()
+            finally:
+                with self._condition:
+                    self._exited += 1
+                    self._maybe_finalized_locked()
+
+
+
+    def _run_cluster(self):
+        while True:
+            with self._condition:
+                while not self._cluster and not self._closing:
+                    self._condition.wait()
+                if self._closing and not self._cluster:
+                    return
+                record, callback, _ = self._dequeue_locked(self._cluster)
+            self._execute(record, callback, 'cluster')
+            with self._condition:
+                self._release_locked(record)
+            record = callback = None
+
+    def _run_pool(self):
+        while True:
+            with self._condition:
+                while not self._ready and not self._closing:
+                    self._condition.wait()
+                if self._closing and not self._ready:
+                    return
+                pool = self._ready.popleft()
+                self._active_pools.add(pool)
+                record, callback, _ = self._dequeue_locked(self._pools[pool])
+            self._execute(record, callback, 'pool')
+            with self._condition:
+                self._active_pools.remove(pool)
+                self._release_locked(record)
+                if self._pools[pool]:
+                    self._ready.append(pool)
+                else:
+                    del self._pools[pool]
+                self._condition.notify_all()
+            record = callback = pool = None
+
+    def _execute(self, record, callback, kind):
+        with _entered(kind, record):
+            try:
+                callback()
+            except BaseException as exc:
+                if not self._finish(record, error=exc):
+                    log.exception('Error in retired management continuation')
+            finally:
+                with self._condition:
+                    record.executing = False
+                    self._release_locked(record)
+
+    def _run_notifications(self):
+        while True:
+            with self._condition:
+                while not self._notifications and not self._callback_garbage:
+                    # A deferred delivery can still fail after close. Keep L
+                    # available until every possible producer has retired.
+                    if self._closing and not self._records:
+                        return
+                    self._condition.wait()
+                if self._callback_garbage:
+                    garbage, retiring_record = self._callback_garbage.popleft()
+                else:
+                    garbage = None
+                    record, callback = self._notifications.popleft()
+            if garbage is not None:
+                with _entered('callback', runtime=self):
+                    try:
+                        garbage.clear()
+                    finally:
+                        garbage = None
+                        with self._condition:
+                            self._capture_obligations -= 1
+                            if retiring_record is not None:
+                                retiring_record.notification = False
+                                self._release_locked(retiring_record)
+                            self._maybe_finalized_locked()
+                retiring_record = None
+                continue
+            with _entered('callback', record):
+                try:
+                    value = callback()
+                except BaseException as exc:
+                    log.exception('Error in management notification callback')
+                    self._finish(record, error=exc)
+                else:
+                    self._finish(record, value)
+                finally:
+                    # Drop a bound adapter before publishing released credits;
+                    # an idle lane must not root its last coordinator.
+                    callback = None
+                    with self._condition:
+                        record.notification = False
+                        self._release_locked(record)
+            record = callback = value = None
+
+    def _run_handler_cleanup(self):
+        """Dispose native captures without borrowing L or workers.
+
+        Disposal owns the record's private credit or health slot until
+        it finishes. Blocking management reentry from this lane is
+        rejected: it could otherwise wait for the very credit being
+        disposed.
+        """
+        while True:
+            with self._condition:
+                while not self._handler_garbage:
+                    if self._closing and not self._records:
+                        return
+                    self._condition.wait()
+                garbage, record = self._handler_garbage.popleft()
+            try:
+                garbage.clear()
+            finally:
+                garbage = None
+                with self._condition:
+                    self._capture_obligations -= 1
+                    record.notification = False
+                    self._release_locked(record)
+                    self._maybe_finalized_locked()
+            record = None
+
+    def retain_cleanup(self):
+        """Retain an explicit cleanup obligation in the ``close`` count.
+
+        Callback-capture retirement is tracked separately and does not
+        change this count's units or its high-water sampling points.
+        """
+        self._check_pid()
+        with self._condition:
+            if self._finalizing:
+                raise ManagementClosed('Management cleanup lifetime has ended')
+            self._cleanup_obligations += 1
+            self._observe_counts_locked()
+        completed = Event()
+        def release():
+            self._check_pid()
+            with self._condition:
+                if not completed.is_set():
+                    completed.set()
+                    self._cleanup_obligations -= 1
+                    self._maybe_finalized_locked()
+        return release
+
+    def close(self, wait=False):
+        """Retire admission and return the shared ``closed`` event.
+
+        The outermost call sets the event after native retirement. A
+        reentrant call may return it before the outer call finishes.
+        ``wait`` checks the synchronous context and waits for this
+        event. Use :meth:`join` to wait for cleanup, callback delivery
+        and runner termination.
+        """
+        self._check_pid()
+        if wait:
+            assert_can_wait()
+        with self._condition:
+            self._check_pid()
+            self._begin_close_locked()
+        if wait and execution_context() not in ('callback', 'worker'):
+            self.closed.wait()
+        return self.closed
+
+    def _begin_close_locked(self):
+        if self._closing:
+            return
+        self._closing = True
+        for record in tuple(self._records):
+            self._finish(record, error=ManagementClosed(
+                'Management lifetime ended'))
+        for record, callback in self._notifications:
+            self._retire_captures_locked([callback])
+            record.notification = False
+            self._release_locked(record)
+        self._notifications.clear()
+        def retained_results(queue):
+            retained = deque()
+            for item in queue:
+                if item.retain_on_close:
+                    retained.append(item)
+                else:
+                    self._account_mailbox_locked(item.record, -1)
+                    self._release_locked(item.record)
+            return retained
+        self._cluster = retained_results(self._cluster)
+        for pool, queue in tuple(self._pools.items()):
+            retained = retained_results(queue)
+            if retained or pool in self._active_pools:
+                self._pools[pool] = retained
+            else:
+                del self._pools[pool]
+        self._ready = deque(pool for pool in self._ready
+                            if pool in self._pools)
+        self._keys.clear()
+        for handle in self._lifetimes:
+            handle.closed.set()
+        self._lifetimes.clear()
+        self._condition.notify_all()
+        self.closed.set()
+        self._maybe_finalized_locked()
+
+    def _maybe_finalized_locked(self):
+        if (self.closed.is_set() and not self._records and
+                not self._cleanup_obligations
+                and not self._capture_obligations
+                and self._exited == len(self._threads)
+                and not self._finalizing):
+            self._finalizing = True
+            if self._on_finalized is None:
+                self.finalized.set()
+            else:
+                try:
+                    self._on_finalized(self.finalized.set)
+                except BaseException:
+                    log.exception(
+                        'Error detaching management completion channel')
+                    self.finalized.set()
+
+    def join(self, timeout=None):
+        self._check_pid()
+        assert_can_wait()
+        if execution_context() in ('callback', 'worker'):
+            raise ManagementContextError('Cannot join own management resource')
+        deadline = None if timeout is None else time.monotonic() + timeout
+        if not self.finalized.wait(timeout):
+            raise TimeoutError()
+        for thread in self._threads:
+            if thread is not current_thread():
+                remaining = (None if deadline is None else
+                             max(0, deadline - time.monotonic()))
+                thread.join(remaining)
+                if thread.is_alive():
+                    raise TimeoutError()
+
+
+
+
+
+
+
+
+
+
+def _compatibility_reservation(record):
+    return _PENDING
