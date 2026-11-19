@@ -429,6 +429,7 @@ class _Record:
         self.futures = []
         self.foreign_futures = set()
         self.physical = 0
+        self.attempt = None
         self.mailbox_pending = 0
         self.started = Event()
         self.handler_done = False
@@ -462,12 +463,15 @@ class _PhysicalAttempt:
 
     Shared state is protected by the runtime condition. Physical credit stays
     charged until the worker has finished disposing any rejected result.
+    The record keeps callback and result references until they can be dropped
+    on a safe disposal lane.
     """
 
     def __init__(self, record, function, accept, dispose):
         self.runtime = record.runtime
         self.record = record
         self.function, self.accept, self.dispose = function, accept, dispose
+        self.value = self.error = self.accepted = None
         self.returned_to_owner = Event()
         self.adopted = False
         self.received = False
@@ -508,10 +512,12 @@ class _PhysicalAttempt:
             if self.received:
                 return
             self.received = True
+            self.value, self.error = value, error
             if not self.runtime._closing:
+                # The adapter retains only module state. Application captures
+                # remain on this attempt until the whole record can retire.
                 self.runtime._enqueue_locked(
-                    self.record, lambda: self.returned(value, error),
-                    retain_on_close=True)
+                    self.record, self.returned, retain_on_close=True)
                 queued = True
             else:
                 queued = False
@@ -532,23 +538,32 @@ class _PhysicalAttempt:
                 self.record.physical -= 1
                 self.runtime._release_locked(self.record)
 
-    def returned(self, value, error):
+    def returned(self):
         try:
             with self.runtime._condition:
                 if self.runtime._closing or self.record.handler_done:
                     return
-                if error is not None:
-                    self.runtime._finish(self.record, error=error)
+                if self.error is not None:
+                    self.runtime._finish(self.record, error=self.error)
                 else:
                     try:
-                        accepted = self.accept(value)
+                        self.accepted = self.accept(self.value)
                     except BaseException as exc:
+                        self.error = exc
                         self.runtime._finish(self.record, error=exc)
                     else:
                         self.adopted = True
-                        self.runtime._finish(self.record, accepted)
+                        self.runtime._finish(self.record, self.accepted)
         finally:
             self.returned_to_owner.set()
+
+    def retire_captures(self):
+        """Detach application references after the native handoff retires."""
+        captures = [self.function, self.accept, self.dispose,
+                    self.value, self.error, self.accepted]
+        self.function = self.accept = self.dispose = None
+        self.value = self.error = self.accepted = None
+        return captures
 
     def physical_work(self):
         with self.runtime._condition:
@@ -872,14 +887,16 @@ class ManagementRuntime:
         self.assert_owner(record.pool)
         with self._condition:
             if (getattr(_context, 'record', None) is not record or
-                    record.released or record.handler_done or record.physical):
+                    record.released or record.handler_done or
+                    record.physical or record.attempt is not None):
                 raise ManagementContextError(
                     'Physical work requires its current unused '
                     'result reservation')
+            record.attempt = _PhysicalAttempt(
+                record, function, accept, dispose)
             record.physical = 1
             self._condition.notify_all()
-        return _PhysicalAttempt(record, function, accept, dispose).submit(
-            executor)
+        return record.attempt.submit(executor)
 
     def notify(self, callback, *, wait=False, timeout=None, budget='ordinary'):
         self._check_pid()
@@ -1123,20 +1140,25 @@ class ManagementRuntime:
             self._release_private_locked(record)
         if record.delivery or record.notification:
             return
-        if isinstance(record.handler, _Notification):
-            captures = record.handler.callbacks
-            record.handler = None
+        captures = []
+        if record.attempt is not None:
+            captures = record.attempt.retire_captures()
+            record.attempt = None
+        notification = isinstance(record.handler, _Notification)
+        if notification:
+            callbacks, record.handler.callbacks = record.handler.callbacks, []
             if captures:
-                self._retire_captures_locked(captures, record)
-                return
-        elif record.handler is _compatibility_reservation:
-            # This module-owned function has no captures to dispose.
-            record.handler = None
-        elif record.handler is not None:
+                captures.extend(callbacks)
+            else:
+                captures = callbacks
+        elif (record.handler is not None and
+              record.handler is not _compatibility_reservation):
+            captures.append(record.handler)
+        record.handler = None
+        if captures:
             self._retire_captures_locked(
-                [record.handler], record,
-                native=not record.budgets['ordinary'])
-            record.handler = None
+                captures, record,
+                native=not record.budgets['ordinary'] and not notification)
             return
         self._release_private_locked(record)
         record.released = True

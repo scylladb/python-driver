@@ -2059,8 +2059,11 @@ def test_interrupted_compatibility_attachment_retains_work_until_completion(
             physical.set_exception(ValueError('physical work failed'))
         thread.join(5)
         assert not thread.is_alive()
-        # Inspect retirement before cleaning up a failed assertion's debt.
+        # The caller can finish while the capture-free native sentinel still
+        # unwinds. Fence that frame before inspecting reservation retirement.
         with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: all(not record.executing for record in records), 5)
             debt_after_completion = sum(record.physical for record in records)
             credits_after_completion = manager.counts()['ordinary']
             for record in records:
@@ -3397,7 +3400,7 @@ def test_private_cleanup_progresses_with_all_physical_workers_waiting():
                     reason='Requires synchronous reference destruction')
 def test_health_incarnation_churn_retains_bounded_cleanup_slots():
     manager = ManagementRuntime(Dispatcher(), limit=2)
-    entered, release = Event(), Event()
+    entered, release, second_applied = Event(), Event(), Event()
     applied = []
 
     class Apply:
@@ -3406,6 +3409,8 @@ def test_health_incarnation_churn_retains_bounded_cleanup_slots():
 
         def __call__(self):
             applied.append(self.number)
+            if self.number == 1:
+                second_applied.set()
 
         def __del__(self):
             if self.number == 0:
@@ -3421,9 +3426,7 @@ def test_health_incarnation_churn_retains_bounded_cleanup_slots():
         incarnation = object()
         manager.register_health(incarnation)
         manager.observe_negative(incarnation, Apply(1))
-        with manager._condition:
-            assert manager._condition.wait_for(
-                lambda: manager._health_active == manager.limit, 5)
+        assert second_applied.wait(5)
         manager.unregister_health(incarnation)
         for number in range(2, 102):
             incarnation = object()
@@ -3661,7 +3664,8 @@ def test_interrupt_after_thread_start_return_keeps_runner_owned(
     manager._run = held_run
     old_trace = sys.gettrace()
     def interrupt(frame, event, arg):
-        if frame.f_code is ManagementRuntime.start.__code__ and event == 'line':
+        if (frame.f_code is ManagementRuntime.start.__code__ and
+                event == 'line'):
             sys.settrace(old_trace)
             frame.f_trace = old_trace
             raise KeyboardInterrupt('after native start returned')
@@ -3727,3 +3731,220 @@ def test_failed_health_apply_logs_and_suppresses_its_notification(
         assert 'health state was not applied' in caplog.text
     finally:
         release.set()
+
+
+@pytest.mark.skipif(platform.python_implementation() != 'CPython',
+                    reason='Requires synchronous reference destruction')
+@pytest.mark.parametrize('pool', [None, 'physical-pool'])
+@pytest.mark.parametrize('budget', ['ordinary', 'reentry'])
+@pytest.mark.parametrize('order', ['worker-first', 'mailbox-first'])
+@pytest.mark.parametrize('ending', ['accept', 'discard', 'error', 'reject',
+                                    'close', 'closed'])
+def test_physical_captures_retire_on_charged_safe_lane(
+        monkeypatch, pool, budget, order, ending):
+    import weakref
+    from cassandra._management import ManagementSuperseded
+
+    manager = ManagementRuntime(Dispatcher(), limit=8, reentry_window=1)
+    executor = ThreadPoolExecutor(1)
+    work_entered, work_release = Event(), Event()
+    blocker_entered, blocker_release = Event(), Event()
+    owner_returned, owner_release = Event(), Event()
+    worker_returned, worker_release = Event(), Event()
+    capture_entered, capture_release = Event(), Event()
+    listener_entered, listener_release = Event(), Event()
+    captures_done = Event()
+    records, references, observed, disposed = [], [], [], []
+    weak_observed = []
+    expected_count = 3 if ending in ('error', 'reject') else 4
+    execute = manager._execute
+
+    class Capture:
+        def __init__(self, kind):
+            self.kind = kind
+            def retired(reference, name=kind):
+                weak_observed.append((name, execution_context(),
+                                      current_thread() in manager._threads,
+                                      manager._condition._is_owned()))
+            references.append(weakref.ref(self, retired))
+
+        def __del__(self):
+            observed.append((self.kind, execution_context(),
+                             manager._condition._is_owned(),
+                             not records[0].released,
+                             current_thread() in manager._threads))
+            if self.kind == 'accept':
+                capture_entered.set()
+                capture_release.wait(5)
+            if len(observed) == expected_count:
+                captures_done.set()
+
+    class ControlledExecutor:
+        def submit(self, function):
+            if ending == 'reject':
+                raise RuntimeError('executor rejected before launch')
+            physical, start = Future(), Event()
+            register = physical.add_done_callback
+
+            def add_callback(callback):
+                def completed(future):
+                    callback(future)
+                    worker_returned.set()
+                    if order == 'mailbox-first':
+                        worker_release.wait(5)
+                register(completed)
+                del physical.add_done_callback
+                start.set()
+
+            physical.add_done_callback = add_callback
+
+            def run():
+                assert start.wait(5)
+                work_entered.set()
+                assert work_release.wait(5)
+                if ending == 'error':
+                    # Infrastructure may fail before invoking the callable.
+                    physical.set_exception(ValueError('executor failed'))
+                else:
+                    physical.set_result(function())
+            executor.submit(run)
+            return physical
+
+    def hold_owner(record, callback, kind):
+        execute(record, callback, kind)
+        with manager._condition:
+            returned = (records and record is records[0] and
+                        record.handler_done and not record.mailbox_pending)
+        if returned:
+            owner_returned.set()
+            if order == 'worker-first':
+                owner_release.wait(5)
+
+    def handler(record):
+        records.append(record)
+        # These defaults are created here; the retained handler has no
+        # reference to them after its first native frame returns.
+        def function(owned=Capture('function')):
+            return Capture('value')
+        def accept(value, owned=Capture('accept')):
+            return 17
+        def dispose(value, owned=Capture('dispose')):
+            disposed.append((value.kind, execution_context()))
+        outcome = manager.work(record, ControlledExecutor(), function,
+                               accept=accept, dispose=dispose)
+        if ending == 'reject':
+            # Discard the caller-owned traceback while the native frame and
+            # attempt still retain every callback. Its frame-back aliases
+            # would otherwise outlive the runtime's ownership under test.
+            record.futures[0].exception().__traceback__ = None
+        return outcome
+
+    monkeypatch.setattr(manager, '_execute', hold_owner)
+    try:
+        if budget == 'reentry':
+            manager.notify(lambda: (listener_entered.set(),
+                                    listener_release.wait(5)))
+            assert listener_entered.wait(5)
+        future = manager.submit(handler, pool=pool, budget=budget)
+        if ending != 'reject':
+            assert work_entered.wait(5)
+            manager.submit(lambda record: None, pool=pool).result(5)
+            if ending == 'closed':
+                # No result mailbox can be accepted after native shutdown.
+                manager.close()
+                work_release.set()
+            else:
+                manager.submit(lambda record: (
+                    blocker_entered.set(), blocker_release.wait(5)), pool=pool)
+                assert blocker_entered.wait(5)
+                work_release.set()
+                with manager._condition:
+                    assert manager._condition.wait_for(
+                        lambda: future._record.mailbox_pending == 1, 5)
+                if ending == 'discard':
+                    manager.supersede(future)
+                elif ending == 'close':
+                    manager.close()
+                blocker_release.set()
+        if ending != 'closed':
+            assert owner_returned.wait(5)
+        if ending != 'reject':
+            assert worker_returned.wait(5)
+        if ending == 'accept':
+            assert future.result(5) == 17
+        else:
+            error = future.exception(5)
+            expected = {'discard': ManagementSuperseded,
+                        'close': ManagementClosed,
+                        'closed': ManagementClosed,
+                        'error': ValueError, 'reject': RuntimeError}[ending]
+            assert isinstance(error, expected)
+            # The caller owns the published exception. Remove its traceback
+            # alias so this test isolates the runtime's callback ownership.
+            error.__traceback__ = None
+        if order == 'worker-first':
+            executor.submit(lambda: None).result(5)
+            owner_release.set()
+        else:
+            if ending in ('close', 'closed'):
+                for thread in manager._threads:
+                    if thread.name in ('cassandra-management-cluster',
+                                       'cassandra-management-pool'):
+                        thread.join(5)
+                        assert not thread.is_alive()
+            else:
+                manager.submit(lambda record: None, pool=pool).result(5)
+            worker_release.set()
+            executor.submit(lambda: None).result(5)
+        assert capture_entered.wait(5)
+        assert not future._record.released
+        assert manager.counts()[budget] >= 1
+        capture_release.set()
+        assert captures_done.wait(5)
+        wait_for_retirement(manager, future)
+        expected_context = 'callback' if budget == 'ordinary' else 'cleanup'
+        expected_names = ['accept', 'dispose', 'function']
+        if expected_count == 4:
+            expected_names.append('value')
+        assert sorted(kind for kind, *_ in observed) == expected_names
+        assert all(not locked and charged and
+                   (context == expected_context or
+                    (kind == 'value' and not managed))
+                   for kind, context, locked, charged, managed in observed)
+        assert sorted(kind for kind, *_ in weak_observed) == expected_names
+        assert all(not locked and
+                   (context == expected_context or
+                    (kind == 'value' and not managed))
+                   for kind, context, managed, locked in weak_observed)
+        assert all(reference() is None for reference in references)
+        assert disposed == ([('value', 'worker')]
+                            if ending in ('discard', 'close', 'closed') else [])
+    finally:
+        for event in (work_release, blocker_release, owner_release,
+                      worker_release, capture_release, listener_release):
+            event.set()
+        manager.close()
+        executor.shutdown(wait=False, cancel_futures=True)
+        manager.join(5)
+        for thread in executor._threads:
+            thread.join(5)
+            assert not thread.is_alive()
+
+
+def test_completed_physical_attempt_keeps_its_unused_reservation(runtime):
+    manager, dispatch = runtime
+    physical = Future()
+    physical.set_exception(ValueError('failed before execution'))
+    class Executor:
+        def submit(self, function):
+            return physical
+    def handler(record):
+        manager.work(record, Executor(), lambda: None)
+        assert record.physical == 0
+        with pytest.raises(ManagementContextError):
+            manager.work(record, Executor(), lambda: None)
+        return management._PENDING
+    future = manager.submit(handler)
+    with pytest.raises(ValueError, match='failed before execution'):
+        future.result(5)
+    wait_for_retirement(manager, future)
