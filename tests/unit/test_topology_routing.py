@@ -14,7 +14,9 @@
 
 """Routing must use the Hosts published by a real topology refresh."""
 
-from unittest.mock import Mock
+from contextlib import nullcontext
+from threading import RLock
+from unittest.mock import Mock, patch
 from uuid import UUID
 
 import pytest
@@ -34,6 +36,7 @@ from cassandra.tablets import Tablet
 from tests.unit.test_control_connection import (
     MockConnection, _node_meta_results,
 )
+from tests.unit.utils import new_session_with_pool_state
 
 
 @pytest.fixture
@@ -102,6 +105,69 @@ def assert_current_plan(cluster, plan):
     assert len({id(host) for host in plan}) == len(plan)
     for host in plan:
         assert_current_host(cluster, host)
+
+
+@pytest.mark.parametrize('peer_location', [('dc2', 'rack1', 0)], indirect=True)
+@pytest.mark.parametrize('transition', ['promote', 'demote', 'swap'])
+def test_location_refresh_reconciles_session_pools(routing_cluster, transition):
+    cluster, connection, policy = routing_cluster
+    hosts = cluster.metadata.all_hosts()
+    session = new_session_with_pool_state()
+    session.cluster = cluster
+    session._profile_manager = cluster.profile_manager
+    session.keyspace = None
+    session.is_shutdown = False
+    session._initial_connect_futures = set()
+    cluster.sessions.add(session)
+
+    def make_pool(host, distance, session, **kwargs):
+        pool = Mock(host=host, endpoint=host.endpoint, is_shutdown=False,
+                    host_distance=distance, _keyspace=None,
+                    _membership_lock=RLock())
+        pool._lock_usable_connection.side_effect = lambda: nullcontext(True)
+        pool.shutdown.side_effect = lambda: setattr(pool, 'is_shutdown', True)
+        return pool
+
+    for host in hosts:
+        distance = cluster.profile_manager.distance(host)
+        if distance != HostDistance.IGNORED:
+            session._pools[host] = make_pool(host, distance, session)
+    initial_pools = dict(session._pools)
+    pending = []
+    reconcile = session.update_created_pools
+
+    def record_reconciliation():
+        futures = reconcile()
+        pending.extend(futures)
+        return futures
+
+    local = connection.local_results[1][0]
+    peers = connection.peer_results[1]
+    dc_index = connection.peer_results[0].index('data_center')
+    if transition in ('promote', 'swap'):
+        peers[0][dc_index] = 'dc1'
+    if transition in ('demote', 'swap'):
+        local[connection.local_results[0].index('data_center')] = 'dc2'
+        peers[1][dc_index] = 'dc2'
+    connection.wait_for_responses.return_value = _node_meta_results(
+        connection.local_results, connection.peer_results)
+
+    with patch('cassandra.cluster.HostConnection', side_effect=make_pool), \
+            patch.object(session, 'update_created_pools',
+                         side_effect=record_reconciliation):
+        cluster.control_connection.refresh_node_list_and_token_map()
+        for future in pending:
+            assert future.result(timeout=5)
+
+    expected = {host for host in hosts
+                if cluster.profile_manager.distance(host) != HostDistance.IGNORED}
+    assert set(session._pools) == expected
+    assert set(policy.make_query_plan()) == expected
+    for host, pool in initial_pools.items():
+        assert pool.is_shutdown == (host not in expected)
+    for host, pool in session._pools.items():
+        assert pool.host_distance == cluster.profile_manager.distance(host)
+        assert not pool.is_shutdown
 
 
 @pytest.mark.parametrize('transition', ['move', 'rebirth'])

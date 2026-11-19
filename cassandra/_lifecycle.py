@@ -752,7 +752,18 @@ class LifecycleCoordinator:
                 changed = self._cluster.metadata._update_host_location(
                     host, datacenter, rack)
             if changed:
-                self.dispatch_current(host, self._cluster.profile_manager.on_up)
+                if not self.dispatch_current(
+                        host, self._cluster.profile_manager.on_up):
+                    return
+                for session in tuple(self._cluster.sessions):
+                    if not self.is_current(host):
+                        return
+                    try:
+                        session.update_created_pools()
+                    except Exception:
+                        log.exception(
+                            "Error reconciling pools after location change "
+                            "for host %s in session %s", host, session)
         finally:
             with self.transaction():
                 if getattr(host, '_pending_location_token', None) is token:

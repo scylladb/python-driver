@@ -693,6 +693,29 @@ def test_location_transition_removes_old_policy_membership(topology, policy_kind
     assert host not in list(policy.make_query_plan())
 
 
+@pytest.mark.parametrize('first_session_action', ['error', 'retire'])
+def test_location_reconciliation_checks_each_session(topology,
+                                                    first_session_action):
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    sessions = [Mock(), Mock()]
+    if first_session_action == 'error':
+        sessions[0].update_created_pools.side_effect = RuntimeError('reconcile')
+    else:
+        sessions[0].update_created_pools.side_effect = lambda: cluster.remove_host(
+            host, refresh_nodes=False)
+
+    with patch.object(cluster, 'sessions', sessions):
+        cluster.control_connection._update_location_info(host, 'dc2', 'rack2')
+
+    sessions[0].update_created_pools.assert_called_once_with()
+    if first_session_action == 'error':
+        sessions[1].update_created_pools.assert_called_once_with()
+    else:
+        sessions[1].update_created_pools.assert_not_called()
+    assert host._pending_location is None
+
+
 @pytest.mark.parametrize('custom_callback', ['distance', 'reset'])
 def test_custom_policy_refresh_does_not_hold_host_state_lock(topology, custom_callback):
     cluster, connection = topology
