@@ -154,6 +154,7 @@ class _HealthSlot:
     removed: bool = False
     registered: bool = True
     active: bool = False
+    pending_disposal: bool = False
 
 
 class _MailboxEntry(NamedTuple):
@@ -614,7 +615,10 @@ class ManagementRuntime:
     covered by ordinary credit on L. Consumed health records have one
     slot per incarnation and at most ``limit`` active slots, independent
     of ordinary admission. Pending health observations coalesce while
-    their slot or this capacity is held. Cleanup-context blocking calls
+    their slot or this capacity is held. Owner replacement or removal of
+    pending captures reserves at most one separate disposal batch per
+    incarnation and at most ``limit`` batches overall, rejecting before
+    mutation when this capacity is full. Cleanup-context blocking calls
     reject self-dependent waits.
     """
 
@@ -654,6 +658,7 @@ class ManagementRuntime:
         self._on_finalized = on_finalized
         self._health = {}
         self._health_active = 0
+        self._pending_health_disposals = 0
         self._unknown_refresh = None
         self._lifetimes = set()
         self.closed = Event()
@@ -978,7 +983,11 @@ class ManagementRuntime:
             # An already pending removal is terminal for this incarnation.
             if slot.removed and not removed:
                 return True
-            retired = (slot.apply, slot.notification)
+            retired = [slot.apply, slot.notification]
+            if (execution_context() in ('cluster', 'pool') and
+                    any(capture is not None for capture in retired)):
+                self._retire_captures_locked(
+                    retired, native=True, health_slot=slot)
             slot.apply, slot.notification, slot.removed = (
                 apply, notification, removed)
             self._condition.notify_all()
@@ -998,12 +1007,16 @@ class ManagementRuntime:
             slot = self._health.get(id(incarnation))
             retired = None
             if slot is not None:
+                retired = [slot.apply, slot.notification]
+                if (execution_context() in ('cluster', 'pool') and
+                        any(capture is not None for capture in retired)):
+                    self._retire_captures_locked(
+                        retired, native=True, health_slot=slot)
                 slot.registered = False
-                retired = (slot.apply, slot.notification)
                 slot.apply = slot.notification = None
                 # Keep the same slot through disposal and re-registration.
                 # Its active handler must not create an uncharged old slot.
-                if not slot.active:
+                if not slot.active and not slot.pending_disposal:
                     del self._health[id(incarnation)]
         del retired
 
@@ -1043,14 +1056,36 @@ class ManagementRuntime:
         for future in chain(record.futures, record.foreign_futures):
             self._retire_captures_locked(future._delivery.fail(error))
 
-    def _retire_captures_locked(self, captures, record=None, *, native=False):
+    def _retire_captures_locked(self, captures, record=None, *, native=False,
+                               health_slot=None):
         if captures:
+            if health_slot is not None:
+                # Reserve before the caller changes pending health state.
+                # Disposal retains this charge through arbitrary finalizers.
+                if (health_slot.pending_disposal or
+                        self._pending_health_disposals >= self.limit):
+                    # The unchanged slot still owns these captures. Avoid
+                    # retaining an extra raw pair in the error traceback.
+                    captures.clear()
+                    raise ManagementOverloaded(
+                        'Pending health capture disposal is full')
             # Last captures can run arbitrary finalizers. Native private and
             # health handlers must retire independently of an occupied L.
             if record is not None:
                 record.notification = True
-            queue = self._handler_garbage if native else self._callback_garbage
-            queue.append((captures, record))
+            if native:
+                try:
+                    self._handler_garbage.append(
+                        (captures, record, health_slot))
+                except BaseException:
+                    if health_slot is not None:
+                        captures.clear()
+                    raise
+            else:
+                self._callback_garbage.append((captures, record))
+            if health_slot is not None:
+                health_slot.pending_disposal = True
+                self._pending_health_disposals += 1
             self._capture_obligations += 1
             self._condition.notify_all()
 
@@ -1203,7 +1238,7 @@ class ManagementRuntime:
             slot = record.health_slot
             slot.active = False
             self._health_active -= 1
-            if (not slot.registered and
+            if (not slot.registered and not slot.pending_disposal and
                     self._health.get(id(slot.incarnation)) is slot):
                 del self._health[id(slot.incarnation)]
         for future in record.foreign_futures:
@@ -1375,10 +1410,10 @@ class ManagementRuntime:
     def _run_handler_cleanup(self):
         """Dispose native captures without borrowing L or workers.
 
-        Disposal owns the record's private credit or health slot until
-        it finishes. Blocking management reentry from this lane is
-        rejected: it could otherwise wait for the very credit being
-        disposed.
+        Disposal owns the record's private credit, consumed-health slot,
+        or pending-health reservation until it finishes. Blocking
+        management reentry is rejected because it could wait for the
+        credit being disposed.
         """
         while True:
             with self._condition:
@@ -1386,17 +1421,27 @@ class ManagementRuntime:
                     if self._closing and not self._records:
                         return
                     self._condition.wait()
-                garbage, record = self._handler_garbage.popleft()
+                garbage, record, health_slot = self._handler_garbage.popleft()
             try:
                 garbage.clear()
             finally:
                 garbage = None
                 with self._condition:
                     self._capture_obligations -= 1
-                    record.notification = False
-                    self._release_locked(record)
+                    if record is not None:
+                        record.notification = False
+                        self._release_locked(record)
+                    if health_slot is not None:
+                        health_slot.pending_disposal = False
+                        self._pending_health_disposals -= 1
+                        if (not health_slot.registered and
+                                not health_slot.active and
+                                self._health.get(id(health_slot.incarnation))
+                                is health_slot):
+                            del self._health[id(health_slot.incarnation)]
+                        self._condition.notify_all()
                     self._maybe_finalized_locked()
-            record = None
+            record = health_slot = None
 
     def retain_cleanup(self):
         """Retain an explicit cleanup obligation in the ``close`` count.
