@@ -689,7 +689,7 @@ class ManagementRuntime:
         self._on_finalized = on_finalized
         self._join_completion = None
         self._close_completion = None
-        self._completion_detached = None
+        self._wait_completion = None
         self._completion_closing = False
         self._completion_retired = False
         self._native_runners = set()
@@ -1655,12 +1655,12 @@ class ManagementRuntime:
                     for record in self._records)))
             self._completion_retired = True
             close = self._close_completion
-            detached = self._completion_detached
+            wait_detached = self._wait_completion
         # The reactor drains accepted tickets outside runtime/Future locks.
         # Normal waiters share one event, not another callback registration.
         if close is not None:
             close()
-            detached.wait()
+            wait_detached()
 
     def _maybe_finalized_locked(self):
         if (self.closed.is_set() and not self._records and
@@ -1677,7 +1677,8 @@ class ManagementRuntime:
                 except BaseException:
                     log.exception(
                         'Error detaching management completion channel')
-                    self.finalized.set()
+                    # A failed detach retains its channel callback for retry.
+                    # Only actual completion may discharge finalization.
 
     def join(self, timeout=None):
         self._check_pid()
@@ -1778,9 +1779,11 @@ class ReactorChannel:
     def __init__(self, connection_class):
         self._closed = False
         self._close_lock = Lock()
+        self._close_condition = Condition(self._close_lock)
         self._detached = Event()
         self._close_callbacks = []
         self._close_error = None
+        self._close_running = False
         self._release = None
         self._fallback = None
         dispatch = getattr(connection_class, '_management_dispatch', None)
@@ -1810,43 +1813,76 @@ class ReactorChannel:
         dispatch(callback)
 
     def close(self, completed=None):
+        dispatch = previous_error = None
         with self._close_lock:
-            error = self._close_error
             done = self._detached.is_set()
-            if completed is not None and not done and error is None:
+            if completed is not None and not done:
                 self._close_callbacks.append(completed)
-            first = not self._closed
-            if first:
-                self._closed = True
-                release, self._release = self._release, None
+            start = not done and not self._close_running
+            if start:
+                self._closed = self._close_running = True
+                release = self._release
                 dispatch, self._dispatch = self._dispatch, None
-        if error is not None:
-            raise error
+                previous_error, self._close_error = self._close_error, None
+                had_finalizer = bool(self._close_callbacks)
         if done:
             if completed is not None:
                 completed()
-        elif first:
+        elif start:
+            original_error = None
             try:
-                if release is None:
-                    self._finish_close()
-                else:
-                    release(self._finish_close)
-            except BaseException as error:
-                with self._close_lock:
-                    self._close_error = error
-                    callbacks, self._close_callbacks = (
-                        self._close_callbacks, [])
-                callbacks.clear()
-                raise
+                for attempt in range(2):
+                    try:
+                        if release is None:
+                            self._finish_close()
+                        else:
+                            release(self._finish_close)
+                    except BaseException as error:
+                        with self._close_lock:
+                            self._close_error = error
+                            self._close_running = False
+                            # Finalization may join a normal in-flight close.
+                            # Hand its existing obligation one bounded retry.
+                            retry = (attempt == 0 and not had_finalizer and
+                                     bool(self._close_callbacks) and
+                                     not self._detached.is_set())
+                            if retry:
+                                self._close_running = True
+                            self._close_condition.notify_all()
+                        if original_error is not None:
+                            log.exception(
+                                'Error retrying management detachment')
+                            raise original_error
+                        if not retry:
+                            raise
+                        original_error = error
+                    else:
+                        if original_error is not None:
+                            raise original_error
+                        break
             finally:
-                dispatch = release = None
+                dispatch = release = previous_error = None
 
     def _finish_close(self):
         with self._close_lock:
             self._detached.set()
+            self._close_running = False
+            release, self._release = self._release, None
             callbacks, self._close_callbacks = self._close_callbacks, []
+            self._close_condition.notify_all()
+        # Native release is idempotent; a failed call may already have queued
+        # completion. Duplicate completions find no callbacks to run twice.
+        release = None
         for callback in callbacks:
             callback()
+
+    def wait_detached(self):
+        with self._close_condition:
+            self._close_condition.wait_for(lambda: (
+                self._detached.is_set() or
+                (not self._close_running and self._close_error is not None)))
+            if not self._detached.is_set():
+                raise self._close_error
 
     def join(self, timeout=None):
         if self._fallback is not None:

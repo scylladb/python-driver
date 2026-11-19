@@ -2266,20 +2266,43 @@ class Cluster(object):
         deferred cleanup submission raises, call ``shutdown()`` again
         from an application thread to finish the retained cleanup.
         """
+        managed = _lifecycle.managed_context(self)
+        completion_pending = False
+        attempt = wait_for = previous_attempt = None
         with self._lock:
             if self.is_shutdown:
                 cleanup = getattr(self, '_shutdown_cleanup', None)
                 if cleanup is None:
-                    return
+                    if managed:
+                        return
+                    previous_attempt = getattr(self, '_shutdown_attempt', None)
+                    if (previous_attempt is not None and
+                            not previous_attempt.done()):
+                        wait_for = previous_attempt
+                    else:
+                        completion_pending = getattr(
+                            self, '_shutdown_completion_pending', False)
+                        if completion_pending:
+                            attempt = self._shutdown_attempt = Future()
+                        elif previous_attempt is not None:
+                            wait_for = previous_attempt
+                        else:
+                            return
             else:
                 self.is_shutdown = True
                 cleanup = None
+                if not managed:
+                    attempt = self._shutdown_attempt = Future()
+
+        if wait_for is not None:
+            wait_for.result()
+            return
 
         if cleanup is not None:
             _lifecycle.retry_cleanup(self, self)
             return
 
-        if _lifecycle.managed_context(self):
+        if managed:
             try:
                 self._shutdown_future = _lifecycle.defer_cleanup(
                     self, partial(self._shutdown, wait_for_executor=False))
@@ -2287,10 +2310,18 @@ class Cluster(object):
                 self._lifecycle.close()
             return
 
-        # Once interpreter scheduler cleanup has begun, executor teardown is
-        # imminent and this call may itself be running on an executor worker.
-        self._shutdown(
-            wait_for_executor=not _cluster_scheduler_shutdown_started)
+        try:
+            if completion_pending:
+                self._finish_management_shutdown()
+            else:
+                # Interpreter cleanup may run on an executor worker.
+                self._shutdown(
+                    wait_for_executor=not _cluster_scheduler_shutdown_started)
+        except BaseException as error:
+            attempt.set_exception(error)
+            raise
+        else:
+            attempt.set_result(None)
 
     def _shutdown(self, wait_for_executor):
         """Finish cleanup after shutdown has been claimed under ``self._lock``."""
@@ -2312,8 +2343,23 @@ class Cluster(object):
 
         self.executor.shutdown(wait=wait_for_executor)
         if wait_for_executor and self._lifecycle._runtime is not None:
-            self._lifecycle._runtime.retire_completion()
+            with self._lock:
+                self._shutdown_completion_pending = True
+            self._finish_management_shutdown()
+        else:
+            self._finish_shutdown_tail()
 
+    def _finish_management_shutdown(self):
+        self._lifecycle._runtime.retire_completion()
+        self._finish_shutdown_tail()
+        with self._lock:
+            self._shutdown_completion_pending = False
+
+    def _finish_shutdown_tail(self):
+        with self._lock:
+            if getattr(self, '_shutdown_tail_started', False):
+                return
+            self._shutdown_tail_started = True
         if self.metrics_enabled and self.metrics:
             self.metrics.shutdown()
 

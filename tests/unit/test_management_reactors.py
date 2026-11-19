@@ -2068,7 +2068,7 @@ def test_retired_delivery_keeps_capture_credit_and_late_callback_order(
         assert capture_entered.wait(5)
         first.shutdown()
         assert manager._completion_retired
-        assert manager._completion_detached.is_set()
+        assert manager._close_completion.__self__._detached.is_set()
         assert not future._record.released
         assert manager._credits == 1
         caller.start()
@@ -2185,7 +2185,7 @@ def test_shutdown_drains_adopted_callback_wakeup_before_detaching(
         assert delivered.wait(5)
         assert returned.wait(5), 'retirement waited on capture-only debt'
         assert observations == ['bridge']
-        assert manager._completion_detached.is_set()
+        assert manager._close_completion.__self__._detached.is_set()
         assert not release_capture.is_set() and not manager.finalized.is_set()
         assert not errors
     finally:
@@ -2260,7 +2260,7 @@ def test_native_exit_tail_cannot_enqueue_after_completion_retirement(
         assert tail_entered.wait(5)
         assert returned.wait(5)
         assert manager._completion_retired
-        assert manager._completion_detached.is_set()
+        assert manager._close_completion.__self__._detached.is_set()
         native = next(thread for thread in manager._threads
                       if thread.name == 'cassandra-management-cluster')
         assert native.is_alive()
@@ -2278,3 +2278,275 @@ def test_native_exit_tail_cannot_enqueue_after_completion_retirement(
         manager.join(5)
         assert all(not thread.is_alive() for thread in manager._threads)
         assert not errors
+
+
+@pytest.mark.parametrize('failure', ['transient', 'permanent', 'after_complete'])
+def test_close_failure_preserves_concurrent_finalization(
+        connection_class, failure):
+    cluster = Cluster(connection_class=connection_class)
+    manager = cluster._lifecycle._ensure_runtime()
+    channel = manager._close_completion.__self__
+    native_release = channel._release
+    capture_entered, release_capture, release_entered, release_failure = (
+        Event(), Event(), Event(), Event())
+    finalizer_registered = Event()
+    errors, attempts = [], []
+    close = channel.close
+
+    def observed_close(completed=None):
+        result = close(completed)
+        if completed is not None:
+            finalizer_registered.set()
+        return result
+
+    manager._on_finalized = observed_close
+
+    class Capture:
+        def __del__(self):
+            capture_entered.set()
+            release_capture.wait(10)
+
+    def actual_release(done):
+        if native_release is None:
+            done()
+        else:
+            native_release(done)
+
+    def injected_release(done):
+        attempts.append(len(attempts) + 1)
+        if len(attempts) == 1:
+            release_entered.set()
+            assert release_failure.wait(10)
+        if failure == 'permanent' or len(attempts) == 1:
+            if failure == 'after_complete':
+                actual_release(done)
+                assert channel._detached.wait(5)
+            raise RuntimeError('injected synchronous reactor release failure')
+        actual_release(done)
+
+    def shutdown():
+        try:
+            cluster.shutdown()
+        except BaseException as error:
+            errors.append(error)
+
+    channel._release = injected_release
+    caller = Thread(target=shutdown, daemon=True)
+    try:
+        manager.submit(lambda record, capture=Capture(): 42,
+                       budget='reentry').result(5)
+        assert capture_entered.wait(5)
+        caller.start()
+        assert release_entered.wait(5)
+        release_capture.set()
+        assert finalizer_registered.wait(5)
+        assert len(channel._close_callbacks) == 1
+        assert not channel._detached.is_set()
+        release_failure.set()
+        caller.join(5)
+        assert not caller.is_alive()
+        assert len(errors) == 1
+        assert str(errors[0]) == (
+            'injected synchronous reactor release failure')
+        if failure == 'permanent':
+            assert len(attempts) == 2
+            assert not channel._detached.is_set()
+            assert not manager.finalized.is_set()
+            assert len(channel._close_callbacks) == 1
+            assert channel._release is injected_release
+            with pytest.raises(TimeoutError):
+                manager.join(.01)
+            channel._release = native_release
+            channel.close()
+        else:
+            assert len(attempts) == (1 if failure == 'after_complete' else 2)
+        manager.join(5)
+        assert channel._detached.is_set()
+        assert manager.finalized.is_set()
+        assert not channel._close_callbacks
+        assert channel._release is None
+        assert all(not thread.is_alive() for thread in manager._threads)
+        # Late duplicate native completion never repeats the callback.
+        channel._finish_close()
+        assert not channel._close_callbacks
+    finally:
+        release_capture.set()
+        release_failure.set()
+        if caller.ident is not None:
+            caller.join(5)
+            assert not caller.is_alive()
+        channel._release = native_release
+        channel.close()
+        cluster.shutdown()
+        manager.join(5)
+
+
+@pytest.mark.parametrize('permanent', [False, True])
+def test_public_shutdown_retries_failed_completion_and_tail(
+        connection_class, permanent):
+    cluster = Cluster(connection_class=connection_class)
+    manager = cluster._lifecycle._ensure_runtime()
+    channel = manager._close_completion.__self__
+    native_release = channel._release
+    capture_entered, release_capture, release_entered, release_failure = (
+        Event(), Event(), Event(), Event())
+    concurrent_waiting, concurrent_returned = Event(), Event()
+    errors, attempts = [], []
+    metrics = Mock()
+    cluster.metrics_enabled = True
+    cluster.metrics = metrics
+
+    class Capture:
+        def __del__(self):
+            capture_entered.set()
+            release_capture.wait(10)
+
+    def injected_release(done):
+        attempts.append(len(attempts) + 1)
+        if len(attempts) == 1:
+            release_entered.set()
+            assert release_failure.wait(10)
+        if permanent or len(attempts) == 1:
+            raise RuntimeError('injected shutdown detach failure')
+        if native_release is None:
+            done()
+        else:
+            native_release(done)
+
+    def shutdown():
+        try:
+            cluster.shutdown()
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            if current_thread() is concurrent:
+                concurrent_returned.set()
+
+    caller = Thread(target=shutdown, daemon=True)
+    concurrent = Thread(target=shutdown, daemon=True)
+    channel._release = injected_release
+    try:
+        manager.submit(lambda record, capture=Capture(): None,
+                       budget='reentry').result(5)
+        assert capture_entered.wait(5)
+        caller.start()
+        assert release_entered.wait(5)
+        result = cluster._shutdown_attempt.result
+
+        def observed_result():
+            concurrent_waiting.set()
+            return result()
+
+        cluster._shutdown_attempt.result = observed_result
+        concurrent.start()
+        assert concurrent_waiting.wait(5)
+        assert not concurrent_returned.is_set()
+        assert not channel._detached.is_set()
+        release_failure.set()
+        caller.join(5)
+        concurrent.join(5)
+        assert not caller.is_alive() and not concurrent.is_alive()
+        assert len(errors) == 2
+        assert all(str(error) == 'injected shutdown detach failure'
+                   for error in errors)
+        metrics.shutdown.assert_not_called()
+        assert cluster._shutdown_completion_pending
+        assert not channel._detached.is_set()
+        if permanent:
+            with pytest.raises(RuntimeError, match='shutdown detach failure'):
+                cluster.shutdown()
+            assert not channel._detached.is_set()
+            metrics.shutdown.assert_not_called()
+            channel._release = native_release
+        cluster.shutdown()
+        assert channel._detached.is_set()
+        assert not cluster._shutdown_completion_pending
+        metrics.shutdown.assert_called_once_with()
+        assert not manager.finalized.is_set(), 'capture disposal is still held'
+        cluster.shutdown()
+        metrics.shutdown.assert_called_once_with()
+    finally:
+        release_capture.set()
+        release_failure.set()
+        for thread in (caller, concurrent):
+            if thread.ident is not None:
+                thread.join(5)
+                assert not thread.is_alive()
+        channel._release = native_release
+        channel.close()
+        cluster.shutdown()
+        manager.join(5)
+        assert all(not thread.is_alive() for thread in manager._threads)
+
+
+def test_concurrent_public_shutdown_waits_for_original_executor(
+        connection_class, monkeypatch):
+    cluster = Cluster(connection_class=connection_class)
+    manager = cluster._lifecycle._ensure_runtime()
+    channel = manager._close_completion.__self__
+    worker_entered, release_worker, executor_waiting = Event(), Event(), Event()
+    capture_entered, release_capture = Event(), Event()
+    concurrent_waiting, returned = Event(), Event()
+    errors = []
+    shutdown_executor = cluster.executor.shutdown
+
+    def work():
+        worker_entered.set()
+        assert release_worker.wait(10)
+
+    def observed_executor_shutdown(wait=True, **kwargs):
+        executor_waiting.set()
+        return shutdown_executor(wait=wait, **kwargs)
+
+    monkeypatch.setattr(cluster.executor, 'shutdown', observed_executor_shutdown)
+
+    class Capture:
+        def __del__(self):
+            capture_entered.set()
+            release_capture.wait(10)
+
+    def shutdown():
+        try:
+            cluster.shutdown()
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            if current_thread() is concurrent:
+                returned.set()
+
+    caller = Thread(target=shutdown, daemon=True)
+    concurrent = Thread(target=shutdown, daemon=True)
+    cluster.executor.submit(work)
+    try:
+        assert worker_entered.wait(5)
+        manager.submit(lambda record, capture=Capture(): None,
+                       budget='reentry').result(5)
+        assert capture_entered.wait(5)
+        caller.start()
+        assert executor_waiting.wait(5)
+        result = cluster._shutdown_attempt.result
+
+        def observed_result():
+            concurrent_waiting.set()
+            return result()
+
+        cluster._shutdown_attempt.result = observed_result
+        concurrent.start()
+        assert concurrent_waiting.wait(5)
+        assert not returned.is_set() and not channel._detached.is_set()
+        release_worker.set()
+        caller.join(5)
+        concurrent.join(5)
+        assert not caller.is_alive() and not concurrent.is_alive()
+        assert returned.is_set() and channel._detached.is_set()
+        assert not manager.finalized.is_set(), 'capture disposal is still held'
+        assert not errors
+    finally:
+        release_worker.set()
+        release_capture.set()
+        for thread in (caller, concurrent):
+            if thread.ident is not None:
+                thread.join(5)
+                assert not thread.is_alive()
+        cluster.shutdown()
+        manager.join(5)
