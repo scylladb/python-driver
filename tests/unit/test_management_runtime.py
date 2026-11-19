@@ -1814,6 +1814,59 @@ def test_policy_phase_restores_context_and_only_reacquires_after_success(
     assert manager.counts()['ordinary'] == 0
 
 
+def test_policy_phase_waits_for_its_native_sentinel_frame(monkeypatch):
+    manager = ManagementRuntime(Dispatcher(), limit=1)
+    entered, release, waiting, finished = Event(), Event(), Event(), Event()
+    observations, errors = [], []
+    handle, wait_condition = manager._handle, manager._condition.wait
+
+    def delayed_handler(record):
+        handle(record)
+        entered.set()
+        assert release.wait(5)
+
+    def observe_wait(timeout=None):
+        if current_thread() is caller:
+            waiting.set()
+        return wait_condition(timeout)
+
+    @management.policy_call
+    def policy():
+        observations.append(manager.counts()['ordinary'])
+        raise ValueError('do not reacquire')
+
+    def invoke():
+        try:
+            with management.compatibility_call(manager):
+                with pytest.raises(ValueError, match='do not reacquire'):
+                    policy()
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            finished.set()
+
+    caller = Thread(target=invoke, daemon=True)
+    monkeypatch.setattr(manager, '_handle', delayed_handler)
+    monkeypatch.setattr(manager._condition, 'wait', observe_wait)
+    try:
+        caller.start()
+        assert entered.wait(5)
+        assert waiting.wait(5), 'phase release did not fence native execution'
+        assert not observations
+        release.set()
+        assert finished.wait(5)
+        assert not errors
+        assert observations == [0]
+    finally:
+        release.set()
+        try:
+            caller.join(5)
+        finally:
+            manager.close()
+            manager.join(5)
+    assert not caller.is_alive()
+
+
 @pytest.mark.parametrize('pool', [None, 'logical-pool'])
 def test_compatibility_work_rejects_owner_before_admission(
         runtime, monkeypatch, pool):

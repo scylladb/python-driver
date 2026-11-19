@@ -1562,6 +1562,9 @@ class _CompatibilityCall:
             self.runtime._check_pid()
             with self.runtime._condition:
                 self.runtime._complete_compatibility_locked(record)
+                # started fences admission, not the end of the sentinel's
+                # owner frame. Release the phase before user policy runs.
+                self.runtime._condition.wait_for(lambda: not record.executing)
 
 
 @contextmanager
