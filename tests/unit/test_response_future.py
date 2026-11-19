@@ -40,7 +40,8 @@ from cassandra.protocol import (ReadTimeoutErrorMessage, WriteTimeoutErrorMessag
                                 RESULT_KIND_ROWS, RESULT_KIND_SET_KEYSPACE,
                                 RESULT_KIND_SCHEMA_CHANGE, RESULT_KIND_PREPARED,
                                 ProtocolHandler)
-from cassandra.policies import RetryPolicy, ExponentialBackoffRetryPolicy, SimpleConvictionPolicy
+from cassandra.policies import (RetryPolicy, ExponentialBackoffRetryPolicy,
+                                FallthroughRetryPolicy, SimpleConvictionPolicy)
 from cassandra.pool import Host, NoConnectionsAvailable
 from cassandra.query import (SimpleStatement, PreparedStatement, BoundStatement,
                              BatchStatement)
@@ -963,6 +964,240 @@ class ResponseFutureTests(unittest.TestCase):
         with pytest.raises(ConnectionException):
             rf.result()
 
+    def make_failed_push_future(self, retry_policy, is_idempotent=False):
+        session = self.make_session()
+        connections = []
+        for i, host in enumerate((self.host1, self.host2), 1):
+            connection = Connection(DefaultEndPoint('127.0.0.%d' % i))
+            connection.close = Mock()
+            connection.push = Mock()
+            pool = session._pools[host]
+
+            def borrow(connection=connection, **kwargs):
+                with connection.lock:
+                    connection.in_flight += 1
+                    return connection, connection.get_request_id()
+
+            def give_back(connection, replace_only=False):
+                with connection.lock:
+                    connection.in_flight -= 1
+
+            pool.borrow_connection.side_effect = borrow
+            pool.return_connection.side_effect = give_back
+            connections.append(connection)
+
+        queued = []
+
+        def failed_push(data):
+            queued.append(data)
+            raise OSError('failed after queueing request bytes')
+
+        connections[0].push.side_effect = failed_push
+        query = SimpleStatement(
+            "UPDATE ks.counters SET n = n + 1 WHERE k = 0",
+            is_idempotent=is_idempotent)
+        message = QueryMessage(query=query.query_string,
+                               consistency_level=ConsistencyLevel.ONE)
+        rf = ResponseFuture(session, message, query, 10,
+                            retry_policy=retry_policy)
+        return rf, connections, queued
+
+    def test_failed_push_obeys_fallthrough_for_both_idempotency_flags(self):
+        for is_idempotent in (False, True):
+            with self.subTest(is_idempotent=is_idempotent):
+                policy = Mock(wraps=FallthroughRetryPolicy())
+                rf, (first, second), queued = self.make_failed_push_future(
+                    policy, is_idempotent)
+                assert rf.send_request()
+                assert queued
+                assert isinstance(rf._final_exception, ConnectionSendError)
+                policy.on_request_error.assert_called_once_with(
+                    rf.query, ConsistencyLevel.ONE,
+                    error=rf._final_exception, retry_num=0)
+                second.push.assert_not_called()
+                scheduler = rf.session.cluster.scheduler
+                scheduler.schedule_with_shutdown.assert_not_called()
+                assert rf._req_id is None
+
+    def test_failed_push_cleans_up_before_policy_decision(self):
+        policy = Mock(spec=RetryPolicy)
+        rf, (first, second), queued = self.make_failed_push_future(policy)
+        pool = rf.session._pools[self.host1]
+
+        def decide(*args, **kwargs):
+            assert first.is_defunct
+            assert first.in_flight == 0
+            assert not first._requests
+            assert not first.orphaned_request_ids
+            assert rf._connection is None
+            assert rf._request_pool is None
+            assert rf._req_id is None
+            pool.return_connection.assert_called_once_with(
+                first, replace_only=True)
+            return RetryPolicy.RETHROW, None
+
+        policy.on_request_error.side_effect = decide
+        assert rf.send_request()
+        policy.on_request_error.assert_called_once()
+        assert isinstance(rf._final_exception, ConnectionSendError)
+        second.push.assert_not_called()
+
+    def test_failed_push_preserves_retry_host_and_delay(self):
+        for decision in (RetryPolicy.RETRY, RetryPolicy.RETRY_NEXT_HOST):
+            with self.subTest(decision=decision):
+                policy = Mock(spec=RetryPolicy)
+                policy.on_request_error.return_value = (
+                    decision, ConsistencyLevel.QUORUM, 0.5)
+                rf, (first, second), queued = self.make_failed_push_future(
+                    policy)
+                assert rf.send_request()
+                scheduler = rf.session.cluster.scheduler.schedule_with_shutdown
+                scheduler.assert_called_once_with(
+                    0.5, ANY, rf._retry_task, decision == RetryPolicy.RETRY,
+                    self.host1, rf._page_generation)
+                second.push.assert_not_called()
+                assert rf.message.consistency_level == ConsistencyLevel.QUORUM
+                assert rf._query_retries == 1
+
+                # A same-host retry must borrow a new connection.
+                if decision == RetryPolicy.RETRY:
+                    pool = rf.session._pools[self.host1]
+                    replacement_pool = rf.session._pools[self.host2]
+                    pool.borrow_connection.side_effect = (
+                        replacement_pool.borrow_connection.side_effect)
+                args = scheduler.call_args.args
+                args[2](*args[3:])
+                second.push.assert_called_once()
+                expected_host = (self.host1 if decision == RetryPolicy.RETRY
+                                 else self.host2)
+                assert rf._current_host is expected_host
+
+    def test_failed_push_immediate_retry_preserves_active_stream(self):
+        policy = Mock(wraps=RetryPolicy())
+        rf, (first, second), queued = self.make_failed_push_future(policy)
+        second.request_ids.clear()
+        second.request_ids.append(17)
+
+        def schedule(delay, on_shutdown, fn, *args):
+            fn(*args)
+
+        scheduler = rf.session.cluster.scheduler.schedule_with_shutdown
+        scheduler.side_effect = schedule
+        assert rf.send_request()
+        assert queued
+        policy.on_request_error.assert_called_once_with(
+            rf.query, ConsistencyLevel.ONE,
+            error=rf._errors[self.host1], retry_num=0)
+        scheduler.assert_called_once_with(
+            0, ANY, rf._retry_task, False, self.host1, rf._page_generation)
+        second.push.assert_called_once()
+        assert rf._connection is second
+        assert rf._req_id == 17
+        assert 17 in second._requests
+
+    def test_failed_push_default_policy_schedules_next_host(self):
+        rf, (first, second), queued = self.make_failed_push_future(
+            RetryPolicy())
+        assert rf.send_request()
+        scheduler = rf.session.cluster.scheduler.schedule_with_shutdown
+        scheduler.assert_called_once_with(
+            0, ANY, rf._retry_task, False, self.host1, rf._page_generation)
+        second.push.assert_not_called()
+
+    def test_failed_push_ignore_finishes_without_second_send(self):
+        policy = Mock(spec=RetryPolicy)
+        policy.on_request_error.return_value = RetryPolicy.IGNORE, None
+        rf, (first, second), queued = self.make_failed_push_future(policy)
+        assert rf.send_request()
+        assert rf._is_final()
+        assert rf._final_exception is None
+        assert rf._final_result is None
+        second.push.assert_not_called()
+
+    def test_failed_push_policy_exception_is_propagated(self):
+        policy = Mock(spec=RetryPolicy)
+        error = ValueError('policy failed')
+        policy.on_request_error.side_effect = error
+        rf, (first, second), queued = self.make_failed_push_future(policy)
+        assert rf.send_request()
+        assert rf._final_exception is error
+        second.push.assert_not_called()
+        assert first.in_flight == 0
+
+    def test_failure_before_push_keeps_next_host_fallback(self):
+        policy = Mock(wraps=FallthroughRetryPolicy())
+        rf, (first, second), queued = self.make_failed_push_future(policy)
+        first._socket_writable = False
+        assert rf.send_request()
+        assert not queued
+        policy.on_request_error.assert_not_called()
+        second.push.assert_called_once()
+
+    def test_failed_internal_prepare_keeps_next_host_fallback(self):
+        policy = Mock(wraps=FallthroughRetryPolicy())
+        rf, (first, second), queued = self.make_failed_push_future(policy)
+        prepare = PrepareMessage(query=rf.query.query_string)
+        rf.query_plan = iter([self.host2])
+        rf._reprepare(prepare, self.host1, first,
+                      rf.session._pools[self.host1])
+        assert queued
+        policy.on_request_error.assert_not_called()
+        assert first.in_flight == 0
+        second.push.assert_called_once()
+        assert rf._current_host is self.host2
+        assert rf._req_id in second._requests
+
+    def test_failed_public_prepare_skips_retry_policy(self):
+        policy = Mock(wraps=FallthroughRetryPolicy())
+        rf, (first, second), queued = self.make_failed_push_future(policy)
+        rf.message = PrepareMessage(query=rf.query.query_string)
+        assert rf._query(self.host1) is None
+        assert queued
+        policy.on_request_error.assert_not_called()
+        assert first.in_flight == 0
+        assert not rf._is_final()
+
+    def test_failed_public_prepare_keeps_next_host_fallback(self):
+        policy = Mock(wraps=FallthroughRetryPolicy())
+        rf, (first, second), queued = self.make_failed_push_future(policy)
+        rf.message = PrepareMessage(query=rf.query.query_string)
+        assert rf.send_request()
+        assert queued
+        policy.on_request_error.assert_not_called()
+        assert first.in_flight == 0
+        second.push.assert_called_once()
+        assert rf._current_host is self.host2
+        assert rf._req_id in second._requests
+
+    def test_failed_speculative_push_preserves_primary_result(self):
+        for retry_policy in (FallthroughRetryPolicy(), RetryPolicy()):
+            with self.subTest(retry_policy=type(retry_policy).__name__):
+                policy = Mock(wraps=retry_policy)
+                rf, (primary, speculative), queued = (
+                    self.make_failed_push_future(policy, is_idempotent=True))
+                primary.push.side_effect = None
+                speculative.push.side_effect = OSError(
+                    'speculative push failed')
+                rf.row_factory = lambda names, rows: rows
+                assert rf.send_request()
+                primary_request_id = rf._req_id
+
+                rf._on_speculative_execute()
+
+                policy.on_request_error.assert_not_called()
+                scheduler = rf.session.cluster.scheduler
+                scheduler.schedule_with_shutdown.assert_not_called()
+                assert rf._query_retries == 0
+                assert not rf._is_final()
+                assert speculative.is_defunct
+                assert speculative.in_flight == 0
+                assert rf._connection is primary
+                assert rf._req_id == primary_request_id
+                rf._set_result(
+                    self.host1, primary, rf.session._pools[self.host1],
+                    self.make_mock_response(['value'], [('primary',)]))
+                assert list(rf.result()) == [('primary',)]
+
     def test_query_retires_connection_when_push_fails_after_queueing(self):
         session = self.make_session()
         pool = session._pools[self.host1]
@@ -1008,7 +1243,8 @@ class ResponseFutureTests(unittest.TestCase):
         rf._req_id = 7
         rf._request_pool = previous_pool
 
-        assert rf._query(self.host1) is None
+        rf._retry_policy = FallthroughRetryPolicy()
+        assert rf._query(self.host1) is _NOT_SET
         assert [call.kwargs for call in pool.return_connection.call_args_list] == \
             [{}, {'replace_only': True}]
         connection.close.assert_called_once_with()
@@ -1030,13 +1266,16 @@ class ResponseFutureTests(unittest.TestCase):
         connection.in_flight += 1
         pool.borrow_connection.return_value = (connection, request_id)
 
+        connection.close = Mock()
+
         def send_msg(*args, **kwargs):
             connection.defunct(ConnectionException('socket failed'))
             raise ConnectionSendError('push failed', connection.endpoint)
 
         connection.send_msg = send_msg
         rf = self.make_response_future(session)
-        assert rf._query(self.host1) is None
+        rf._retry_policy = FallthroughRetryPolicy()
+        assert rf._query(self.host1) is _NOT_SET
         assert not connection.signaled_error
         assert connection.last_error.args[0] == 'socket failed'
         pool.return_connection.assert_called_once_with(connection)
