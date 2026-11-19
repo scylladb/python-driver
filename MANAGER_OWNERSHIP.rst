@@ -908,9 +908,9 @@ does not itself establish an accepted change to public behavior.
      - Every arrangement retains late-result disposal, idempotent close,
        original resource ownership and no self/cyclic join. Thread counts,
        workloads, thresholds and measurement procedure remain proposals.
-       Decide whether normal external shutdown also waits for arbitrary capture
-       disposal or leaves it to eventual finalization; no choice is accepted
-       here.
+       See `Shutdown and resource ownership`_ for the worked candidate's
+       selected normal external shutdown boundary and its separate capture
+       disposal and finalization obligations.
      - Before #1262 deletion, cover all lifetime/partial-initialization/fork
        obligations. Before #1257 runtime implementation obtain the required
        workload/budget agreement; before #1263 acceptance record the agreed
@@ -1142,14 +1142,20 @@ waits for its executor, so an active listener on another executor worker can
 block it. The callback-origin self-join exemption depends on delivery in the
 calling thread; closing the lifecycle coordinator alone does not join callbacks
 and does not define the whole Cluster shutdown boundary. Moving notifications
-to L must not silently change that external wait behavior. Whether
-``Cluster.shutdown()`` also waits for the new capture-disposal debt is an open
-adapter compatibility decision, not a guarantee established by the runtime
-primitive. Leaving that debt to eventual finalization is a proposal that avoids
-adding a wait on arbitrary destructors; waiting for it instead can make normal
-shutdown unbounded. Include the chosen API boundary in the pre-#1257 agreement;
-test shutdown with cleanup paused, then release cleanup and verify final
+to L must not silently change that external wait behavior. For the worked
+candidate, normal external ``Cluster.shutdown()`` must return after native and
+reactor shutdown completes, without waiting for capture disposal. The dedicated
+bounded cleanup service finishes that disposal separately. This selected API
+boundary does not make the native closed event a physical-resource barrier or
+make shutdown wait for the runtime's finalization/join barrier. Adapter
+integration must establish the native/reactor completion boundary while
+preserving the existing transport/operation cleanup and executor-wait rules;
+the runtime primitive alone does not establish it. Test real Cluster shutdown
+with capture cleanup paused: native/reactor shutdown must finish and the caller
+must return while disposal remains held. Then release cleanup and verify final
 disposal and thread exit before integrating the affected #1259/#1262 adapters.
+This choice does not settle the other pre-#1257 architecture, workload and budget
+agreement requirements.
 Retire/cancel queued notifications. Where the shutdown-origin and executor
 rules permit it, an already-running callback may finish after shutdown and its
 subsequent submissions are rejected. Its lane releases its execution resource
@@ -1362,7 +1368,11 @@ workers, fake timers and barriers, not timing sleeps, for the new scenarios.
        detached reconnector and shutdown-during-USE cases
      - Close from each owner/worker/callback/bridge, during every initialization
        phase and with full mailboxes; assert terminal waiters and exact resource
-       disposition. Repeat create/connect/close and test a surviving Session.
+       disposition. Pause capture disposal during normal external Cluster
+       shutdown; assert native/reactor completion and caller return before
+       releasing disposal, then verify final cleanup and thread exit. Preserve
+       ordinary executor/callback wait behavior. Repeat create/connect/close
+       and test a surviving Session.
    * - Combined / #1263
      - ``tests/integration/long/test_topology_change.py`` plus standard routing,
        tablet, schema and client-route suites; #921 closure's live coverage
