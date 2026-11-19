@@ -2279,12 +2279,16 @@ class Cluster(object):
                     previous_attempt = getattr(self, '_shutdown_attempt', None)
                     if (previous_attempt is not None and
                             not previous_attempt.done()):
+                        if previous_attempt._shutdown_owner is current_thread():
+                            return
                         wait_for = previous_attempt
                     else:
                         completion_pending = getattr(
                             self, '_shutdown_completion_pending', False)
                         if completion_pending:
-                            attempt = self._shutdown_attempt = Future()
+                            attempt = Future()
+                            attempt._shutdown_owner = current_thread()
+                            self._shutdown_attempt = attempt
                         elif previous_attempt is not None:
                             wait_for = previous_attempt
                         else:
@@ -2293,7 +2297,9 @@ class Cluster(object):
                 self.is_shutdown = True
                 cleanup = None
                 if not managed:
-                    attempt = self._shutdown_attempt = Future()
+                    attempt = Future()
+                    attempt._shutdown_owner = current_thread()
+                    self._shutdown_attempt = attempt
 
         if wait_for is not None:
             wait_for.result()

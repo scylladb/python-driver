@@ -2635,3 +2635,42 @@ def test_shutdown_waits_listener_execution_but_not_its_capture_disposal(
         assert all(not thread.is_alive() for thread in manager._threads)
         assert not manager._records and not manager._capture_obligations
         assert not errors
+
+
+
+def test_ordinary_shutdown_hook_can_reenter_same_attempt(
+        connection_class, monkeypatch):
+    cluster = Cluster(connection_class=connection_class)
+    manager = cluster._lifecycle._ensure_runtime()
+    returned, nested_returned = Event(), Event()
+    errors = []
+    control_shutdown = cluster.control_connection.shutdown
+
+    def reentrant_shutdown():
+        cluster.shutdown()
+        nested_returned.set()
+        control_shutdown()
+
+    monkeypatch.setattr(cluster.control_connection, 'shutdown',
+                        reentrant_shutdown)
+
+    def shutdown():
+        try:
+            cluster.shutdown()
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            returned.set()
+
+    caller = Thread(target=shutdown, daemon=True)
+    caller.start()
+    try:
+        assert nested_returned.wait(5), 'ordinary teardown joined its own attempt'
+        assert returned.wait(5)
+        assert not errors
+        assert manager._close_completion.__self__._detached.is_set()
+    finally:
+        caller.join(5)
+        assert not caller.is_alive()
+        cluster.shutdown()
+        manager.join(5)
