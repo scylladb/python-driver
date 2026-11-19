@@ -15,7 +15,7 @@
 
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import nullcontext
-from threading import Event, RLock, Thread
+from threading import Event, Lock, RLock, Thread
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
@@ -23,9 +23,12 @@ import pytest
 
 from cassandra import AuthenticationFailed
 from cassandra.cluster import Cluster
-from cassandra.connection import ConnectionException, DefaultEndPoint
+from cassandra.connection import (Connection, ConnectionException,
+                                  ConnectionShutdown, DefaultEndPoint)
 from cassandra.policies import HostDistance, SimpleConvictionPolicy
-from cassandra.pool import Host
+from cassandra.pool import Host, HostConnection
+from cassandra.protocol_features import ProtocolFeatures
+from tests.unit.util import HashableMock
 from tests.unit.utils import new_session_with_pool_state
 
 
@@ -342,3 +345,108 @@ def test_pool_assignment_holds_metadata_ownership(pool_session):
             # publication guard unwinds even if an assertion fails.
             for future in work:
                 future.result(timeout=5)
+
+
+@pytest.mark.parametrize('is_host_addition', [False, True])
+@pytest.mark.parametrize('failure', ['is_closed', 'is_defunct'])
+@pytest.mark.parametrize('distance', [HostDistance.LOCAL, HostDistance.REMOTE])
+def test_fresh_pool_keyspace_completion_failure_retains_recovery(
+        pool_session, is_host_addition, failure, distance):
+    session, host = pool_session
+    cluster = session.cluster
+    session._profile_manager.distance.return_value = distance
+    cluster.profile_manager.distance = Mock(return_value=distance)
+    reconnect_scheduled = Event()
+    cluster.scheduler.schedule = Mock(
+        side_effect=lambda *args, **kwargs: reconnect_scheduled.set())
+    cluster.signal_connection_failure = Mock(
+        wraps=cluster.signal_connection_failure)
+    connection = HashableMock(
+        spec=Connection, lock=Lock(), in_flight=0, max_request_id=100,
+        is_closed=False, is_defunct=False, signaled_error=False,
+        orphaned_threshold_reached=False, orphaned_request_ids=set(),
+        keyspace=None, features=ProtocolFeatures(shard_id=0))
+    cluster.connection_factory = Mock(return_value=connection)
+    candidates = []
+    cleanup_completed = Event()
+    sync_keyspace = HostConnection._sync_keyspace
+    shutdown_pool = HostConnection.shutdown
+
+    def change_session_keyspace(pool, conn, *args, **kwargs):
+        result = sync_keyspace(pool, conn, *args, **kwargs)
+        candidates.append(pool)
+        # Session USE completes while the initial connection is being built.
+        session.keyspace = 'ks'
+        return result
+
+    def finish_use_then_fail(keyspace, callback):
+        # Real asynchronous USE reserves a stream before its reply callback.
+        connection.in_flight += 1
+        connection.keyspace = keyspace
+        setattr(connection, failure, True)
+        callback(connection, None)
+
+    def record_shutdown(pool):
+        shutdown_pool(pool)
+        cleanup_completed.set()
+
+    connection.set_keyspace_async.side_effect = finish_use_then_fail
+    with patch.object(HostConnection, '_sync_keyspace',
+                      change_session_keyspace), \
+            patch.object(HostConnection, 'shutdown', record_shutdown):
+        result = session.add_or_renew_pool(host, is_host_addition).result(5)
+        # DOWN can settle the caller before the creation worker cleans up.
+        assert cleanup_completed.wait(5)
+
+    assert result is False
+    assert host not in session._pools
+    assert len(candidates) == 1
+    assert candidates[0].is_shutdown
+    assert connection.signaled_error
+    assert connection.in_flight == 0
+    connection.set_keyspace_async.assert_called_once()
+    cluster.signal_connection_failure.assert_called_once()
+    args, kwargs = cluster.signal_connection_failure.call_args
+    assert args[0] is host
+    assert isinstance(args[1], ConnectionShutdown)
+    assert args[2] is is_host_addition
+    assert kwargs['expect_host_to_be_down'] is True
+    # The unpublished callback already claimed signaled_error. Creation must
+    # independently dispatch the failure and leave a real host retry installed.
+    assert reconnect_scheduled.wait(5)
+    assert host.is_up is False
+    assert host.is_currently_reconnecting()
+    cluster.scheduler.schedule.assert_called_once()
+
+    # A subsequent healthy attempt can replace the failed creation generation.
+    healthy = HashableMock(
+        spec=Connection, lock=Lock(), in_flight=0, max_request_id=100,
+        is_closed=False, is_defunct=False, signaled_error=False,
+        orphaned_threshold_reached=False, orphaned_request_ids=set(),
+        keyspace=None, features=ProtocolFeatures(shard_id=0))
+    healthy.set_keyspace_blocking.side_effect = \
+        lambda keyspace: setattr(healthy, 'keyspace', keyspace)
+    cluster.connection_factory.return_value = healthy
+    assert session.add_or_renew_pool(host, is_host_addition).result(5) is True
+    assert session._pools[host].open_count == 1
+    assert session._pools[host]._keyspace == 'ks'
+    cluster.signal_connection_failure.assert_called_once()
+
+
+def test_fresh_remote_pool_may_be_intentionally_empty(pool_session):
+    session, host = pool_session
+    cluster = session.cluster
+    cluster.connect_to_remote_hosts = False
+    session._profile_manager.distance.return_value = HostDistance.REMOTE
+    cluster.connection_factory = Mock()
+    cluster.signal_connection_failure = Mock()
+
+    assert session.add_or_renew_pool(host, True).result(5) is True
+    pool = session._pools[host]
+    assert not pool.is_shutdown
+    assert pool.host_distance == HostDistance.REMOTE
+    assert pool.open_count == 0
+    assert session.update_created_pools() == set()
+    assert session._pools[host] is pool
+    cluster.connection_factory.assert_not_called()
+    cluster.signal_connection_failure.assert_not_called()

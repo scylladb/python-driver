@@ -1216,6 +1216,12 @@ def test_down_health_inspection_respects_aggregate_pool_health(
     constructing = Event()
     release = Event()
     completed = Event()
+    creation_failed = Event()
+    # Isolate the outer DOWN observation from the candidate failure dispatch.
+    cluster.signal_connection_failure = Mock(
+        side_effect=lambda *args, **kwargs: creation_failed.set())
+    cluster._start_reconnector = Mock()
+    cluster._restart_reconnector = Mock()
     listener = Mock()
     getattr(listener, 'on_' + event).side_effect = lambda _: completed.set()
     cluster.register_listener(listener)
@@ -1242,8 +1248,8 @@ def test_down_health_inspection_respects_aggregate_pool_health(
 
     def finish():
         release.set()
-        assert completed.wait(5)
-        assert host.is_up
+        assert (completed if healthy else creation_failed).wait(5)
+        assert host.is_up is healthy
 
     if inspection == 'distance':
         def distance(_host):
@@ -1258,7 +1264,7 @@ def test_down_health_inspection_respects_aggregate_pool_health(
         session.get_pool_state = Mock(side_effect=pool_state)
 
     try:
-        assert cluster.on_down(host, False) is (not healthy)
+        assert cluster.on_down(host, False) is False
         assert host.is_up is healthy
     finally:
         release.set()
@@ -1267,7 +1273,14 @@ def test_down_health_inspection_respects_aggregate_pool_health(
         cluster.profile_manager.distance.side_effect = None
         session.get_pool_state = Mock(return_value={host: {'open_count': 0}})
         assert cluster.on_down(host, False)
-    cluster.on_down_potentially_blocking.assert_called_once()
+    if healthy:
+        cluster.on_down_potentially_blocking.assert_called_once()
+    else:
+        assert host not in session._pools
+        cluster.signal_connection_failure.assert_called_once()
+        cluster.on_down_potentially_blocking.assert_not_called()
+        cluster._restart_reconnector.assert_called_once()
+        getattr(listener, 'on_' + event).assert_not_called()
 
 
 @pytest.mark.parametrize('event', ['up', 'add'])
@@ -1321,12 +1334,15 @@ def test_down_health_inspection_cannot_undo_pool_publication(
         is_closed=not connection_healthy,
         is_defunct=False, lock=Lock())
     cluster.connection_factory = Mock(return_value=connection)
+    # Creation failure must not recursively start another health inspection.
+    cluster.signal_connection_failure = Mock()
     has_connections = pool_distance != HostDistance.REMOTE or connect_remote
     establishes_health = has_connections and connection_healthy
 
     def publish_pool():
         assert session.add_or_renew_pool(
-            host, is_host_addition=False).result(timeout=5) is True
+            host, is_host_addition=False).result(timeout=5) is (
+                not has_connections or connection_healthy)
 
     if inspection == 'distance':
         def distance(_host):
@@ -1357,10 +1373,15 @@ def test_down_health_inspection_cannot_undo_pool_publication(
     dispatched = cluster.on_down(
         host, is_host_addition=False, _pool_failure=reservation)
 
-    candidate = session._pools[host]
-    assert candidate.open_count == int(establishes_health)
+    if has_connections and not connection_healthy:
+        assert host not in session._pools
+        cluster.signal_connection_failure.assert_called_once()
+    else:
+        candidate = session._pools[host]
+        assert candidate.open_count == int(establishes_health)
+        assert not candidate.is_shutdown
+        cluster.signal_connection_failure.assert_not_called()
     assert cluster.connection_factory.call_count == int(has_connections)
-    assert not candidate.is_shutdown
     assert host.is_up is establishes_health
     assert dispatched is (not establishes_health)
     if establishes_health:
@@ -1909,6 +1930,7 @@ def test_failed_candidate_cannot_fence_down_before_publication(
     cluster.on_down_potentially_blocking = Mock(return_value=Future())
     connection = _PublicationConnection(host.endpoint, compression=False)
     cluster.connection_factory = Mock(return_value=connection)
+    cluster.signal_connection_failure = Mock()
     publishing = Event()
     failed = Event()
     errors = []
@@ -1938,7 +1960,7 @@ def test_failed_candidate_cannot_fence_down_before_publication(
 
     def inspect():
         observed = {host: {'open_count': 0}}
-        assert session.add_or_renew_pool(host, False).result(timeout=5) is True
+        assert session.add_or_renew_pool(host, False).result(timeout=5) is False
         return observed
 
     session.get_pool_state = Mock(side_effect=inspect)
@@ -1947,7 +1969,8 @@ def test_failed_candidate_cannot_fence_down_before_publication(
     try:
         assert cluster.on_down(host, False)
         assert host.is_up is False
-        assert session._pools[host].open_count == 0
+        assert host not in session._pools
+        cluster.signal_connection_failure.assert_called_once()
         cluster.on_down_potentially_blocking.assert_called_once()
     finally:
         publishing.set()
@@ -2065,6 +2088,11 @@ def test_unpublished_failure_keeps_session_available_for_publication(topology):
     cluster.connection_factory = Mock(return_value=connection)
     pool = HostConnection(host, HostDistance.LOCAL, session)
     connection.is_defunct = True
+    # Publication remains valid through a healthy sibling while stale socket
+    # cleanup waits for work. A pool with only the failed socket is rejected.
+    healthy = _PublicationConnection(host.endpoint, compression=False)
+    healthy.features = ProtocolFeatures(shard_id=1)
+    pool._connections[1] = healthy
     host.signal_connection_failure = Mock()
     work_lock = pool._lock
     attempting = Event()
@@ -2256,6 +2284,7 @@ def test_publication_progress_with_unsynchronized_background_shard(
     from cassandra.shard_info import _ShardingInfo
 
     cluster, _ = topology
+    cluster.signal_connection_failure = Mock()
     host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
     session = new_session_with_pool_state()
     session.cluster = cluster
@@ -2332,7 +2361,8 @@ def test_publication_progress_with_unsynchronized_background_shard(
         with patch('cassandra.cluster.HostConnection', side_effect=construct):
             publication = session.add_or_renew_pool(host, False)
             assert current_use.wait(5)
-            assert publication.result(timeout=2) is True
+            assert publication.result(timeout=2) is healthy
+        assert (host in session._pools) is healthy
         assert host._health_generation == before + int(healthy)
     finally:
         with response_lock:

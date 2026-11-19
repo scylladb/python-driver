@@ -4627,13 +4627,7 @@ class Session(object):
                                                 ignored_intent_is_success=True)
                                     else:
                                         keyspace = self.keyspace
-                                        expected_pool = attempt.expected_pool
-                                        renewing_retired_pool = (
-                                            expected_pool is not None and
-                                            expected_pool.is_shutdown)
-                                        if (renewing_retired_pool and
-                                                connection_required and
-                                                not connected):
+                                        if connection_required and not connected:
                                             unusable_candidate = True
                                         elif new_pool._keyspace == keyspace:
                                             current_intent = \
