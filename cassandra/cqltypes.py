@@ -1048,7 +1048,11 @@ class UserType(TupleType):
         with cls._cache_lock:
             instance = cls._cache.get(cache_key)
             if (not instance or instance.fieldnames != field_names
-                    or instance.subtypes != field_types):
+                    or len(instance.subtypes) != len(field_types)
+                    or any(cached is not current for cached, current in
+                           zip(instance.subtypes, field_types))):
+                # Decoder classes carry behavior by identity. Their custom
+                # equality can also reenter eviction, so do not call it here.
                 # A mapping can become false-valued before decoding. Keep
                 # its fallback without replacing the unmapped pickle binding.
                 if mapped_class is None:

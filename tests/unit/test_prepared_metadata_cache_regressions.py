@@ -31,7 +31,7 @@ from cassandra.cluster import (
     Session,
     ResponseFuture,
 )
-from cassandra.cqltypes import Int32Type, UserType
+from cassandra.cqltypes import CassandraTypeType, Int32Type, UserType
 from cassandra.protocol import (
     ProtocolHandler,
     RESULT_KIND_ROWS,
@@ -141,6 +141,74 @@ class Address:
 
     def __init__(self, number):
         self.number = number
+
+
+@pytest.mark.parametrize('message_class', list(dict.fromkeys((
+    ResultMessage,
+    ProtocolHandler.message_types_by_opcode[ResultMessage.opcode],
+))))
+@pytest.mark.parametrize('equality_action', ('evict', 'equal'))
+def test_udt_subtype_matching_uses_decoder_identity(
+        message_class, equality_action):
+    # Bound callbacks that reenter the process-wide descriptor cache lock.
+    run_isolated_subprocess(
+        'from tests.unit.test_prepared_metadata_cache_regressions import '
+        '_exercise_udt_subtype_matching\n'
+        '_exercise_udt_subtype_matching(%r, %r)\n'
+        % (message_class is not ResultMessage, equality_action),
+        timeout=10,
+    )
+
+
+def _exercise_udt_subtype_matching(use_default_handler, equality_action):
+    comparison_calls = []
+
+    class DecoderMeta(CassandraTypeType):
+        def __eq__(cls, other):
+            if other is _TimesTenInt32Type:
+                comparison_calls.append(other)
+                if equality_action == 'evict':
+                    print('subtype equality entered eviction', flush=True)
+                    UserType.evict_udt_class(_KEYSPACE, 'address')
+                return equality_action == 'equal'
+            return cls is other
+
+    class _CustomInt32Type(Int32Type, metaclass=DecoderMeta):
+        pass
+
+    base = (ProtocolHandler.message_types_by_opcode[ResultMessage.opcode]
+            if use_default_handler else ResultMessage)
+
+    class CustomResultMessage(base):
+        type_codes = base.type_codes.copy()
+
+    code = type_code_constants.Int32Type
+    CustomResultMessage.type_codes[code] = _CustomInt32Type
+    UserType.evict_udt_class(_KEYSPACE, 'address')
+    try:
+        initial = _decode_rows(CustomResultMessage, _udt_rows_body(7))
+        original = initial.column_metadata[0][3]
+        assert initial.parsed_rows[0][0].number == 7
+        repeated = _decode_rows(CustomResultMessage, _udt_rows_body(8))
+        assert repeated.column_metadata[0][3] is original
+
+        CustomResultMessage.type_codes[code] = _TimesTenInt32Type
+        changed = _decode_rows(CustomResultMessage, _udt_rows_body(9))
+        descriptor = changed.column_metadata[0][3]
+        assert changed.parsed_rows[0][0].number == 90
+        assert descriptor is not original
+        assert original.subtypes[0] is _CustomInt32Type
+        assert descriptor.subtypes[0] is _TimesTenInt32Type
+        assert not comparison_calls
+        assert getattr(
+            UserType._module, _KEYSPACE + '_address') is descriptor.tuple_type
+
+        UserType.evict_udt_class(_KEYSPACE, 'address')
+        refreshed = _decode_rows(CustomResultMessage, _udt_rows_body(10))
+        assert refreshed.column_metadata[0][3] is not descriptor
+        assert refreshed.parsed_rows[0][0].number == 100
+    finally:
+        UserType.evict_udt_class(_KEYSPACE, 'address')
 
 
 def _prepared_statement(result_metadata, result_metadata_id):
