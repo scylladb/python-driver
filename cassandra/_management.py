@@ -641,7 +641,6 @@ class ManagementRuntime:
         self._lifetimes = set()
         self.closed = Event()
         self.finalized = Event()
-        self.high_water = 0
         self.high_waters = dict.fromkeys(
             ('ordinary', 'reentry', 'aggregate', 'health', 'close', 'delivery',
              'mailbox'), 0)
@@ -762,7 +761,6 @@ class ManagementRuntime:
                 if pool is not None:
                     self._pool_credits[pool] = (
                         self._pool_credits.get(pool, 0) + 1)
-                self.high_water = max(self.high_water, self._credits)
             coalesce = (pool, key) if key is not None else None
             record = self._keys.get(coalesce) if coalesce is not None else None
             if record is None:
