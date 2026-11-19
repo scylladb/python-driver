@@ -2311,6 +2311,8 @@ class Cluster(object):
             session.shutdown()
 
         self.executor.shutdown(wait=wait_for_executor)
+        if wait_for_executor and self._lifecycle._runtime is not None:
+            self._lifecycle._runtime.retire_completion()
 
         if self.metrics_enabled and self.metrics:
             self.metrics.shutdown()

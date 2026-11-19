@@ -286,6 +286,11 @@ class _CallbackDelivery:
         self.running = False
         self.waiters = set()
 
+    @staticmethod
+    def _retired(record):
+        return (record.released or
+                getattr(record.runtime, '_completion_retired', False))
+
     @property
     def pending(self):
         return self.cursor < len(self.future._done_callbacks)
@@ -308,7 +313,8 @@ class _CallbackDelivery:
             record = self.record
             owner = execution_context() in ('cluster', 'pool')
             target = (getattr(_context, 'record', None)
-                      if record.released and owner else record)
+                      if self._retired(record) and owner
+                      else record)
             if target is None:
                 raise ManagementContextError(
                     'Owner callback has no reservation')
@@ -316,14 +322,16 @@ class _CallbackDelivery:
                 with self.future._condition:
                     if record is not self.record:
                         continue
-                    if owner and record.released and target is record:
+                    retired = self._retired(record)
+                    if owner and retired and target is record:
                         # Retirement can happen after target selection but
                         # before acquiring the runtime condition.
                         continue
                     if self.error is not None:
                         raise self.error
-                    if record.released and owner:
-                        if target.released or not target.budgets['ordinary']:
+                    if retired and owner:
+                        if (self._retired(target) or
+                                not target.budgets['ordinary']):
                             raise ManagementContextError(
                                 'Owner callback has no reservation')
                         self.record = target
@@ -332,7 +340,7 @@ class _CallbackDelivery:
                     terminal = self.future.done()
                 if not terminal:
                     return
-                if not target.released:
+                if not self._retired(target):
                     target.runtime._queue_delivery_locked(target, self.future)
                     return
             # Released callbacks share a caller-side drainer; a concurrent
@@ -343,7 +351,7 @@ class _CallbackDelivery:
     def drain(self, record=None):
         """Drain serialized callbacks outside C/P."""
         with self.future._condition:
-            if record is None and not self.record.released:
+            if record is None and not self._retired(self.record):
                 # An owner may have adopted this stream after registration
                 # released the runtime condition. Its reactor batch owns it.
                 return False
@@ -680,6 +688,11 @@ class ManagementRuntime:
         self._finalizing = False
         self._on_finalized = on_finalized
         self._join_completion = None
+        self._close_completion = None
+        self._completion_detached = None
+        self._completion_closing = False
+        self._completion_retired = False
+        self._native_runners = set()
         self._on_failure = on_failure
         self._health = {}
         self._health_active = 0
@@ -734,6 +747,8 @@ class ManagementRuntime:
                         # Publish ownership before native launch: interruption
                         # after start returns must not hide an entered runner.
                         self._threads.append(thread)
+                        if kind in ('cluster', 'pool'):
+                            self._native_runners.add(thread)
                         thread.start()
                     except BaseException:
                         # Only an entered target owns runtime resources. A
@@ -741,6 +756,7 @@ class ManagementRuntime:
                         # without retaining or touching this runtime.
                         if not entry.revoke() and thread in self._threads:
                             self._threads.remove(thread)
+                            self._native_runners.discard(thread)
                         raise
             except BaseException:
                 self._begin_close_locked()
@@ -1248,6 +1264,8 @@ class ManagementRuntime:
             self._condition.notify_all()
 
     def _release_locked(self, record):
+        if self._completion_closing:
+            self._condition.notify_all()
         if (record.released or not record.handler_done or record.physical or
                 record.mailbox_pending or record.executing):
             return
@@ -1331,6 +1349,9 @@ class ManagementRuntime:
                 finally:
                     with self._condition:
                         self._exited += 1
+                        self._native_runners.discard(current_thread())
+                        if self._completion_closing:
+                            self._condition.notify_all()
                         self._maybe_finalized_locked()
 
     def _pending_health_notification(self):
@@ -1610,6 +1631,37 @@ class ManagementRuntime:
         self.closed.set()
         self._maybe_finalized_locked()
 
+    def retire_completion(self):
+        """Detach completion delivery after ordinary external shutdown.
+
+        Capture-only debt keeps its original charges and finalization barrier.
+        Late terminal callbacks use the released-future drainer once no native
+        producer or accepted callback batch can submit another reactor ticket.
+        """
+        self._check_pid()
+        assert_can_wait()
+        if execution_context() is not None:
+            raise ManagementContextError(
+                'Cannot retire own completion channel')
+        with self._condition:
+            if not self.closed.is_set():
+                raise ManagementContextError(
+                    'Management lifetime is still open')
+            self._completion_closing = True
+            self._condition.wait_for(lambda: (
+                not self._native_runners and not self._cleanup_obligations and
+                all(not (record.physical or record.mailbox_pending or
+                         record.delivery or record.executing)
+                    for record in self._records)))
+            self._completion_retired = True
+            close = self._close_completion
+            detached = self._completion_detached
+        # The reactor drains accepted tickets outside runtime/Future locks.
+        # Normal waiters share one event, not another callback registration.
+        if close is not None:
+            close()
+            detached.wait()
+
     def _maybe_finalized_locked(self):
         if (self.closed.is_set() and not self._records and
                 not self._cleanup_obligations
@@ -1703,7 +1755,8 @@ class _CompletionChannel:
                     break
                 callback = self._callbacks.popleft()
             try:
-                callback()
+                with _entered('bridge'):
+                    callback()
             except BaseException:
                 log.exception('Error dispatching management completion')
             finally:
@@ -1724,6 +1777,10 @@ class ReactorChannel:
 
     def __init__(self, connection_class):
         self._closed = False
+        self._close_lock = Lock()
+        self._detached = Event()
+        self._close_callbacks = []
+        self._close_error = None
         self._release = None
         self._fallback = None
         dispatch = getattr(connection_class, '_management_dispatch', None)
@@ -1752,20 +1809,44 @@ class ReactorChannel:
             raise ManagementClosed('Management completion channel detached')
         dispatch(callback)
 
-    def close(self, completed=lambda: None):
-        if self._closed:
-            if self._fallback is None:
+    def close(self, completed=None):
+        with self._close_lock:
+            error = self._close_error
+            done = self._detached.is_set()
+            if completed is not None and not done and error is None:
+                self._close_callbacks.append(completed)
+            first = not self._closed
+            if first:
+                self._closed = True
+                release, self._release = self._release, None
+                dispatch, self._dispatch = self._dispatch, None
+        if error is not None:
+            raise error
+        if done:
+            if completed is not None:
                 completed()
-            else:
-                self._fallback.close(completed)
-            return
-        self._closed = True
-        release, self._release = self._release, None
-        self._dispatch = None
-        if release is None:
-            completed()
-        else:
-            release(completed)
+        elif first:
+            try:
+                if release is None:
+                    self._finish_close()
+                else:
+                    release(self._finish_close)
+            except BaseException as error:
+                with self._close_lock:
+                    self._close_error = error
+                    callbacks, self._close_callbacks = (
+                        self._close_callbacks, [])
+                callbacks.clear()
+                raise
+            finally:
+                dispatch = release = None
+
+    def _finish_close(self):
+        with self._close_lock:
+            self._detached.set()
+            callbacks, self._close_callbacks = self._close_callbacks, []
+        for callback in callbacks:
+            callback()
 
     def join(self, timeout=None):
         if self._fallback is not None:
