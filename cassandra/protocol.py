@@ -1216,15 +1216,16 @@ class _ProtocolHandler(object):
     message_types_by_opcode = _message_types_by_opcode.copy()
     """
     Default mapping of opcode to Message implementation. The default
-    ``decode_message`` uses this to instantiate and populate messages with
-    ``recv_body``. Update the mapping to inject specialized result decoding.
+    ``decode_message`` uses this to instantiate and populate messages
+    with ``recv_body``. Update the mapping to inject specialized result
+    decoding.
 
     A Session captures an eligible built-in configuration on its first
-    prepared request, including PREPARE. Later in-place changes do not affect
-    that Session's prepared requests. Simple statements still use the live
-    handler. Assign a different client protocol handler or create a new
-    Session to select another configuration; custom or already modified
-    configurations request full result metadata.
+    prepared request, including PREPARE. Later in-place changes do not
+    affect that Session's prepared requests. Simple statements still use
+    the live handler. Assign a different client protocol handler or
+    create a new Session to select another configuration; custom or
+    already modified configurations request full result metadata.
     """
 
     column_encryption_policy = None
