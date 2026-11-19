@@ -436,6 +436,7 @@ def discounted_pool_recovery(request):
         def submit(fn, *args, **kwargs):
             """Queue work so tests can control creation and completion."""
             future = Future()
+            future.recovery_lifecycle = cluster._lifecycle
             work.append((fn, args, kwargs, future))
             return future
 
@@ -460,10 +461,14 @@ def discounted_pool_recovery(request):
         cluster.shutdown()
 
 
-def _finish_pool_recovery_work(work):
+def _finish_pool_recovery_work(work, wait=True):
     """Run one queued task and notify its completion callbacks."""
     fn, args, kwargs, future = work.pop(0)
     future.set_result(fn(*args, **kwargs))
+    coordinator = future.recovery_lifecycle
+    if wait and not coordinator.delivering and not coordinator.closed:
+        coordinator._runtime.notify(
+            lambda: None, wait=True, timeout=5).result(5)
 
 
 def test_discounted_down_recovers_only_failed_session(
@@ -836,9 +841,161 @@ def test_discounted_recovery_initial_retry_does_not_drain_on_caller(
     assert not work
     assert executor.submit.call_count == 2
     executor.submit.call_args_list[0].args[0]()
+    lifecycle._runtime.notify(lambda: None, wait=True, timeout=5).result(5)
     notification.assert_called_once_with()
     assert len(scheduled) == 1
     assert scheduled[0][0] == 1
+
+
+@pytest.mark.parametrize('continuation', ['recovery', 'session'])
+def test_internal_pool_continuation_retains_full_reserved_admission(
+        discounted_pool_recovery, continuation):
+    from cassandra._management import compatibility_work
+    host, session, failed, healthy, scheduled, work = discounted_pool_recovery
+    lifecycle = session.cluster._lifecycle
+    manager = lifecycle._ensure_runtime()
+    session._management_runtime = manager
+    manager.limit = manager.reentry_window = 1
+    physical = Future()
+    returned, fence, work_ready = Event(), Event(), Event()
+    errors = []
+    work_lock, cleanup = Lock(), Event()
+    original_submit = session.submit.side_effect
+
+    def submit(*args, **kwargs):
+        with work_lock:
+            result = original_submit(*args, **kwargs)
+            if cleanup.is_set():
+                result.set_result(False)
+        work_ready.set()
+        return result
+
+    session.submit.side_effect = submit
+
+    def hold_capacity():
+        with compatibility_work(manager) as attach:
+            attach(physical)
+
+    def produce():
+        try:
+            if continuation == 'recovery':
+                scheduled.pop(0)[1]()
+            else:
+                lifecycle.submit(session._reconcile_pools)
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            returned.set()
+
+    caller = Thread(target=produce, daemon=True)
+    try:
+        manager.notify(hold_capacity).result(5)
+        caller.start()
+        assert returned.wait(5), 'internal continuation waited for pool work'
+        assert not errors
+        manager.notify(fence.set).result(5)
+        assert fence.is_set()
+        assert not work_ready.is_set()
+        assert host.is_up and session._pools[host] is failed
+        with manager._condition:
+            assert manager._reentry_credits == 1
+            assert any(slot.notification is not None and
+                       slot.admission_budget == 'reentry'
+                       for slot in manager._health.values())
+        physical.set_result(True)
+        assert work_ready.wait(5)
+        _finish_pool_recovery_work(work)
+        assert session._pools[host] is not failed
+        assert not session._pools[host].is_shutdown
+        assert not healthy.is_shutdown
+        assert host.is_up
+    finally:
+        if not physical.done():
+            physical.set_result(False)
+        manager.close()
+        with work_lock:
+            cleanup.set()
+            remaining = tuple(work)
+        if caller.ident is not None:
+            caller.join(5)
+            assert not caller.is_alive()
+        for _, _, _, future in remaining:
+            if not future.done():
+                future.set_result(False)
+
+
+@pytest.mark.parametrize('phase', ['initial', 'timer', 'completion'])
+def test_discounted_pool_recovery_survives_management_saturation(
+        discounted_pool_recovery, phase):
+    host, session, failed, healthy, scheduled, work = discounted_pool_recovery
+    manager = session.cluster._lifecycle._ensure_runtime()
+    # Exercise real bounded physical admission, including L's reentry window.
+    session._management_runtime = manager
+    manager.limit = 1
+    progress, work_ready, cleanup = Event(), Event(), Event()
+    work_lock = Lock()
+    original_schedule = session.cluster.scheduler.schedule.side_effect
+    def schedule(delay, fn):
+        result = original_schedule(delay, fn)
+        progress.set()
+        return result
+    session.cluster.scheduler.schedule.side_effect = schedule
+    original_submit = session.submit.side_effect
+    def submit(*args, **kwargs):
+        with work_lock:
+            result = original_submit(*args, **kwargs)
+            if cleanup.is_set():
+                result.set_result(False)
+        work_ready.set()
+        return result
+    session.submit.side_effect = submit
+    entered, release = Event(), Event()
+    active = None
+    try:
+        recover = scheduled.pop(0)[1]
+        if phase == 'completion':
+            session.cluster.connection_factory.side_effect = [
+                ConnectionException('retry required'),
+                session.cluster.connection_factory.return_value]
+            recover()
+            assert work_ready.wait(5)
+            work_ready.clear()
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: manager._credits == 0, 5)
+        active = manager.notify(lambda: (entered.set(), release.wait(5)))
+        assert entered.wait(5)
+        if phase == 'initial':
+            session._recover_pool(failed)
+        elif phase == 'timer':
+            recover()
+        else:
+            _finish_pool_recovery_work(work, wait=False)
+        assert not progress.is_set()
+        release.set()
+        if phase != 'timer':
+            assert progress.wait(5), 'recovery demand was dropped under load'
+            delay, recover = scheduled.pop(0)
+            assert delay == (2 if phase == 'completion' else 1)
+            recover()
+        assert work_ready.wait(5), 'pool creation never resumed'
+        _finish_pool_recovery_work(work)
+        assert session._pools[host] is not failed
+        assert not session._pools[host].is_shutdown
+        assert not healthy.is_shutdown
+        assert host.is_up
+    finally:
+        release.set()
+        # Settle controlled physical work even when setup or lane joining
+        # fails.
+        with work_lock:
+            cleanup.set()
+            remaining = tuple(work)
+        for _, _, _, future in remaining:
+            if not future.done():
+                future.set_result(False)
+        if active is not None:
+            active.result(5)
 
 
 @pytest.mark.parametrize('supersession', ['pool_replaced', 'pool_removed'])

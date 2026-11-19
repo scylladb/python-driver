@@ -1192,6 +1192,70 @@ def test_result_reserved_before_close_is_still_disposed(runtime, pool):
         thread.ident for thread in manager._threads}
 
 
+@pytest.mark.parametrize('health_notification', [False, True])
+def test_detached_coordinator_does_not_keep_runtime_threads_alive(
+        health_notification):
+    import gc
+    import weakref
+    from functools import partial
+    from cassandra._lifecycle import LifecycleCoordinator
+    coordinator = LifecycleCoordinator()
+    manager = coordinator._ensure_runtime()
+    reference = weakref.ref(coordinator)
+    release, returned = Event(), Event()
+    errors = []
+
+    def submit():
+        try:
+            coordinator.submit(lambda: None)
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            returned.set()
+
+    caller = Thread(target=submit, daemon=True)
+    try:
+        caller.start()
+        assert returned.wait(5), 'initial lifecycle delivery did not finish'
+        assert not errors
+        if health_notification:
+            entered, delivered = Event(), Event()
+            def hold():
+                entered.set()
+                assert release.wait(5)
+            def completed(callback):
+                callback()
+                delivered.set()
+            manager.limit = 1
+            manager.notify(hold, wait=True, timeout=5)
+            assert entered.wait(5)
+            incarnation = object()
+            manager.register_health(incarnation)
+            manager.observe_negative(
+                incarnation, None, partial(completed, coordinator.drain))
+            release.set()
+            assert delivered.wait(5)
+        # Lifecycle idle is signalled inside its callback, before the native
+        # notification reservation finishes. A FIFO fence passes the earlier
+        # C admission and L callback frames before testing idle retention.
+        manager.notify(lambda: None, wait=True, timeout=5).result(5)
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: not manager._records, 5)
+        del coordinator
+        gc.collect()
+        assert reference() is None
+        manager.join(5)
+        assert all(not thread.is_alive() for thread in manager._threads)
+    finally:
+        release.set()
+        manager.close()
+        if caller.ident is not None:
+            caller.join(5)
+        manager.join(5)
+        assert not caller.is_alive()
+
+
 def test_synchronous_admission_waits_without_allocating_pending_records(
         runtime, monkeypatch):
     manager, dispatch = runtime
@@ -1789,7 +1853,7 @@ def test_bulk_owner_rejection_unwinds_all_conditions(runtime, terminal_first):
 
 @pytest.mark.parametrize(
     'outcome', ['return', 'error', 'base_error', 'rejected_reacquire'])
-def test_policy_phase_restores_context_and_only_reacquires_after_success(
+def test_policy_phase_restores_admission_after_policy_exit(
         runtime, outcome):
     from cassandra import _management
     manager, dispatch = runtime
@@ -1817,7 +1881,14 @@ def test_policy_phase_restores_context_and_only_reacquires_after_success(
                      'rejected_reacquire': ManagementClosed}[outcome]
             with pytest.raises(error):
                 policy()
-            assert call.record is None
+            if outcome == 'rejected_reacquire':
+                assert call.record is None
+            elif outcome == 'base_error':
+                assert call.record is None
+            else:
+                assert call.record is not None
+                assert call.record is not original
+                assert manager.counts()['ordinary'] == 1
         assert _management._context.call is call
     assert getattr(_management._context, 'call', None) is None
     assert manager.counts()['ordinary'] == 0
@@ -1874,6 +1945,99 @@ def test_policy_phase_waits_for_its_native_sentinel_frame(monkeypatch):
             manager.close()
             manager.join(5)
     assert not caller.is_alive()
+
+
+@pytest.mark.parametrize('failure', [ValueError, KeyboardInterrupt])
+def test_policy_error_survives_failed_phase_readmission(runtime, failure):
+    from cassandra import _management
+    manager, _ = runtime
+    error = failure('original policy failure')
+
+    @_management.policy_call
+    def policy():
+        manager.limit = 0
+        raise error
+
+    with _management.compatibility_call(manager):
+        with _management.compatibility_timeout(0):
+            with pytest.raises(failure) as raised:
+                policy()
+        assert raised.value is error
+        manager.limit = 4
+        # A caller that catches the error must readmit its next phase.
+        with _management.compatibility_call(manager):
+            assert manager.counts()['ordinary'] == 1
+
+
+@pytest.mark.parametrize('failure', [KeyboardInterrupt, SystemExit])
+def test_interrupt_during_policy_error_readmission_propagates(
+        runtime, monkeypatch, failure):
+    from cassandra import _management
+    manager, _ = runtime
+    caller = get_ident()
+    error = failure('readmission interrupted')
+    waited = []
+    original_wait = manager._condition.wait
+
+    def interrupt_wait(timeout=None):
+        if get_ident() == caller:
+            waited.append(timeout)
+            raise error
+        return original_wait(timeout)
+
+    @_management.policy_call
+    def policy():
+        manager.limit = 0
+        raise ValueError('policy failed')
+
+    monkeypatch.setattr(manager._condition, 'wait', interrupt_wait)
+    try:
+        with _management.compatibility_call(manager):
+            call = _management._context.call
+            with pytest.raises(failure) as raised:
+                policy()
+            assert raised.value is error
+            assert _management._context.call is call
+            assert call.record is None
+        assert waited == [None]
+        assert getattr(_management._context, 'call', None) is None
+        assert manager.counts()['ordinary'] == 0
+    finally:
+        manager.limit = 4
+
+
+def test_policy_interrupt_does_not_wait_for_phase_readmission(runtime):
+    from cassandra import _management
+    manager, _ = runtime
+    interrupted, returned = Event(), Event()
+    error = KeyboardInterrupt('policy interrupted')
+    errors = []
+
+    @_management.policy_call
+    def policy():
+        manager.limit = 0
+        interrupted.set()
+        raise error
+
+    def invoke():
+        try:
+            with _management.compatibility_call(manager):
+                policy()
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            returned.set()
+
+    caller = Thread(target=invoke, daemon=True)
+    caller.start()
+    try:
+        assert interrupted.wait(5)
+        assert returned.wait(5), 'policy interrupt waited for capacity'
+        assert errors == [error]
+    finally:
+        manager.close()
+        caller.join(5)
+        assert not caller.is_alive()
 
 
 @pytest.mark.parametrize('pool', [None, 'logical-pool'])
@@ -5244,7 +5408,7 @@ def test_reactor_channel_legacy_startup_is_safe_on_the_reactor(in_context):
 
 
 @pytest.mark.parametrize('missing', ['dispatch', 'context'])
-def test_reactor_channel_missing_adapter_does_not_start_a_service(missing):
+def test_reactor_channel_missing_hook_owns_only_completion_service(missing):
     attributes = {
         'initialize_reactor': staticmethod(
             lambda: pytest.fail('unsupported adapter started a reactor')
@@ -5257,8 +5421,35 @@ def test_reactor_channel_missing_adapter_does_not_start_a_service(missing):
     if missing != 'context':
         attributes['_management_in_context'] = staticmethod(lambda: False)
     connection = type('Connection', (), attributes)
-    with pytest.raises(ManagementContextError, match='no management'):
-        management.ReactorChannel(connection)
+    channel = management.ReactorChannel(connection)
+    entered, release, delivered, detached = Event(), Event(), Event(), Event()
+    errors = []
+
+    def first():
+        try:
+            with pytest.raises(ManagementContextError, match='own completion'):
+                channel.join(0)
+            entered.set()
+            assert release.wait(5)
+        except BaseException as error:
+            errors.append(error)
+
+    try:
+        channel.dispatch(first)
+        channel.dispatch(delivered.set)
+        assert entered.wait(5)
+        assert not delivered.is_set(), 'owned channel lost serial delivery'
+        channel.close(detached.set)
+        assert not detached.is_set()
+        with pytest.raises(ManagementClosed):
+            channel.dispatch(lambda: pytest.fail('closed channel accepted work'))
+    finally:
+        release.set()
+        channel.close(detached.set)
+        channel.join(5)
+    assert not errors
+    assert delivered.is_set() and detached.is_set()
+    assert not channel._fallback._thread.is_alive()
 
 
 def test_reactor_channel_legacy_startup_failure_is_reported(monkeypatch):
@@ -5306,3 +5497,96 @@ def test_handoff_target_disposal_allows_reentry(factory, operation, expected):
     assert getattr(entry, operation)() is expected
     gc.collect()
     assert observed == [('released', expected)]
+
+
+def test_callback_pool_fanout_uses_bounded_reserved_capacity():
+    from cassandra._management import compatibility_work
+
+
+def test_synchronous_callback_pool_fanout_uses_bounded_reserved_capacity():
+    from cassandra._management import compatibility_call, compatibility_work
+    dispatch = Dispatcher()
+    manager = ManagementRuntime(dispatch, limit=1, reentry_window=2)
+    release, started = Event(), Event()
+    submitted = []
+    errors = []
+    executor = ThreadPoolExecutor(2)
+    def work():
+        assert release.wait(5)
+        return True
+    def fanout():
+        try:
+            with compatibility_call(manager):
+                for _ in range(5):
+                    with compatibility_work(manager) as attach:
+                        future = executor.submit(work)
+                        submitted.append(future)
+                        attach(future)
+            started.set()
+        except BaseException as exc:
+            errors.append(exc)
+    notification = manager.notify(fanout)
+    try:
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: manager._reentry_credits == 2, 5)
+        assert manager.counts()['ordinary'] == 1
+        assert not started.is_set()
+        release.set()
+        notification.result(5)
+        assert started.is_set()
+        assert not errors
+        assert len(submitted) == 5
+        assert all(future.result(5) is True for future in submitted)
+        assert manager.high_waters['reentry'] == 2
+    finally:
+        release.set()
+        executor.shutdown()
+        manager.close()
+        dispatch.drain()
+        manager.join(5)
+
+
+def test_close_releases_synchronous_callback_waiting_for_reserved_capacity():
+    from cassandra._management import (
+        callback_on, compatibility_call, compatibility_work)
+    dispatch = Dispatcher()
+    manager = ManagementRuntime(dispatch, limit=1, reentry_window=1)
+    physical = Future()
+    waiting, returned = Event(), Event()
+    errors = []
+    original_wait = manager._condition.wait
+
+    def observe_wait(timeout=None):
+        if callback_on(manager) and manager._reentry_credits == 1:
+            waiting.set()
+        return original_wait(timeout)
+
+    manager._condition.wait = observe_wait
+
+    def fanout():
+        try:
+            with compatibility_call(manager):
+                with compatibility_work(manager) as attach:
+                    attach(physical)
+                with compatibility_work(manager):
+                    pytest.fail('second pool job admitted into a full window')
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            returned.set()
+
+    notification = manager.notify(fanout)
+    try:
+        assert waiting.wait(5)
+        assert not returned.is_set()
+        manager.close()
+        assert returned.wait(5)
+        assert len(errors) == 1 and isinstance(errors[0], ManagementClosed)
+        with pytest.raises(ManagementClosed):
+            notification.result(5)
+    finally:
+        manager.close()
+        physical.set_result(True)
+        dispatch.drain()
+        manager.join(5)

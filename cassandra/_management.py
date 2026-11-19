@@ -37,7 +37,7 @@ from threading import Condition, Event, Lock, Thread, current_thread, local
 import time
 from typing import NamedTuple
 
-from cassandra import DriverException
+from cassandra import DriverException, OperationTimedOut
 
 log = logging.getLogger(__name__)
 _context = local()
@@ -75,10 +75,26 @@ def _callback_runtime():
     return None
 
 
+def callback_on(runtime):
+    """Whether L is delivering or retiring captures for this runtime."""
+    return _callback_runtime() is runtime
+
+
 def assert_can_wait():
     if execution_context() in ('cluster', 'pool', 'bridge', 'cleanup'):
         raise ManagementContextError(
             'Blocking management call on an owner, reactor or cleanup lane')
+
+
+def _notify_cancelled(future):
+    """Wake bulk waiters for a Future cancelled without an executor.
+
+    Future.cancel() leaves this executor-owned transition pending. Keep the
+    private state access here so repeated notifications remain harmless.
+    """
+    with future._condition:
+        if future._state == 'CANCELLED':
+            future.set_running_or_notify_cancel()
 
 
 def _future_access(method):
@@ -155,6 +171,7 @@ class _HealthSlot:
     registered: bool = True
     active: bool = False
     pending_disposal: bool = False
+    admission_budget: str = 'ordinary'
 
 
 class _MailboxEntry(NamedTuple):
@@ -220,7 +237,7 @@ class OperationFuture(Future):
 
     def _assert_can_wait(self):
         assert_can_wait()
-        if (_callback_runtime() is self._record.runtime and
+        if (callback_on(self._record.runtime) and
                 self._record.envelope.kind == 'notification'):
             raise ManagementContextError(
                 'Notification wait would block its own callback lane')
@@ -229,10 +246,7 @@ class OperationFuture(Future):
     def cancel(self):
         cancelled = super().cancel()
         if cancelled:
-            # Future.cancel() alone leaves concurrent.futures.wait() asleep.
-            with self._condition:
-                if self._state == 'CANCELLED':
-                    self.set_running_or_notify_cancel()
+            _notify_cancelled(self)
         return cancelled
 
     @_future_access
@@ -272,6 +286,11 @@ class _CallbackDelivery:
         self.running = False
         self.waiters = set()
 
+    @staticmethod
+    def _retired(record):
+        return (record.released or
+                getattr(record.runtime, '_completion_retired', False))
+
     @property
     def pending(self):
         return self.cursor < len(self.future._done_callbacks)
@@ -294,7 +313,8 @@ class _CallbackDelivery:
             record = self.record
             owner = execution_context() in ('cluster', 'pool')
             target = (getattr(_context, 'record', None)
-                      if record.released and owner else record)
+                      if self._retired(record) and owner
+                      else record)
             if target is None:
                 raise ManagementContextError(
                     'Owner callback has no reservation')
@@ -302,14 +322,16 @@ class _CallbackDelivery:
                 with self.future._condition:
                     if record is not self.record:
                         continue
-                    if owner and record.released and target is record:
+                    retired = self._retired(record)
+                    if owner and retired and target is record:
                         # Retirement can happen after target selection but
                         # before acquiring the runtime condition.
                         continue
                     if self.error is not None:
                         raise self.error
-                    if record.released and owner:
-                        if target.released or not target.budgets['ordinary']:
+                    if retired and owner:
+                        if (self._retired(target) or
+                                not target.budgets['ordinary']):
                             raise ManagementContextError(
                                 'Owner callback has no reservation')
                         self.record = target
@@ -318,7 +340,7 @@ class _CallbackDelivery:
                     terminal = self.future.done()
                 if not terminal:
                     return
-                if not target.released:
+                if not self._retired(target):
                     target.runtime._queue_delivery_locked(target, self.future)
                     return
             # Released callbacks share a caller-side drainer; a concurrent
@@ -329,7 +351,7 @@ class _CallbackDelivery:
     def drain(self, record=None):
         """Drain serialized callbacks outside C/P."""
         with self.future._condition:
-            if record is None and not self.record.released:
+            if record is None and not self._retired(self.record):
                 # An owner may have adopted this stream after registration
                 # released the runtime condition. Its reactor batch owns it.
                 return False
@@ -445,14 +467,16 @@ class _Record:
         self.delivery_ticket = None
         self.delivery_again = False
         self.notification = False
+        self.notifying = False
         self.released = False
 
 
 class _Notification:
     """Transfer a native callback to the callback lane."""
 
-    def __init__(self, callback):
+    def __init__(self, callback, ready=None):
         self.callbacks = [callback]
+        self.ready = ready
 
     def __call__(self, record):
         runtime = record.runtime
@@ -460,7 +484,9 @@ class _Notification:
             if runtime._closing or record.handler_done or record.released:
                 return _PENDING
             record.notification = True
-            runtime._notifications.append((record, self.callbacks.pop()))
+            runtime._notifications.append(
+                (record, self.callbacks.pop(), self.ready))
+            self.ready = None
             runtime._condition.notify_all()
         return _PENDING
 
@@ -628,7 +654,7 @@ class ManagementRuntime:
     """
 
     def __init__(self, dispatch, limit=1024, pool_limit=64, reentry_window=64,
-                 on_finalized=None):
+                 on_finalized=None, on_failure=None):
         self._dispatch = dispatch
         self.limit, self.pool_limit = limit, pool_limit
         self.reentry_window = reentry_window
@@ -659,8 +685,16 @@ class ManagementRuntime:
         self._exited = 0
         self._cleanup_obligations = 0
         self._capture_obligations = 0
+        self._cleanup_callbacks = set()
         self._finalizing = False
         self._on_finalized = on_finalized
+        self._join_completion = None
+        self._close_completion = None
+        self._wait_completion = None
+        self._completion_closing = False
+        self._completion_retired = False
+        self._native_runners = set()
+        self._on_failure = on_failure
         self._health = {}
         self._health_active = 0
         self._pending_health_disposals = 0
@@ -714,6 +748,8 @@ class ManagementRuntime:
                         # Publish ownership before native launch: interruption
                         # after start returns must not hide an entered runner.
                         self._threads.append(thread)
+                        if kind in ('cluster', 'pool'):
+                            self._native_runners.add(thread)
                         thread.start()
                     except BaseException:
                         # Only an entered target owns runtime resources. A
@@ -721,6 +757,7 @@ class ManagementRuntime:
                         # without retaining or touching this runtime.
                         if not entry.revoke() and thread in self._threads:
                             self._threads.remove(thread)
+                            self._native_runners.discard(thread)
                         raise
             except BaseException:
                 self._begin_close_locked()
@@ -933,17 +970,30 @@ class ManagementRuntime:
             self._condition.notify_all()
         return record.attempt.submit(executor)
 
-    def notify(self, callback, *, wait=False, timeout=None, budget='ordinary'):
+    def notify(self, callback, *, wait=False, timeout=None, budget='ordinary',
+               ready=None):
+        """Admit FIFO delivery, optionally gated by a caller publication batch.
+
+        A gate is scheduler state: handlers never wait on the submitting
+        thread. Release it through ``release_notifications`` after publication.
+        """
         self._check_pid()
-        return self.submit(_Notification(callback), wait=wait, timeout=timeout,
+        return self.submit(_Notification(callback, ready), wait=wait, timeout=timeout,
                            budget=budget, kind='notification')
+
+    def release_notifications(self, gates):
+        self._check_pid()
+        with self._condition:
+            for gate in gates:
+                gate.set()
+            self._condition.notify_all()
 
     @contextmanager
     def synchronous_reentry(self):
         """Reserve one L aggregate and a bounded prerequisite window."""
         self._check_pid()
         assert_can_wait()
-        if _callback_runtime() is not self:
+        if not callback_on(self):
             yield 'ordinary'
             return
         with self._condition:
@@ -974,27 +1024,44 @@ class ManagementRuntime:
             self._observe_counts_locked()
 
     def observe_negative(self, incarnation, apply, notification=None,
-                         removed=False):
-        """Apply incarnation health despite ordinary admission load."""
+                         removed=False, register=False, coalesce=None,
+                         admission_budget='ordinary'):
+        """Apply incarnation health despite ordinary admission load.
+
+        Verified owners may register their slot atomically with an observation.
+        A coalescer only merges with a notification still awaiting admission;
+        it runs under the admission lock and must not block or acquire locks.
+        """
+        if admission_budget not in ('ordinary', 'reentry'):
+            raise ManagementContextError('Unknown retained admission budget')
         self._check_pid()
         with self._condition:
             if self._closing:
                 return False
             slot = self._health.get(id(incarnation))
-            if (slot is None or not slot.registered or
+            if register and slot is None:
+                slot = _HealthSlot(incarnation)
+                self._health[id(incarnation)] = slot
+            if (slot is None or (not slot.registered and not register) or
                     slot.incarnation is not incarnation):
                 self._unknown_refresh = True
                 return False
             # An already pending removal is terminal for this incarnation.
-            if slot.removed and not removed:
+            if slot.registered and slot.removed and not removed:
                 return True
             retired = [slot.apply, slot.notification]
             if (execution_context() in ('cluster', 'pool') and
                     any(capture is not None for capture in retired)):
                 self._retire_captures_locked(
                     retired, native=True, health_slot=slot)
+            if coalesce is not None:
+                notification = coalesce(slot.notification)
             slot.apply, slot.notification, slot.removed = (
                 apply, notification, removed)
+            if register:
+                slot.registered = True
+            slot.admission_budget = admission_budget
+            self._observe_counts_locked()
             self._condition.notify_all()
         # Replacing captures can invoke application finalizers.
         del retired
@@ -1006,11 +1073,14 @@ class ManagementRuntime:
             demand, self._unknown_refresh = self._unknown_refresh, None
             return bool(demand)
 
-    def unregister_health(self, incarnation):
+    def unregister_health(self, incarnation, only_if_idle=False):
         self._check_pid()
         with self._condition:
             slot = self._health.get(id(incarnation))
             retired = None
+            if (only_if_idle and slot is not None and
+                    (slot.apply is not None or slot.notification is not None)):
+                return
             if slot is not None:
                 retired = [slot.apply, slot.notification]
                 if (execution_context() in ('cluster', 'pool') and
@@ -1195,6 +1265,8 @@ class ManagementRuntime:
             self._condition.notify_all()
 
     def _release_locked(self, record):
+        if self._completion_closing:
+            self._condition.notify_all()
         if (record.released or not record.handler_done or record.physical or
                 record.mailbox_pending or record.executing):
             return
@@ -1212,6 +1284,9 @@ class ManagementRuntime:
         notification = isinstance(record.handler, _Notification)
         if notification:
             callbacks, record.handler.callbacks = record.handler.callbacks, []
+            if record.handler.ready is not None:
+                callbacks.append(record.handler.ready)
+                record.handler.ready = None
             if captures:
                 captures.extend(callbacks)
             else:
@@ -1259,15 +1334,32 @@ class ManagementRuntime:
             try:
                 target()
             finally:
+                # Notify the lifetime owner outside admission's condition and
+                # before this runner can make finalization possible. Cleanup
+                # can then retain its obligation without locking inversion.
                 with self._condition:
-                    self._exited += 1
-                    self._maybe_finalized_locked()
+                    failed = (self._on_failure if self.completion_error
+                              else None)
+                    if failed is not None:
+                        self._on_failure = None
+                try:
+                    if failed is not None:
+                        failed(self.completion_error)
+                except BaseException:
+                    log.exception('Error closing failed management lifetime')
+                finally:
+                    with self._condition:
+                        self._exited += 1
+                        self._native_runners.discard(current_thread())
+                        if self._completion_closing:
+                            self._condition.notify_all()
+                        self._maybe_finalized_locked()
 
     def _pending_health_notification(self):
         if not self._capacity(None, 'ordinary'):
             return None
         return next((slot for slot in self._health.values()
-                     if slot.apply is None and slot.notification is not None),
+                     if self._retained_notification_ready(slot)),
                     None)
 
     def _health_ready(self):
@@ -1275,6 +1367,11 @@ class ManagementRuntime:
                  any(not slot.active and slot.apply is not None
                      for slot in self._health.values())) or
                 self._pending_health_notification() is not None)
+
+    def _retained_notification_ready(self, slot):
+        return (slot.apply is None and slot.notification is not None and
+                self._capacity(None, 'ordinary') and
+                self._capacity(None, slot.admission_budget))
 
     def _run_cluster(self):
         while True:
@@ -1370,7 +1467,10 @@ class ManagementRuntime:
     def _run_notifications(self):
         while True:
             with self._condition:
-                while not self._notifications and not self._callback_garbage:
+                while (not self._callback_garbage and
+                       (not self._notifications or
+                        (self._notifications[0][2] is not None and
+                         not self._notifications[0][2].is_set()))):
                     # A deferred delivery can still fail after close. Keep L
                     # available until every possible producer has retired.
                     if self._closing and not self._records:
@@ -1380,7 +1480,8 @@ class ManagementRuntime:
                     garbage, retiring_record = self._callback_garbage.popleft()
                 else:
                     garbage = None
-                    record, callback = self._notifications.popleft()
+                    record, callback, ready = self._notifications.popleft()
+                    record.notifying = True
             if garbage is not None:
                 with _entered('callback', runtime=self):
                     try:
@@ -1404,13 +1505,18 @@ class ManagementRuntime:
                 else:
                     self._finish(record, value)
                 finally:
+                    # Actual application execution is an ordinary shutdown
+                    # obligation. Its later capture disposal is separate.
+                    with self._condition:
+                        record.notifying = False
+                        self._condition.notify_all()
                     # Drop a bound adapter before publishing released credits;
                     # an idle lane must not root its last coordinator.
                     callback = None
                     with self._condition:
                         record.notification = False
                         self._release_locked(record)
-            record = callback = value = None
+            record = callback = ready = value = None
 
     def _run_handler_cleanup(self):
         """Dispose native captures without borrowing L or workers.
@@ -1448,7 +1554,7 @@ class ManagementRuntime:
                     self._maybe_finalized_locked()
             record = health_slot = None
 
-    def retain_cleanup(self):
+    def retain_cleanup(self, callback=None):
         """Retain an explicit cleanup obligation in the ``close`` count.
 
         Callback-capture retirement is tracked separately and does not
@@ -1459,6 +1565,8 @@ class ManagementRuntime:
             if self._finalizing:
                 raise ManagementClosed('Management cleanup lifetime has ended')
             self._cleanup_obligations += 1
+            if callback is not None:
+                self._cleanup_callbacks.add(callback)
             self._observe_counts_locked()
         completed = Event()
         def release():
@@ -1467,6 +1575,7 @@ class ManagementRuntime:
                 if not completed.is_set():
                     completed.set()
                     self._cleanup_obligations -= 1
+                    self._cleanup_callbacks.discard(callback)
                     self._maybe_finalized_locked()
         return release
 
@@ -1496,8 +1605,8 @@ class ManagementRuntime:
         for record in tuple(self._records):
             self._finish(record, error=ManagementClosed(
                 'Management lifetime ended'))
-        for record, callback in self._notifications:
-            self._retire_captures_locked([callback])
+        for record, callback, ready in self._notifications:
+            self._retire_captures_locked([callback, ready])
             record.notification = False
             self._release_locked(record)
         self._notifications.clear()
@@ -1529,6 +1638,37 @@ class ManagementRuntime:
         self.closed.set()
         self._maybe_finalized_locked()
 
+    def retire_completion(self):
+        """Detach completion delivery after ordinary external shutdown.
+
+        Capture-only debt keeps its original charges and finalization barrier.
+        Late terminal callbacks use the released-future drainer once no native
+        producer or accepted callback batch can submit another reactor ticket.
+        """
+        self._check_pid()
+        assert_can_wait()
+        if execution_context() is not None:
+            raise ManagementContextError(
+                'Cannot retire own completion channel')
+        with self._condition:
+            if not self.closed.is_set():
+                raise ManagementContextError(
+                    'Management lifetime is still open')
+            self._completion_closing = True
+            self._condition.wait_for(lambda: (
+                not self._native_runners and not self._cleanup_obligations and
+                all(not (record.physical or record.mailbox_pending or
+                         record.delivery or record.executing or record.notifying)
+                    for record in self._records)))
+            self._completion_retired = True
+            close = self._close_completion
+            wait_detached = self._wait_completion
+        # The reactor drains accepted tickets outside runtime/Future locks.
+        # Normal waiters share one event, not another callback registration.
+        if close is not None:
+            close()
+            wait_detached()
+
     def _maybe_finalized_locked(self):
         if (self.closed.is_set() and not self._records and
                 not self._cleanup_obligations
@@ -1544,7 +1684,8 @@ class ManagementRuntime:
                 except BaseException:
                     log.exception(
                         'Error detaching management completion channel')
-                    self.finalized.set()
+                    # A failed detach retains its channel callback for retry.
+                    # Only actual completion may discharge finalization.
 
     def join(self, timeout=None):
         self._check_pid()
@@ -1561,26 +1702,106 @@ class ManagementRuntime:
                 thread.join(remaining)
                 if thread.is_alive():
                     raise TimeoutError()
+        if self._join_completion is not None:
+            remaining = (None if deadline is None else
+                         max(0, deadline - time.monotonic()))
+            self._join_completion(remaining)
+
+
+class _CompletionChannel:
+    """Own serial completion dispatch when custom socket I/O has no hooks."""
+
+    def __init__(self):
+        self._condition = Condition()
+        self._callbacks = deque()
+        self._closing = self._stopped = False
+        self._completed = []
+        self._thread = Thread(target=self._run,
+                              name='cassandra-management-completion',
+                              daemon=True)
+        try:
+            self._thread.start()
+        except BaseException:
+            # Even an interrupted native launch must eventually retire.
+            self.close()
+            if self._thread.ident is not None:
+                self._thread.join(5)
+            raise
+
+    def dispatch(self, callback):
+        with self._condition:
+            if self._closing:
+                raise ManagementClosed('Management completion channel closed')
+            self._callbacks.append(callback)
+            self._condition.notify()
+
+    def close(self, completed=lambda: None):
+        with self._condition:
+            stopped = self._stopped
+            if not stopped:
+                self._completed.append(completed)
+                self._closing = True
+                self._condition.notify_all()
+        if stopped:
+            completed()
+
+    def join(self, timeout=None):
+        if self._thread is current_thread():
+            raise ManagementContextError('Cannot join own completion channel')
+        self._thread.join(timeout)
+        if self._thread.is_alive():
+            raise TimeoutError()
+
+    def _run(self):
+        while True:
+            with self._condition:
+                while not self._callbacks and not self._closing:
+                    self._condition.wait()
+                if not self._callbacks:
+                    self._stopped = True
+                    completed, self._completed = self._completed, []
+                    break
+                callback = self._callbacks.popleft()
+            try:
+                with _entered('bridge'):
+                    callback()
+            except BaseException:
+                log.exception('Error dispatching management completion')
+            finally:
+                callback = None
+        for callback in completed:
+            callback()
 
 
 class ReactorChannel:
-    """Borrow dispatch without owning the process-global I/O service.
+    """Borrow built-in dispatch or own a custom-class completion channel.
 
-    The libev adapter supplied by the later reactor integration must
-    keep its I/O runner live until the final admitted delivery drains.
-    Its startup must finish before runtime admission. Closing one
-    channel releases only its borrow, never another Cluster's reactor.
+    Libev holds its I/O runner live until the final admitted delivery
+    drains; thread startup failures consequently precede runtime
+    admission. Closing one channel releases only its borrow, never
+    another Cluster's reactor. Classes without management hooks get a serial
+    dispatcher owned by this channel, which drains and stops on closure.
     """
 
     def __init__(self, connection_class):
+        self._closed = False
+        self._close_lock = Lock()
+        self._close_condition = Condition(self._close_lock)
+        self._detached = Event()
+        self._close_callbacks = []
+        self._close_error = None
+        self._close_running = False
+        self._release = None
+        self._fallback = None
         dispatch = getattr(connection_class, '_management_dispatch', None)
         in_context = getattr(connection_class, '_management_in_context', None)
         if dispatch is None or in_context is None:
-            raise ManagementContextError(
-                'Connection class has no management completion adapter')
-        self._closed = False
+            # This channel owns only completion delivery, never custom I/O.
+            self._fallback = _CompletionChannel()
+            self._dispatch = self._fallback.dispatch
+            self._release = self._fallback.close
+            return
         self._dispatch = dispatch
-        self._release = None
         connection_class.initialize_reactor()
         borrow = getattr(connection_class, '_management_borrow', None)
         if borrow is not None:
@@ -1593,21 +1814,86 @@ class ReactorChannel:
                     'Management reactor channel startup did not complete')
 
     def dispatch(self, callback):
-        if self._closed:
+        dispatch = self._dispatch
+        if self._closed or dispatch is None:
             raise ManagementClosed('Management completion channel detached')
-        self._dispatch(callback)
+        dispatch(callback)
 
-    def close(self, completed=lambda: None):
-        if self._closed:
-            completed()
-            return
-        self._closed = True
-        release, self._release = self._release, None
-        self._dispatch = None
-        if release is None:
-            completed()
-        else:
-            release(completed)
+    def close(self, completed=None):
+        dispatch = previous_error = None
+        with self._close_lock:
+            done = self._detached.is_set()
+            if completed is not None and not done:
+                self._close_callbacks.append(completed)
+            start = not done and not self._close_running
+            if start:
+                self._closed = self._close_running = True
+                release = self._release
+                dispatch, self._dispatch = self._dispatch, None
+                previous_error, self._close_error = self._close_error, None
+                had_finalizer = bool(self._close_callbacks)
+        if done:
+            if completed is not None:
+                completed()
+        elif start:
+            original_error = None
+            try:
+                for attempt in range(2):
+                    try:
+                        if release is None:
+                            self._finish_close()
+                        else:
+                            release(self._finish_close)
+                    except BaseException as error:
+                        with self._close_lock:
+                            self._close_error = error
+                            self._close_running = False
+                            # Finalization may join a normal in-flight close.
+                            # Hand its existing obligation one bounded retry.
+                            retry = (attempt == 0 and not had_finalizer and
+                                     bool(self._close_callbacks) and
+                                     not self._detached.is_set())
+                            if retry:
+                                self._close_running = True
+                            self._close_condition.notify_all()
+                        if original_error is not None:
+                            log.exception(
+                                'Error retrying management detachment')
+                            raise original_error
+                        if not retry:
+                            raise
+                        original_error = error
+                    else:
+                        if original_error is not None:
+                            raise original_error
+                        break
+            finally:
+                dispatch = release = previous_error = None
+
+    def _finish_close(self):
+        with self._close_lock:
+            self._detached.set()
+            self._close_running = False
+            release, self._release = self._release, None
+            callbacks, self._close_callbacks = self._close_callbacks, []
+            self._close_condition.notify_all()
+        # Native release is idempotent; a failed call may already have queued
+        # completion. Duplicate completions find no callbacks to run twice.
+        release = None
+        for callback in callbacks:
+            callback()
+
+    def wait_detached(self):
+        with self._close_condition:
+            self._close_condition.wait_for(lambda: (
+                self._detached.is_set() or
+                (not self._close_running and self._close_error is not None)))
+            if not self._detached.is_set():
+                raise self._close_error
+
+    def join(self, timeout=None):
+        if self._fallback is not None:
+            self._fallback.join(timeout)
 
 
 def assert_synchronous_api(connection_class):
@@ -1645,23 +1931,39 @@ class _CompatibilityCall:
     physical obligation holds its credit; C never waits for that
     stack. Policy wrappers release a completed phase before arbitrary
     policy reentry, then acquire the next phase after the policy
-    returns. Later migrations replace these bodies with native
+    returns. Initial setup keeps its reservation while holding its lock.
+    Later migrations replace these bodies with native
     asynchronous owner continuations.
     """
 
     def __init__(self, runtime):
         self.runtime = runtime
-        self.budget = ('aggregate' if _callback_runtime() is runtime
-                       else 'ordinary')
+        self.budget = 'aggregate' if callback_on(runtime) else 'ordinary'
         self.record = None
+        self.locked = 0
+        self.deadline = None
+        self.timeout = None
+
+    def remaining(self):
+        return (None if self.deadline is None else
+                max(0, self.deadline - time.monotonic()))
+
+    def admit(self, budget):
+        try:
+            return self.runtime.submit(
+                _compatibility_reservation, wait=True, timeout=self.remaining(),
+                budget=budget, reserve=1)
+        except TimeoutError as exc:
+            raise OperationTimedOut(
+                'Timed out waiting for connection pool capacity',
+                timeout=self.timeout) from exc
 
     def acquire(self):
         if self.record is not None:
             return
         if self.budget == 'aggregate' and self.runtime._reentry_active:
             raise ManagementContextError('Recursive native reentry aggregate')
-        future = self.runtime.submit(_compatibility_reservation, wait=True,
-                                     budget=self.budget, reserve=1)
+        future = self.admit(self.budget)
         self.record = future._record
         try:
             self.record.started.wait()
@@ -1685,6 +1987,15 @@ class _CompatibilityCall:
 @contextmanager
 def compatibility_call(runtime):
     previous = getattr(_context, 'call', None)
+    if previous is not None and previous.runtime is runtime:
+        # A synchronous request listener is still part of the calling phase.
+        # Reserving another ordinary record can wait on our own reservation.
+        # Failed readmission or an interrupted policy can leave the phase
+        # released. Restore its admission before reusing the calling stack.
+        if previous.record is None:
+            previous.acquire()
+        yield
+        return
     call = _CompatibilityCall(runtime)
     call.acquire()
     _context.call = call
@@ -1697,27 +2008,87 @@ def compatibility_call(runtime):
             _context.call = previous
 
 
+@contextmanager
+def compatibility_lock(lock):
+    """Wait for admission or setup lock without holding the other."""
+    call = getattr(_context, 'call', None)
+    if call is None or call.locked:
+        with lock:
+            yield
+        return
+    call.release()
+    while True:
+        call.acquire()
+        if lock.acquire(False):
+            break
+        call.release()
+        # Wait for a contended lock without reserving management capacity,
+        # then retry both resources in order without blocking on the second.
+        with lock:
+            pass
+    call.locked += 1
+    try:
+        yield
+    finally:
+        call.locked -= 1
+        lock.release()
+
+
+@contextmanager
+def compatibility_timeout(timeout):
+    """Bound pool-work admission and completion with one remaining budget."""
+    call = getattr(_context, 'call', None)
+    deadline = None if timeout is None else time.monotonic() + timeout
+    def remaining():
+        return (None if deadline is None
+                else max(0, deadline - time.monotonic()))
+    if call is None:
+        yield remaining
+        return
+    previous = call.deadline, call.timeout
+    call.deadline, call.timeout = deadline, timeout
+    try:
+        yield remaining
+    finally:
+        call.deadline, call.timeout = previous
+
+
 def policy_call(method):
-    """Run user policy between released compatibility phases."""
+    """Release policy phases except while setup owns its lock."""
     @wraps(method)
     def call_policy(*args, **kwargs):
         call = getattr(_context, 'call', None)
-        if call is None:
+        if call is None or call.locked:
+            # Setup cannot reacquire capacity while holding its lock. Keep
+            # its admitted phase, including synchronous policy reentry.
             return method(*args, **kwargs)
         call.release()
         _context.call = None
+        error = None
         try:
             result = method(*args, **kwargs)
+        except BaseException as exc:
+            error = exc
+            raise
         finally:
             _context.call = call
-        call.acquire()
+            if error is None:
+                call.acquire()
+            elif isinstance(error, Exception):
+                # A listener may catch a policy error and continue the outer
+                # phase. Attempt restoration, preserving the original error
+                # if ordinary readmission fails. A new interrupt propagates.
+                try:
+                    call.acquire()
+                except Exception:
+                    pass
         return result
     return call_policy
 
 
 @contextmanager
 def compatibility_work(runtime):
-    """Charge physical work; L fanout uses its independent window."""
+    """Charge physical work, waiting only inside a compatibility call."""
     if runtime is None:
         # Internal tests construct bare Sessions with __new__, without a
         # registered production lifetime or management admission contract.
@@ -1726,14 +2097,16 @@ def compatibility_work(runtime):
     assert_can_wait()
     call = getattr(_context, 'call', None)
     same_call = call is not None and call.runtime is runtime
-    budget = ('reentry' if same_call and call.budget == 'aggregate'
-              else 'ordinary')
+    callback_origin = callback_on(runtime)
+    budget = ('reentry' if callback_origin or (same_call and
+              (call.budget == 'aggregate' or call.locked)) else 'ordinary')
     if same_call and budget == 'ordinary':
         # Admission cannot retain a phase's credit while waiting for a child
         # record in a full window, or retain a Session lock needed by workers.
         call.release()
-    future = runtime.submit(_compatibility_reservation, wait=same_call,
-                            budget=budget, reserve=1)
+    future = (call.admit(budget) if same_call else
+              runtime.submit(_compatibility_reservation, budget=budget,
+                             reserve=1))
     record = future._record
     attached = False
     completed = False

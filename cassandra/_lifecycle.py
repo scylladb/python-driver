@@ -23,11 +23,16 @@ from concurrent.futures import Future
 from contextlib import contextmanager
 from functools import partial, wraps
 import logging
-from threading import local, RLock
+from threading import Event, Lock, local, RLock, current_thread
 import weakref
 from weakref import WeakValueDictionary
 
 from cassandra import DriverException
+from cassandra._management import (
+    ManagementRuntime, ReactorChannel, ManagementClosed, ManagementOverloaded,
+    assert_synchronous_api, execution_context, physical_work_context,
+    performing_cleanup, compatibility_call, compatibility_work,
+    compatibility_timeout, policy_call, callback_on)
 
 __all__ = ()
 
@@ -181,12 +186,20 @@ class LifecycleCoordinator:
     join the queue instead of recursively overtaking the current lifecycle.
     """
 
-    def __init__(self, cluster=None):
+    def __init__(self, cluster=None, runtime=None):
         self._cluster = weakref.proxy(cluster) if cluster is not None else None
+        self._cluster_ref = (weakref.ref(cluster) if cluster is not None
+                             else lambda: None)
         self._lock = RLock()
         self._local = local()
         self._events = deque()
+        self._pending_observations = {}
+        self._runtime = runtime
+        self._runtime_lock = RLock()
         self._draining = False
+        self._active_event = False
+        self._idle = Event()
+        self._idle.set()
         self._requested = 0
         self._published = 0
         self._force_revisions = deque()
@@ -209,7 +222,12 @@ class LifecycleCoordinator:
             if self._closed:
                 return
             self._closed = True
+            for event in self._events:
+                event.set()
             self._events.clear()
+            self._pending_observations.clear()
+            if not self._active_event:
+                self._idle.set()
             self._force_revisions.clear()
             hosts = list(self._retired.values())
             if self._cluster is not None:
@@ -231,6 +249,12 @@ class LifecycleCoordinator:
                     handler = host.get_and_set_reconnection_handler(None)
                     if handler is not None:
                         reconnectors.append(handler)
+        # Release this close call's publication lock before joining runtime
+        # installation. First-use producers can hold it during their reactor
+        # handshake; closure is claimed above so they cannot install afterward.
+        with self._runtime_lock:
+            if self._runtime is not None:
+                self._runtime.close()
         for handler in reconnectors:
             try:
                 handler.cancel()
@@ -269,7 +293,8 @@ class LifecycleCoordinator:
         with self.transaction():
             with host.lock:
                 generation = getattr(host, '_readiness_generation', 0)
-            self.submit(callback, host, generation)
+            self.submit_observation(
+                host, 'readiness', callback, host, generation)
 
     def readiness_is_current(self, host, generation=None):
         return (self.is_current(host) and
@@ -396,7 +421,8 @@ class LifecycleCoordinator:
                 finally:
                     self._local.depth -= 1
         finally:
-            if drain and not getattr(self._local, 'depth', 0):
+            if ((drain or self._draining) and
+                    not getattr(self._local, 'depth', 0)):
                 self.drain()
 
     def reserve_refresh(self, force_token_rebuild=False):
@@ -421,49 +447,358 @@ class LifecycleCoordinator:
         self._published = revision
         return True
 
-    def submit(self, callback, *args, **kwargs):
-        """Queue a notification; delivery never has a synchronous result."""
-        with self._lock:
+    def _ensure_runtime(self):
+        # First use occurs after Cluster dependencies have been constructed.
+        # A first-use transaction can still own the publication lock here.
+        # close() claims closure before waiting for this installation lock.
+        with self._runtime_lock:
             if self.closed:
-                return
-            self._events.append(partial(callback, *args, **kwargs))
-        if not getattr(self._local, 'depth', 0):
-            self.drain()
+                raise ManagementClosed('Lifecycle coordinator is closed')
+            if self._runtime is None:
+                if self._cluster is None:
+                    from cassandra.io.asyncioreactor import AsyncioConnection
+                    connection_class = AsyncioConnection
+                else:
+                    connection_class = self._cluster.connection_class
+                cluster_ref = self._cluster_ref
+                def failed(error):
+                    cluster = cluster_ref()
+                    if cluster is not None:
+                        # Admission has ended permanently. Make that terminal
+                        # outcome visible rather than leaving an apparently
+                        # live Cluster attached to a closed runtime.
+                        cluster.shutdown()
+                runtime = ManagementRuntime(None, on_failure=failed)
+                try:
+                    runtime.start()
+                    channel = ReactorChannel(connection_class)
+                    runtime._dispatch = channel.dispatch
+                    runtime._on_finalized = channel.close
+                    runtime._join_completion = channel.join
+                    runtime._close_completion = channel.close
+                    runtime._wait_completion = channel.wait_detached
+                    if self.closed:
+                        raise ManagementClosed(
+                            'Lifecycle coordinator closed during startup')
+                except BaseException:
+                    runtime.close()
+                    runtime.join(5)
+                    raise
+                self._runtime = runtime
+                weakref.finalize(self, runtime.close)
+                if self._cluster is not None:
+                    # The coordinator stores only a proxy; the Cluster can be
+                    # collected even while this runtime is idle.
+                    cluster = self._cluster_ref()
+                    if cluster is not None:
+                        weakref.finalize(cluster, runtime.close)
+            return self._runtime
 
-    def submit_async(self, executor, callback, *args, **kwargs):
-        """Queue before executor handoff so later notifications cannot overtake."""
-        event = partial(callback, *args, **kwargs)
+    def _queue_event(self, callback):
+        if self.closed:
+            return None
+        try:
+            runtime = self._ensure_runtime()
+        except ManagementClosed:
+            return None
+        ready = Event()
+        event = ready
+
+        def deliver():
+            self._deliver_callbacks(
+                (callback,), 'Error delivering host lifecycle notification',
+                event=event)
+
         with self._lock:
             if self.closed:
                 return None
+            try:
+                completion = runtime.notify(deliver, ready=ready)
+            except ManagementClosed:
+                return None
             self._events.append(event)
+            if self._draining and not getattr(self._local, 'depth', 0):
+                # An active drainer already owns delivery. In particular an
+                # asynchronous producer inside its callback must not depend
+                # on a separate executor draining again after that callback.
+                runtime.release_notifications([ready])
+        return event, completion
+
+    def _deliver_callbacks(self, callbacks, error_message, event=None,
+                           raise_errors=False):
+        """Track serial delivery and log ordinary callback failures.
+
+        Continue after each Exception by default. With ``raise_errors=True``,
+        stop at the first such failure and propagate it to the caller.
+        """
+        with self._lock:
+            if self.closed:
+                return
+            if event is not None:
+                if event not in self._events:
+                    return
+                self._events.remove(event)
+            self._active_event = self._draining = True
+            self._idle.clear()
         try:
-            return executor.submit(self.drain)
+            self._local.delivering = True
+            for callback in callbacks:
+                try:
+                    callback()
+                except Exception:
+                    log.exception(error_message)
+                    if raise_errors:
+                        raise
+        finally:
+            self._local.delivering = False
+            with self._lock:
+                self._finish_delivery_locked()
+
+    def _finish_delivery_locked(self):
+        """Release active delivery while holding the publication lock."""
+        self._active_event = False
+        if not self._events:
+            self._draining = False
+            self._idle.set()
+
+    def submit(self, callback, *args, **kwargs):
+        """Admit an ordered notification on the serial compatibility lane."""
+        self._queue_event(partial(callback, *args, **kwargs))
+        if not getattr(self._local, 'depth', 0):
+            self.drain()
+
+    def _defer_observation(self, host, family, callback, removed=False):
+        """One pending batch per known incarnation; no per-call overflow list.
+
+        These are unadmitted, waiter-free compatibility observations. Accepted
+        batches keep their original credits and generation checks. Removal
+        replaces pending positive demand; each family or owned recovery
+        retains its latest callback, not a history of every producer call.
+        """
+        if (family not in ('readiness', 'location', 'pool-results',
+                           'preparation', 'down', 'remove')
+                and not (isinstance(family, tuple) and len(family) == 2 and
+                         family[0] == 'recovery')):
+            raise ValueError('Unknown lifecycle observation family')
+        if self.closed:
+            return False
+        try:
+            runtime = self._ensure_runtime()
+        except ManagementClosed:
+            return False
+        with self._lock:
+            if self.closed:
+                return False
+            known = (self.is_current(host) or
+                     self._retired.get(id(host)) is host)
+            if not known:
+                # There is no lifecycle owner for an unknown incarnation.
+                # Report rejection to the producer instead of pretending an
+                # unconsumed refresh-demand bit will recover its completion.
+                return False
+            def deliver():
+                with self._lock:
+                    if self._pending_observations.get(id(host)) is entry:
+                        self._pending_observations.pop(id(host))
+                    callbacks = tuple(entry[1].values())
+                try:
+                    self._deliver_callbacks(
+                        callbacks,
+                        'Error delivering deferred lifecycle observation')
+                finally:
+                    runtime.unregister_health(host, only_if_idle=True)
+
+            entry = (host, {family: callback}, deliver)
+
+            def coalesce(previous):
+                # Runs under the runtime admission lock and this publication
+                # lock. Once C consumes the slot, its batch is immutable even
+                # while L is still delivering an earlier notification.
+                old = self._pending_observations.get(id(host))
+                if old is not None and old[2] is previous:
+                    pending = old[1]
+                    if removed:
+                        pending.clear()
+                    elif 'remove' in pending:
+                        return previous
+                    pending.pop(family, None)
+                    pending[family] = callback
+                    return previous
+                self._pending_observations[id(host)] = entry
+                return deliver
+
+            return runtime.observe_negative(
+                host, None, deliver, removed=removed, register=True,
+                coalesce=coalesce)
+
+    def submit_observation(self, host, family, callback, *args, wait=True,
+                           **kwargs):
+        notification = partial(callback, *args, **kwargs)
+        with self._lock:
+            # A new ordinary admission must not pass an older unadmitted
+            # batch. The native slot decides whether that batch can coalesce.
+            if id(host) in self._pending_observations:
+                retained = self._defer_observation(host, family, notification)
+            else:
+                try:
+                    self._queue_event(notification)
+                    retained = True
+                except ManagementOverloaded:
+                    retained = self._defer_observation(
+                        host, family, notification)
+            if not retained and not self.closed and not host._is_removed:
+                raise ManagementOverloaded(
+                    'Lifecycle observation was not retained')
+        if not getattr(self._local, 'depth', 0):
+            self.drain(wait=wait)
+
+    def _retain_negative(self, host, callback, removed=False):
+        return self._defer_observation(host, 'remove' if removed else 'down',
+                                       callback, removed=removed)
+
+    def submit_negative(self, host, callback, *args, removed=False, **kwargs):
+        """Retain negative transitions when ordinary delivery is full.
+        """
+        notification = partial(callback, *args, **kwargs)
+        try:
+            self.submit(notification)
+        except ManagementOverloaded:
+            self._retain_negative(host, notification, removed)
+
+    def submit_recovery(self, host, failed_pool, callback, *args,
+                        executor=None):
+        """Retain one nonblocking recovery continuation per failed pool."""
+        notification = partial(callback, *args)
+        try:
+            if executor is not None:
+                result = self.submit_async(executor, notification)
+                if result is None and not self.closed:
+                    self._defer_observation(
+                        host, ('recovery', failed_pool), notification)
+                return result
+            self.submit(notification)
+        except ManagementOverloaded:
+            if (not self._defer_observation(
+                    host, ('recovery', failed_pool), notification) and
+                    not self.closed and not host._is_removed):
+                raise
+
+    def submit_reconciliation(self, session):
+        """Retain one idempotent reconciliation per owned Session lifetime."""
+        if self.closed:
+            return
+        try:
+            runtime = self._ensure_runtime()
+        except ManagementClosed:
+            return
+        try:
+            self._queue_event(session._reconcile_pools)
+        except ManagementOverloaded:
+            def reconcile():
+                try:
+                    self._deliver_callbacks(
+                        (session._reconcile_pools,),
+                        'Error delivering session pool reconciliation',
+                        raise_errors=True)
+                finally:
+                    runtime.unregister_health(session, only_if_idle=True)
+            # Session-wide demand must survive removal of any individual host.
+            runtime.observe_negative(session, None, reconcile, register=True)
+        if not getattr(self._local, 'depth', 0):
+            self.drain(wait=False)
+
+    def submit_async(self, executor, callback, *args, **kwargs):
+        """Admit before handoff and return the notification's delivery receipt.
+
+        The executor releases transaction gates without joining delivery.
+        Coalesced negative observations retain their admission-only receipt.
+        """
+        notification = partial(callback, *args, **kwargs)
+        negative = getattr(callback, '_negative_lifecycle', False) is True
+        with self._lock:
+            retained = False
+            if negative and id(args[1]) in self._pending_observations:
+                retained = self._retain_negative(args[1], notification)
+                queued = None
+            else:
+                try:
+                    queued = self._queue_event(notification)
+                except ManagementOverloaded:
+                    if not negative or not self._retain_negative(
+                            args[1], notification):
+                        raise
+                    retained = True
+            if retained:
+                completed = Future()
+                completed.set_result(None)
+                return completed
+        if queued is None:
+            return None
+        event, completion = queued
+        try:
+            executor.submit(self._drain_async)
+            return completion
         except Exception:
             log.exception("Failed to schedule host lifecycle notifications")
-            # If no drainer has claimed this event, failed handoff cancels
-            # admission. Otherwise a concurrent submit already delivered it.
             with self._lock:
-                try:
+                if event in self._events:
                     self._events.remove(event)
-                except ValueError:
-                    if self.closed:
-                        return None
-                else:
+                    self._runtime.release_notifications([event])
+                    if not self._events and not self._active_event:
+                        self._draining = False
+                        self._idle.set()
                     return None
-            completed = Future()
-            completed.set_result(None)
-            return completed
+                if self.closed:
+                    return None
+            return completion
 
-    def collect_futures(self, futures, callback):
-        """Deliver all results once, with aggregation owned by the FIFO.
+    def _drain_async(self):
+        self.drain(wait=False)
 
-        Register only after the caller has scheduled every operation. Worker
-        callbacks enqueue completions; only the lifecycle drainer changes the
-        pending set and results. Exceptions (including cancellation) are
+    def collect_futures(self, futures, callback, host=None, is_current=None):
+        """Deliver all results once on the lifecycle notification lane.
+
+        Register only after the caller has scheduled every operation. Known
+        hosts aggregate under a lock on completion threads and retain one
+        bounded observation. Untagged callers enqueue individual completions.
+        Exceptions (including cancellation) are
         delivered as results so the caller can apply its recovery policy.
         Closing the coordinator discards outstanding completion notifications.
         """
+        if host is not None:
+            # Physical outcomes remain in their original futures; retain only
+            # one completion observation for this existing Host incarnation.
+            pending = set(futures)
+            lock = Lock()
+            results = []
+
+            def submit_results():
+                with self.transaction(drain=False), host.lock:
+                    if is_current is not None and not is_current():
+                        return
+                    self.submit_observation(
+                        host, 'pool-results', callback, results)
+                if not getattr(self._local, 'depth', 0):
+                    self.drain()
+
+            def completed(future):
+                with lock:
+                    if future not in pending:
+                        return
+                    pending.remove(future)
+                    try:
+                        results.append(future.result())
+                    except Exception as exc:
+                        results.append(exc)
+                    finished = not pending
+                if finished:
+                    submit_results()
+
+            if not pending:
+                submit_results()
+            for future in tuple(pending):
+                future.add_done_callback(completed)
+            return
         pending = set(futures)
         results = []
 
@@ -632,8 +967,10 @@ class LifecycleCoordinator:
         with self.transaction():
             if not self._retire(host):
                 return
-            self.submit(self._cluster._notify_host_removed, host,
-                        trigger_reconciliation, True, refresh_nodes)
+            self.submit_negative(
+                host, self._cluster._notify_host_removed, host,
+                trigger_reconciliation, True, refresh_nodes,
+                removed=True)
 
     def remove(self, host, trigger_reconciliation=True, refresh_nodes=True):
         with self.transaction():
@@ -642,8 +979,10 @@ class LifecycleCoordinator:
                 return
             self._retire(host)
             log.info("Cassandra host %s removed", host)
-            self.submit(self._cluster._notify_host_removed, host,
-                        trigger_reconciliation, True, refresh_nodes)
+            self.submit_negative(
+                host, self._cluster._notify_host_removed, host,
+                trigger_reconciliation, True, refresh_nodes,
+                removed=True)
 
     def publish_host(self, candidate, signal, refresh_nodes,
                      reconcile_pools_on_failure, replace_existing_id):
@@ -717,7 +1056,28 @@ class LifecycleCoordinator:
                     cluster._schedule_failed_endpoint_add_retry(replacement)
         finally:
             if reconnect is not None:
-                self.submit(reconnect)
+                self._submit_reconnect(reconnect)
+
+    def _submit_reconnect(self, reconnect):
+        """Retain one control reconnect demand across endpoint replacements."""
+        if self.closed:
+            return
+        try:
+            runtime = self._ensure_runtime()
+        except ManagementClosed:
+            return
+        try:
+            self._queue_event(reconnect)
+        except ManagementOverloaded:
+            def deliver():
+                try:
+                    reconnect()
+                finally:
+                    runtime.unregister_health(self, only_if_idle=True)
+            # This is Cluster-wide demand, independent of removed host slots.
+            runtime.observe_negative(self, None, deliver, register=True)
+        if not getattr(self._local, 'depth', 0):
+            self.drain(wait=False)
 
     def update_location(self, host, datacenter, rack):
         with self.transaction():
@@ -734,8 +1094,9 @@ class LifecycleCoordinator:
         token = object()
         host._pending_location = desired
         host._pending_location_token = token
-        self.submit(
-            self._notify_location_changed, host, datacenter, rack, token)
+        self.submit_observation(
+            host, 'location', self._notify_location_changed, host,
+            datacenter, rack, token)
         return True
 
     def _notify_location_changed(self, host, datacenter, rack, token):
@@ -759,30 +1120,178 @@ class LifecycleCoordinator:
                     host._pending_location = None
                     host._pending_location_token = None
 
-    def drain(self):
+    def drain(self, wait=True):
+        """Release transaction batches; preserve idle synchronous
+        observations.
+
+        An already active lane is never joined by another producer or a
+        reentrant listener. Native results do not depend on this lane.
+        """
         with self._lock:
-            if self._draining or self.closed:
+            if self.closed:
                 return
-            self._draining = True
-        try:
-            while True:
-                with self._lock:
-                    if self.closed or not self._events:
+            events = tuple(self._events)
+            should_wait = not self._draining and not self.delivering
+            if events:
+                self._draining = True
+                self._idle.clear()
+                self._runtime.release_notifications(events)
+        reactor_context = (self._cluster is not None and
+                           getattr(self._cluster.connection_class,
+                                   '_management_in_context', lambda: False)())
+        if (wait and should_wait and not reactor_context and
+                not getattr(self._local, 'locked', 0) and
+                execution_context() not in ('cluster', 'pool', 'bridge',
+                                            'worker', 'callback', 'cleanup')):
+            while not self._idle.wait(0.05):
+                if self.closed:
+                    # Closure abandons joining delivery; an active callback
+                    # still owns its cleanup and may need this caller to exit.
+                    return
+                # Runtime infrastructure failure may discard accepted
+                # notifications without running our delivery closure. Never
+                # leave a caller waiting for callbacks that cannot now run.
+                runtime = self._runtime
+                if runtime is not None and runtime.closed.is_set():
+                    with self._lock:
                         self._events.clear()
-                        self._draining = False
-                        return
-                    callback = self._events.popleft()
-                try:
-                    self._local.delivering = True
-                    callback()
-                except Exception:
-                    log.exception("Error delivering host lifecycle notification")
-                finally:
-                    self._local.delivering = False
-        except BaseException:
-            with self._lock:
-                self._draining = False
+                        self._pending_observations.clear()
+                        if not self._active_event:
+                            self._draining = False
+                            self._idle.set()
+
+
+def managed_context(cluster):
+    if cluster is None:
+        return False  # Bare Session.__new__ tests have no runtime lifetime.
+    return (execution_context() is not None or
+            getattr(getattr(cluster, 'connection_class', None),
+                    '_management_in_context', lambda: False)() is True)
+
+
+def physical_completion(callback, future):
+    """Keep the physical worker context through proxy-Future settlement.
+
+    A completed Future may invoke registration callbacks on an application
+    thread instead. Only its actual worker must avoid joining delivery.
+    """
+    if current_thread() in getattr(future, '_management_work_threads', ()):
+        with physical_work_context():
+            callback(future)
+    else:
+        callback(future)
+
+
+def defer_cleanup(cluster, callback, owner=None):
+    """Keep rejected cleanup reachable through the owner's public shutdown."""
+    owner = cluster if owner is None else owner
+    runtime = cluster._lifecycle._runtime
+    lock = Lock()
+    running = False
+
+    def cleanup():
+        nonlocal running
+        with lock:
+            if running or owner._shutdown_cleanup is None:
+                return
+            running = True
+        try:
+            with physical_work_context(cleanup=True):
+                callback()
+        except BaseException as exc:
+            if runtime is not None:
+                runtime.cleanup_error = exc
             raise
+        else:
+            owner._shutdown_cleanup = None
+            release()
+        finally:
+            with lock:
+                running = False
+
+    release = lambda: None
+    with lock:
+        # A finalized runtime may reject retention. Keep public retry even
+        # then, and prevent concurrent retry until reservation has settled.
+        owner._shutdown_cleanup = cleanup
+        try:
+            if runtime is not None:
+                release = runtime.retain_cleanup(cleanup)
+        except BaseException as exc:
+            runtime.cleanup_error = exc
+            raise
+    return retry_cleanup(cluster, owner)
+
+
+def retry_cleanup(cluster, owner):
+    cleanup = owner._shutdown_cleanup
+    if cleanup is None:
+        return
+    try:
+        if owner is cluster:
+            # The executor's only worker may be waiting for this socket.
+            # Retained cleanup owns even a failure in this first close step.
+            cluster.control_connection.shutdown()
+        if managed_context(cluster) and not performing_cleanup():
+            with owner._lock:
+                future = getattr(owner, '_shutdown_future', None)
+                if future is not None and not future.done():
+                    return future
+                owner._shutdown_future = cluster.executor.submit(cleanup)
+                return owner._shutdown_future
+        cleanup()
+    except BaseException as exc:
+        runtime = cluster._lifecycle._runtime
+        if runtime is not None:
+            runtime.cleanup_error = exc
+        log.exception('Failed to finish management lifetime cleanup')
+        raise
+
+
+def synchronous_api(method):
+    @wraps(method)
+    def invoke(self, *args, **kwargs):
+        cluster = self if hasattr(self, '_lifecycle') else self.cluster
+        assert_synchronous_api(cluster.connection_class)
+        if cluster.is_shutdown or not cluster._management_start_allowed():
+            return method(self, *args, **kwargs)
+        coordinator = cluster._lifecycle
+        runtime = coordinator._ensure_runtime()
+        with compatibility_call(runtime):
+            return method(self, *args, **kwargs)
+    return invoke
+
+
+@contextmanager
+def compatibility_lock(coordinator, lock):
+    """Serialize setup and join listeners outside its lock."""
+    from cassandra._management import compatibility_lock as admitted_lock
+    try:
+        with admitted_lock(lock):
+            coordinator._local.locked = (
+                getattr(coordinator._local, 'locked', 0) + 1)
+            try:
+                yield
+            finally:
+                coordinator._local.locked -= 1
+    finally:
+        if not getattr(coordinator._local, 'locked', 0):
+            coordinator.drain()
+
+
+def observation_event(family):
+    def decorate(method):
+        @wraps(method)
+        def dispatch(self, host, *args, **kwargs):
+            return self._lifecycle.submit_observation(
+                host, family, method, self, host, *args, **kwargs)
+        return dispatch
+    return decorate
+
+
+def negative_event(method):
+    method._negative_lifecycle = True
+    return event(method)
 
 
 def event(method):

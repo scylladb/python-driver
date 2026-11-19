@@ -49,7 +49,64 @@ from tests import connection_class
 import pytest
 
 
+@pytest.mark.parametrize('proxy', [False, True])
+def test_cancelled_completion_wakes_bulk_waiters_repeatedly(proxy):
+    from concurrent.futures import wait
+    from cassandra.cluster import _cancel_and_notify, _PoolIntentCompletion
+    if proxy:
+        completion = _PoolIntentCompletion()
+        owner = object()
+        future = completion.claim(owner)
+        sibling = completion.new_waiter()
+    else:
+        future = Future()
+    installed = Event()
+
+    class ObservedWaiters(list):
+        def append(self, waiter):
+            super().append(waiter)
+            installed.set()
+
+    future._waiters = ObservedWaiters()
+    observed = []
+    future.add_done_callback(
+        lambda done: (
+            observed.append(wait([done], timeout=0)) if proxy else None))
+    results = []
+    waiter = Thread(target=lambda: results.append(wait([future], timeout=5)))
+    waiter.start()
+    try:
+        assert installed.wait(5)
+        _cancel_and_notify(future)
+        _cancel_and_notify(future)
+        waiter.join(5)
+        assert not waiter.is_alive()
+        assert results[0].done == {future}
+        assert not results[0].not_done
+        if proxy:
+            assert observed[0].done == {future}
+            assert completion.is_owner_pending(owner)
+            assert not sibling.done()
+            work = Future()
+            work.set_result(42)
+            completion.complete_from_work(owner, work)
+            assert sibling.result(0) == 42
+            assert future.cancelled()
+    finally:
+        waiter.join(5)
+
+
 log = logging.getLogger(__name__)
+
+
+def await_lifecycle_callbacks(cluster):
+    ("""Join delivery after a manually executed asynchronous executor """
+     """handoff.""")
+    coordinator = cluster._lifecycle
+    if not coordinator.closed and not coordinator.delivering:
+        coordinator._runtime.notify(
+            lambda: None, wait=True, timeout=5).result(5)
+
 
 
 class ExceptionTypeTest(unittest.TestCase):
@@ -2260,6 +2317,7 @@ class HostReconnectionHandlerTest(unittest.TestCase):
         cluster._start_reconnector.assert_not_called()
 
         down_task(*down_args)
+        await_lifecycle_callbacks(cluster)
         cluster.profile_manager.on_down.assert_called_once_with(self.host)
         cluster.control_connection.on_down.assert_called_once_with(self.host)
         session.on_down.assert_called_once_with(self.host)
@@ -2309,6 +2367,7 @@ class HostReconnectionHandlerTest(unittest.TestCase):
         assert cluster.executor.submit.call_count == 2
         down_task, *args = cluster.executor.submit.call_args.args
         down_task(*args)
+        await_lifecycle_callbacks(cluster)
 
         cluster.profile_manager.on_down.assert_called_once_with(self.host)
         cluster.control_connection.on_down.assert_called_once_with(self.host)
@@ -2401,6 +2460,7 @@ class HostReconnectionHandlerTest(unittest.TestCase):
         cluster.on_down(self.host, is_host_addition=False)
         down_task, *args = cluster.executor.submit.call_args.args
         down_task(*args)
+        await_lifecycle_callbacks(cluster)
 
         assert not self.host._reconnection_handler.is_host_addition
         listener.on_add.assert_called_once_with(self.host)
@@ -2433,6 +2493,7 @@ class HostReconnectionHandlerTest(unittest.TestCase):
             cluster.on_down(host, is_host_addition=False)
             down_task, *args = cluster.executor.submit.call_args.args
             down_task(*args)
+            await_lifecycle_callbacks(cluster)
 
             raise RuntimeError('listener failed')
 
@@ -2468,6 +2529,7 @@ class HostReconnectionHandlerTest(unittest.TestCase):
 
         down_task, *args = cluster.executor.submit.call_args.args
         down_task(*args)
+        await_lifecycle_callbacks(cluster)
 
         cluster._start_reconnector.assert_called_once_with(
             self.host, False, on_add_reconnection=None,
@@ -2530,6 +2592,7 @@ class HostReconnectionHandlerTest(unittest.TestCase):
         assert not self.host._is_removed
 
         down_task(*args)
+        await_lifecycle_callbacks(cluster)
 
         cluster.profile_manager.on_down.assert_called_once_with(self.host)
         cluster.control_connection.on_down.assert_called_once_with(self.host)
@@ -2567,6 +2630,7 @@ class HostReconnectionHandlerTest(unittest.TestCase):
         cluster.control_connection.on_down.reset_mock()
 
         down_task(*args)
+        await_lifecycle_callbacks(cluster)
         assert not cluster.on_down(self.host, is_host_addition=False)
 
         cluster.profile_manager.on_down.assert_not_called()
@@ -2747,7 +2811,8 @@ cluster = Cluster(
     allow_control_connection_query_fallback=
     ControlConnectionQueryFallback.SkipPoolCreation,
 )
-with patch.object(cluster.connection_class, 'initialize_reactor'), \
+with patch.object(cluster.connection_class, 'initialize_reactor', \
+wraps=cluster.connection_class.initialize_reactor), \
         patch.object(cluster.control_connection, 'connect'), \
         patch.object(cluster, '_populate_hosts'), \
         patch.object(cluster.profile_manager, 'check_supported'):
@@ -2808,7 +2873,8 @@ cluster = Cluster(
     allow_control_connection_query_fallback=
     ControlConnectionQueryFallback.SkipPoolCreation,
 )
-with patch.object(cluster.connection_class, 'initialize_reactor'), \
+with patch.object(cluster.connection_class, 'initialize_reactor', \
+wraps=cluster.connection_class.initialize_reactor), \
         patch.object(cluster.control_connection, 'connect'), \
         patch.object(cluster, '_populate_hosts'), \
         patch.object(cluster.profile_manager, 'check_supported'):
@@ -4146,7 +4212,7 @@ class SessionPoolRaceTest(unittest.TestCase):
         cluster.sessions = (session, live_session)
         cluster._finalize_add = Mock()
 
-        def collect_futures(futures, callback):
+        def collect_futures(futures, callback, host=None, is_current=None):
             callback([future.exception(timeout=5) or future.result(timeout=5)
                       for future in futures])
 
@@ -7140,7 +7206,7 @@ def test_preparation_does_not_block_lifecycle_delivery(operation, supersede):
 
         def record_submit(fn, *args, **kwargs):
             future = submit(fn, *args, **kwargs)
-            if fn == cluster._prepare_all_queries:
+            if getattr(fn, '__name__', None) == 'prepare':
                 preparation_futures.append(future)
             elif getattr(fn, "__name__", None) == "_restart_reconnector":
                 recovery_futures.append(future)
@@ -7743,6 +7809,7 @@ def test_down_after_callback_failure_recovers_without_policy_add(pending_discove
     assert len(submitted) == 1
     task, args, kwargs = submitted.pop()
     task(*args, **kwargs)
+    await_lifecycle_callbacks(cluster)
     handler = host._reconnection_handler
     assert handler is not None
     assert not handler.is_host_addition
