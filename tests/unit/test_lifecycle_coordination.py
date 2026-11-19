@@ -14,7 +14,7 @@
 
 from concurrent.futures import CancelledError, Future
 from threading import Barrier, Event, Lock, Thread, get_ident
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 import pytest
 
@@ -244,8 +244,9 @@ def test_host_readiness_waits_for_all_session_pool_results(topology, event, outc
     assert not host.is_up
     getattr(listener, 'on_' + event).assert_not_called()
     for session in sessions:
+        kwargs = {'_on_pool_recovered': ANY} if event == 'add' else {}
         session.add_or_renew_pool.assert_called_once_with(
-            host, is_host_addition=(event == 'add'))
+            host, is_host_addition=(event == 'add'), **kwargs)
     if outcome == 'exception':
         results[1].set_exception(RuntimeError('pool creation failed'))
     elif outcome == 'cancelled':
@@ -1960,7 +1961,8 @@ def test_failed_candidate_cannot_fence_down_before_publication(
 
     def inspect():
         observed = {host: {'open_count': 0}}
-        assert session.add_or_renew_pool(host, False).result(timeout=5) is False
+        completion = session.add_or_renew_pool(host, False)
+        assert completion.result(timeout=5) is False
         return observed
 
     session.get_pool_state = Mock(side_effect=inspect)

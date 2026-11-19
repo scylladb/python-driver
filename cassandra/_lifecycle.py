@@ -20,7 +20,7 @@ explicitly for internal use; no names are exported by wildcard imports.
 
 from collections import deque
 from concurrent.futures import Future
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from functools import partial, wraps
 import logging
 from threading import local, RLock
@@ -84,6 +84,23 @@ class PoolOwnershipReservation:
             return True
         return session._owns_pool_generation_locked(
             self.host, self.generation, self.expected_pool, self.endpoint)
+
+
+class PoolRecoveryReservation(PoolOwnershipReservation):
+    """Keep a recovered ADD slot current through readiness publication."""
+
+    def __init__(self, session, pool, generation, intent):
+        super().__init__(session, pool.host, pool.endpoint, generation, pool)
+        self.pool = pool
+        self.intent = intent
+
+    def owns_locked(self):
+        session = self._session_ref()
+        return (session is not None and
+                self.pool._session_ref() is session and
+                not self.pool._ownership.retired and
+                session._pool_intents.get(self.host) is self.intent and
+                super().owns_locked(self.pool))
 
 
 class PoolFailureReservation:
@@ -582,17 +599,51 @@ class LifecycleCoordinator:
             return True
 
     def mark_ready(self, host, set_up=True, readiness_generation=None,
-                   addition_token=None, advance_health=True):
+                   addition_token=None, advance_health=True,
+                   pool_recoveries=()):
         if (not self.readiness_is_current(host, readiness_generation) or
                 (addition_token is not None and
                  not self.addition_is_current(host, addition_token))):
             return False
-        if set_up:
-            host.conviction_policy.reset()
-        with host.lock:
+
+        def guard_readiness(guards):
+            sessions = [recovery._session_ref()
+                        for recovery in pool_recoveries]
+            if any(session is None for session in sessions):
+                return False
+            if any(recovery.host is not host or
+                   session.cluster._lifecycle is not self
+                   for recovery, session in zip(pool_recoveries, sessions)):
+                return False
+            # Match pool publication: membership, Session, Host, metadata.
+            # Take every lock of one kind before advancing to the next kind.
+            pools = {recovery.pool for recovery in pool_recoveries}
+            for pool in sorted(pools, key=id):
+                guards.enter_context(pool._membership_lock)
+            for session in sorted(set(sessions), key=id):
+                guards.enter_context(session._lock)
+            guards.enter_context(host.lock)
+            if pool_recoveries:
+                owns_host = guards.enter_context(
+                    self._cluster.metadata._host_ownership_guard(host))
+                if not owns_host:
+                    return False
             if (not self.readiness_is_current(host, readiness_generation) or
                     (addition_token is not None and
-                     not self.addition_is_current(host, addition_token))):
+                     not self.addition_is_current(host, addition_token)) or
+                    not all(recovery.owns_locked()
+                            for recovery in pool_recoveries)):
+                return False
+            return True
+
+        if set_up and pool_recoveries:
+            with ExitStack() as guards:
+                if not guard_readiness(guards):
+                    return False
+        if set_up:
+            host.conviction_policy.reset()
+        with ExitStack() as guards:
+            if not guard_readiness(guards):
                 return False
             if set_up:
                 host.is_up = True

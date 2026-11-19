@@ -311,11 +311,11 @@ class ClusterTest(unittest.TestCase):
         second_future = Future()
         reconciliation_future = Future()
 
-        def add_first_pool(pool_host, is_host_addition):
+        def add_first_pool(pool_host, is_host_addition, **kwargs):
             first_session._pools[pool_host] = first_pool
             return first_future
 
-        def add_second_pool(pool_host, is_host_addition):
+        def add_second_pool(pool_host, is_host_addition, **kwargs):
             return second_future if is_host_addition else reconciliation_future
 
         first_session.add_or_renew_pool = Mock(side_effect=add_first_pool)
@@ -328,9 +328,9 @@ class ClusterTest(unittest.TestCase):
         cluster.on_add(host, refresh_nodes=False)
 
         first_session.add_or_renew_pool.assert_called_once_with(
-            host, is_host_addition=True)
+            host, is_host_addition=True, _on_pool_recovered=ANY)
         second_session.add_or_renew_pool.assert_called_once_with(
-            host, is_host_addition=True)
+            host, is_host_addition=True, _on_pool_recovered=ANY)
         listener.on_add.assert_not_called()
         assert host.is_up is None
 
@@ -4163,7 +4163,7 @@ class SessionPoolRaceTest(unittest.TestCase):
         pool.shutdown.assert_called_once_with()
         assert completions[0].result(timeout=5) is True
         live_session.add_or_renew_pool.assert_called_once_with(
-            host, is_host_addition=True)
+            host, is_host_addition=True, _on_pool_recovered=ANY)
         cluster._lifecycle.collect_futures.assert_called_once()
         futures = cluster._lifecycle.collect_futures.call_args.args[0]
         assert len(futures) == 2
