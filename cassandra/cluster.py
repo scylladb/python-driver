@@ -7754,14 +7754,24 @@ class ResponseFuture(object):
             # they last left off
             self.query_plan = iter(self._load_balancer.make_query_plan(self.session.keyspace, self.query))
 
-    def send_request(self, error_no_hosts=True):
+    def send_request(self, error_no_hosts=True, page_generation=None):
         """ Internal """
+        with self._callback_lock:
+            if page_generation is not None and (
+                    page_generation != self._page_generation
+                    or self._is_final()):
+                return True
+        options = ({} if page_generation is None else
+                   {'page_generation': page_generation})
+        final_options = ({} if page_generation is None else
+                         {'retry_abort_generation': page_generation})
         # query_plan is an iterator, so this will resume where we last left
         # off if send_request() is called multiple times
         for host in self.query_plan:
             if not isinstance(host, Host):
                 self._set_final_exception(TypeError(
-                    "Query plan entries must be Host instances"))
+                    "Query plan entries must be Host instances"),
+                    **final_options)
                 return True
             # Public targets and extension query plans may retain a Host from
             # an older Cluster or endpoint generation. Resolve only new
@@ -7784,7 +7794,9 @@ class ResponseFuture(object):
                           host.host_id)
                 req_id = None
             else:
-                req_id = self._query(host)
+                req_id = self._query(host, **options)
+            if req_id is _NOT_SET:
+                return True
             if req_id is not None:
                 self._req_id = req_id
                 return True
@@ -7800,7 +7812,7 @@ class ResponseFuture(object):
             return True
         if error_no_hosts:
             if self._fallback_to_control_connection():
-                req_id = self._query_control_connection()
+                req_id = self._query_control_connection(**options)
                 if req_id is _NOT_SET:
                     return True
                 if req_id is not None:
@@ -7816,7 +7828,8 @@ class ResponseFuture(object):
                 self._on_timeout()
                 return True
             self._set_final_exception(NoHostAvailable(
-                "Unable to complete the operation against any hosts", self._errors))
+                "Unable to complete the operation against any hosts",
+                self._errors), **final_options)
         return False
 
     def _has_usable_node_pool(self):
@@ -7960,9 +7973,18 @@ class ResponseFuture(object):
         self._set_final_exception(NoHostAvailable(
             "Unable to complete the operation against any hosts", self._errors))
 
-    def _set_control_connection_keyspace(self, connection, host, keyspace,
-                                         message=None, cb=None, request_id=_NOT_SET,
-                                         provisional_session=None):
+    def _set_control_connection_keyspace(
+            self, connection, host, keyspace, message=None, cb=None,
+            request_id=_NOT_SET, provisional_session=None,
+            page_generation=None):
+        options = ({} if page_generation is None else
+                   {'page_generation': page_generation})
+        final_options = ({} if page_generation is None else
+                         {'retry_abort_generation': page_generation})
+
+        def set_exception(response):
+            self._set_final_exception(response, **final_options)
+
         use_message = QueryMessage(
             query='USE %s' % protect_name(keyspace),
             consistency_level=ConsistencyLevel.ONE)
@@ -7974,12 +7996,15 @@ class ResponseFuture(object):
                 control_connection._finish_internal_keyspace_change(
                     connection, request_id)
                 if self._send_control_connection_message(
-                        message=message, cb=cb, connection=connection, host=host) is None:
-                    self._control_connection_failed()
+                        message=message, cb=cb, connection=connection,
+                        host=host, **options) is None:
+                    set_exception(NoHostAvailable(
+                        "Unable to complete the operation against any hosts",
+                        self._errors))
             elif isinstance(response, ErrorMessage):
                 control_connection._finish_internal_keyspace_change(
                     connection, request_id)
-                self._set_final_exception(response.to_exception())
+                set_exception(response.to_exception())
             elif isinstance(response, ConnectionException):
                 control_connection._finish_internal_keyspace_change(
                     connection, request_id)
@@ -7990,15 +8015,15 @@ class ResponseFuture(object):
                 # flapping control connection re-sends USE until the client-side
                 # timeout fires instead of failing fast. Routing it through the
                 # retry machinery shared with the pooled path would be the fix.
-                self.session.submit(self._retry_task, False, host)
+                self.session.submit(self._retry_task, False, host, **options)
             elif isinstance(response, Exception):
                 control_connection._finish_internal_keyspace_change(
                     connection, request_id)
-                self._set_final_exception(response)
+                set_exception(response)
             else:
                 control_connection._finish_internal_keyspace_change(
                     connection, request_id)
-                self._set_final_exception(ConnectionException(
+                set_exception(ConnectionException(
                     "Unexpected response while setting the control-connection keyspace: %r" %
                     (response,), connection.endpoint))
 
@@ -8008,7 +8033,11 @@ class ResponseFuture(object):
             message=use_message, cb=keyspace_set, connection=connection,
             host=host, record_attempt=False, record_size=False,
             request_id=request_id,
-            provisional_session=provisional_session)
+            provisional_session=provisional_session, **options)
+        if sent is _NOT_SET:
+            control_connection._finish_internal_keyspace_change(
+                connection, request_id)
+            return sent
         if sent is None:
             control_connection._finish_internal_keyspace_change(
                 connection, request_id)
@@ -8019,20 +8048,29 @@ class ResponseFuture(object):
                     "Failed sending control-connection keyspace setup", connection.endpoint))
         return sent
 
-    def _send_control_connection_message(self, message=None, cb=None, connection=None,
-                                         host=None, record_attempt=True, record_size=True,
-                                         request_id=_NOT_SET,
-                                         provisional_session=None):
+    def _send_control_connection_message(
+            self, message=None, cb=None, connection=None, host=None,
+            record_attempt=True, record_size=True, request_id=_NOT_SET,
+            provisional_session=None, page_generation=None):
         # Paging publishes its message and generation under this same lock.
         # Keep the captured tag while borrowing, even if another attempt
         # completes this page and the application starts the next one.
         with self._callback_lock:
-            page_generation = self._page_generation
-            if message is None:
-                message, result_meta, decoder_context = self._request_snapshot
-            else:
-                result_meta = self._bound_result_metadata
-                decoder_context = self._result_metadata_decoder_context
+            stale = page_generation is not None and (
+                page_generation != self._page_generation or self._is_final())
+            if not stale:
+                page_generation = self._page_generation
+                if message is None:
+                    message, result_meta, decoder_context = \
+                        self._request_snapshot
+                else:
+                    result_meta = self._bound_result_metadata
+                    decoder_context = self._result_metadata_decoder_context
+        if stale:
+            if request_id is not _NOT_SET and request_id is not None:
+                self._release_control_connection_request(
+                    connection, request_id, provisional_session)
+            return _NOT_SET
 
         if connection is None:
             control_connection = self.session.cluster.control_connection
@@ -8122,7 +8160,16 @@ class ResponseFuture(object):
 
         return None
 
-    def _query_control_connection(self, message=None, cb=None, connection=None, host=None):
+    def _query_control_connection(
+            self, message=None, cb=None, connection=None, host=None,
+            page_generation=None):
+        with self._callback_lock:
+            if page_generation is not None and (
+                    page_generation != self._page_generation
+                    or self._is_final()):
+                return _NOT_SET
+        options = ({} if page_generation is None else
+                   {'page_generation': page_generation})
         self._control_connection_query_attempted = True
         control_connection = self.session.cluster.control_connection
         if control_connection is None:
@@ -8240,7 +8287,7 @@ class ResponseFuture(object):
             sent = self._send_control_connection_message(
                 message=message, cb=keyspace_changed, connection=connection,
                 host=host, request_id=request_id,
-                provisional_session=provisional_session)
+                provisional_session=provisional_session, **options)
             if sent is None:
                 control_connection._finish_application_keyspace_change(
                     connection, request_id)
@@ -8256,24 +8303,28 @@ class ResponseFuture(object):
             return self._send_control_connection_message(
                 message=message, cb=cb, connection=connection, host=host,
                 request_id=request_id,
-                provisional_session=provisional_session)
+                provisional_session=provisional_session, **options)
 
         if needs_internal_use:
             return self._set_control_connection_keyspace(
                 connection, host, keyspace, message=message, cb=cb,
                 request_id=request_id,
-                provisional_session=provisional_session)
+                provisional_session=provisional_session, **options)
 
         return self._send_control_connection_message(
             message=message, cb=cb, connection=connection, host=host,
             request_id=request_id,
-            provisional_session=provisional_session)
+            provisional_session=provisional_session, **options)
 
-    def _query(self, host, message=None, cb=None):
+    def _query(self, host, message=None, cb=None, page_generation=None):
         # Paging publishes its message and generation under this same lock.
         # Keep the captured tag while borrowing, even if another attempt
         # completes this page and the application starts the next one.
         with self._callback_lock:
+            if page_generation is not None and (
+                    page_generation != self._page_generation
+                    or self._is_final()):
+                return _NOT_SET
             page_generation = self._page_generation
             if message is None:
                 message, result_meta, decoder_context = self._request_snapshot
@@ -8533,21 +8584,30 @@ class ResponseFuture(object):
             message, result_metadata, decoder_context)
         return True
 
-    def _reprepare(self, prepare_message, host, connection, pool, query_id=None):
+    def _reprepare(self, prepare_message, host, connection, pool,
+                   query_id=None, page_generation=None):
+        with self._callback_lock:
+            if page_generation is None:
+                page_generation = self._page_generation
+            if (page_generation != self._page_generation or self._is_final()):
+                return
         decoder_context = _prepared_metadata.decoder_context(
             self._protocol_handler,
             self.session.cluster._prepared_metadata_context)
         cb = partial(self.session.submit, self._execute_after_prepare, host, connection, pool,
                      expected_query_id=query_id,
-                     result_metadata_decoder_context=decoder_context)
+                     result_metadata_decoder_context=decoder_context,
+                     page_generation=page_generation)
         if pool is None and connection is not None and connection.is_control_connection:
-            request_id = self._query_control_connection(prepare_message, cb=cb,
-                                                        connection=connection, host=host)
+            request_id = self._query_control_connection(
+                prepare_message, cb=cb, connection=connection, host=host,
+                page_generation=page_generation)
         else:
-            request_id = self._query(host, prepare_message, cb=cb)
+            request_id = self._query(host, prepare_message, cb=cb,
+                                     page_generation=page_generation)
         if request_id is None:
             # try to submit the original prepared statement on some other host
-            self.send_request()
+            self.send_request(page_generation=page_generation)
 
     def _cache_tablet_from_payload(self, payload_key, ctype):
         """
@@ -8573,6 +8633,9 @@ class ResponseFuture(object):
     def _set_result(
             self, host, connection, pool, response, page_generation=None,
             result_metadata_decoder_context=_NOT_SET):
+        response_page_generation = (
+            self._page_generation if page_generation is None
+            else page_generation)
         try:
             if self._is_final() or (page_generation is not None and
                                     page_generation != self._page_generation):
@@ -8753,7 +8816,9 @@ class ResponseFuture(object):
                     # since this might block, run on the executor to avoid hanging
                     # the event loop thread
                     self.session.submit(self._reprepare, prepare_message, host, connection, pool,
-                                        query_id=query_id)
+                                        query_id=query_id,
+                                        page_generation=(
+                                            response_page_generation))
                     return
                 else:
                     if hasattr(response, 'to_exception'):
@@ -8806,7 +8871,7 @@ class ResponseFuture(object):
 
     def _execute_after_prepare(
             self, host, connection, pool, response, expected_query_id=None,
-            result_metadata_decoder_context=_NOT_SET):
+            result_metadata_decoder_context=_NOT_SET, page_generation=None):
         """
         Handle the response to our attempt to prepare a statement.
         If it succeeded, run the original query again against the same host.
@@ -8814,82 +8879,90 @@ class ResponseFuture(object):
         if pool:
             pool.return_connection(connection)
 
-        if self._final_exception:
-            return
+        with self._callback_lock:
+            if page_generation is None:
+                page_generation = self._page_generation
+            if (page_generation != self._page_generation or self._is_final()):
+                return
+        options = {'page_generation': page_generation}
+        final_options = {'retry_abort_generation': page_generation}
         if result_metadata_decoder_context is _NOT_SET:
             result_metadata_decoder_context = \
                 self._result_metadata_decoder_context
 
         if isinstance(response, ResultMessage):
             if response.kind == RESULT_KIND_PREPARED:
-                if self.prepared_statement:
-                    expected_query_id = self.prepared_statement.query_id
-                if expected_query_id is not None and expected_query_id != response.query_id:
-                    self._set_final_exception(DriverException(
-                        "ID mismatch while trying to reprepare (expected {expected}, got {got}). "
-                        "This prepared statement won't work anymore. "
-                        "This usually happens when you run a 'USE...' "
-                        "query after the statement was prepared.".format(
-                            expected=hexlify(expected_query_id), got=hexlify(response.query_id)
-                        )
-                    ))
-                    return
-                if self.prepared_statement:
-                    # Replace all bind metadata for subsequent binds, including
-                    # names and types. Keep the original routing indexes and this
-                    # request's serialized values; type/layout changes require a
-                    # fresh prepare and bind.
-                    self.prepared_statement.column_metadata = response.bind_metadata
-                    # Update the metadata/id pair atomically from exactly what this
-                    # reprepare response carries. Falling back to the previously
-                    # cached id when this response has none would risk pairing it
-                    # with metadata from a different schema version than the one the
-                    # old id was computed for (e.g. schema changed and reverted
-                    # between the two PREPAREs) - a stale-but-plausible id a later
-                    # id-aware execute could send without the server detecting the
-                    # mismatch. Dropping it instead triggers the same self-healing
-                    # b'' sentinel path a never-prepared id would.
-                    self.prepared_statement._update_result_metadata(
-                        response.column_metadata, response.result_metadata_id,
-                        result_metadata_decoder_context)
-                    # Keep the copied cursor and its publication in the same
-                    # page transition as manual paging. Release before IO.
-                    with self._callback_lock:
+                error = None
+                with self._callback_lock:
+                    if (page_generation != self._page_generation
+                            or self._is_final()):
+                        return
+                    if self.prepared_statement:
+                        expected_query_id = self.prepared_statement.query_id
+                    if (expected_query_id is not None
+                            and expected_query_id != response.query_id):
+                        error = DriverException(
+                            "ID mismatch while trying to reprepare "
+                            "(expected {expected}, got {got}). "
+                            "This prepared statement won't work anymore. "
+                            "This usually happens when you run a 'USE...' "
+                            "query after the statement was prepared.".format(
+                                expected=hexlify(expected_query_id),
+                                got=hexlify(response.query_id)))
+                    elif self.prepared_statement:
+                        # Bind metadata and result provenance belong to the
+                        # page that received UNPREPARED. Publish them with its
+                        # refreshed request before another page can advance.
+                        self.prepared_statement.column_metadata = \
+                            response.bind_metadata
+                        self.prepared_statement._update_result_metadata(
+                            response.column_metadata,
+                            response.result_metadata_id,
+                            result_metadata_decoder_context)
                         self._refresh_prepared_result_metadata()
-                else:
-                    prepared_statement = self.session.cluster._prepared_statements.get(
-                        response.query_id)
-                    if prepared_statement is not None:
-                        prepared_statement.column_metadata = response.bind_metadata
+                    else:
+                        prepared_statement = \
+                            self.session.cluster._prepared_statements.get(
+                                response.query_id)
+                        if prepared_statement is not None:
+                            prepared_statement.column_metadata = \
+                                response.bind_metadata
+                if error is not None:
+                    self._set_final_exception(error, **final_options)
+                    return
 
                 # use self._query to re-use the same host and
                 # at the same time properly borrow the connection
                 if pool is None and connection is not None and connection.is_control_connection:
-                    request_id = self._query_control_connection(connection=connection, host=host)
+                    request_id = self._query_control_connection(
+                        connection=connection, host=host, **options)
                 else:
-                    request_id = self._query(host)
+                    request_id = self._query(host, **options)
                 if request_id is None:
                     # this host errored out, move on to the next
-                    self.send_request()
+                    self.send_request(**options)
             else:
                 self._set_final_exception(ConnectionException(
                     "Got unexpected response when preparing statement "
-                    "on host %s: %s" % (host, response)))
+                    "on host %s: %s" % (host, response)),
+                    **final_options)
         elif isinstance(response, ErrorMessage):
             if hasattr(response, 'to_exception'):
-                self._set_final_exception(response.to_exception())
+                self._set_final_exception(
+                    response.to_exception(), **final_options)
             else:
-                self._set_final_exception(response)
+                self._set_final_exception(response, **final_options)
         elif isinstance(response, ConnectionException):
             log.debug("Connection error when preparing statement on host %s: %s",
                       host, response)
             # try again on a different host, preparing again if necessary
             self._errors[host] = response
-            self.send_request()
+            self.send_request(**options)
         else:
             self._set_final_exception(ConnectionException(
                 "Got unexpected response type when preparing "
-                "statement on host %s: %s" % (host, response)))
+                "statement on host %s: %s" % (host, response)),
+                **final_options)
 
     def _is_final(self):
         # A late response (e.g. speculative, or after client timeout) must not re-fire callbacks.
@@ -9031,16 +9104,18 @@ class ResponseFuture(object):
             # to retry the operation
             return
 
+        options = ({} if page_generation is None else
+                   {'page_generation': page_generation})
         if self._control_connection_query_attempted:
             self._control_connection_query_attempted = False
-            self.send_request()
+            self.send_request(**options)
             return
 
-        if reuse_connection and self._query(host) is not None:
+        if reuse_connection and self._query(host, **options) is not None:
             return
 
         # otherwise, move onto another host
-        self.send_request()
+        self.send_request(**options)
 
     def result(self):
         """

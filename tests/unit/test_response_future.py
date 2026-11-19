@@ -2768,7 +2768,7 @@ class ResponseFutureTests(unittest.TestCase):
         rf.send_request = Mock()
         rf._reprepare(PrepareMessage("SELECT * FROM foo"), host, connection, None)
 
-        rf.send_request.assert_called_once_with()
+        rf.send_request.assert_called_once_with(page_generation=0)
 
     def test_control_connection_fallback_rejects_indented_use(self):
         session = self.make_basic_session()
@@ -2853,7 +2853,8 @@ class ResponseFutureTests(unittest.TestCase):
         connection.send_msg.call_args_list[1][1]['cb'](prepared_response)
         session.submit.assert_called_once_with(
             rf._execute_after_prepare, host, connection, None, prepared_response,
-            expected_query_id=None, result_metadata_decoder_context=None)
+            expected_query_id=None, result_metadata_decoder_context=None,
+            page_generation=0)
 
     def test_control_connection_fallback_not_used_when_pool_can_serve(self):
         session = self.make_basic_session()
@@ -3306,7 +3307,7 @@ class ResponseFutureTests(unittest.TestCase):
 
         rf._query = Mock(return_value=True)
         rf._execute_after_prepare('host', None, None, response)
-        rf._query.assert_called_once_with('host')
+        rf._query.assert_called_once_with('host', page_generation=0)
 
         rf.prepared_statement = PreparedStatement(
             column_metadata=[], query_id=query_id, routing_key_indexes=None,
@@ -3314,7 +3315,7 @@ class ResponseFutureTests(unittest.TestCase):
             result_metadata=[], result_metadata_id=None)
         rf._query = Mock(return_value=True)
         rf._execute_after_prepare('host', None, None, response)
-        rf._query.assert_called_once_with('host')
+        rf._query.assert_called_once_with('host', page_generation=0)
         assert rf.prepared_statement.result_metadata_id == b'foo'
 
     def test_unprepared_refreshes_bind_names_without_rebinding(self):
@@ -3516,7 +3517,7 @@ class ResponseFutureTests(unittest.TestCase):
         assert rf.prepared_statement.result_metadata_and_id == (new_meta, b'new_hash')
         # Recovering the metadata re-arms the anomaly warning, on this path too.
         assert rf.prepared_statement._warned_missing_column_metadata is False
-        rf._query.assert_called_once_with('host')
+        rf._query.assert_called_once_with('host', page_generation=0)
 
     def test_execute_after_prepare_no_metadata_id_in_response_clears_id(self):
         """
@@ -4263,7 +4264,7 @@ class ResponseFutureTests(unittest.TestCase):
         assert rf.message.result_metadata_id == b'new_hash'
         assert rf.message.skip_meta is True
         assert rf._result_metadata_decoder_context == _decoder_context()
-        rf._query.assert_called_once_with('host')
+        rf._query.assert_called_once_with('host', page_generation=0)
 
     def test_reprepare_refresh_cannot_restore_previous_page(self):
         # Bound worker failures and lock-order regressions inside a subprocess.
