@@ -5417,12 +5417,20 @@ def test_profile_pool_budget_excludes_policy_phase_readmission(
             notification.result(5)
 
 
-def test_application_shutdown_does_not_join_active_lifecycle_callback(
+def test_application_shutdown_preserves_active_lifecycle_callback_wait(
         topology):
     cluster, _ = topology
     coordinator = cluster._lifecycle
     manager = coordinator._ensure_runtime()
     entered, release, returned = Event(), Event(), Event()
+    retirement_entered = Event()
+    retire_completion = manager.retire_completion
+
+    def observed_retirement():
+        retirement_entered.set()
+        return retire_completion()
+
+    manager.retire_completion = observed_retirement
     errors = []
     def callback():
         entered.set()
@@ -5439,10 +5447,12 @@ def test_application_shutdown_does_not_join_active_lifecycle_callback(
     try:
         assert entered.wait(3)
         caller.start()
-        assert returned.wait(3), 'application shutdown joined active callback'
+        assert retirement_entered.wait(3)
+        assert not returned.wait(.05), 'shutdown skipped actual callback execution'
+        release.set()
+        assert returned.wait(3)
         assert not errors
         assert cluster.is_shutdown
-        assert not manager.finalized.is_set()
     finally:
         release.set()
         if caller.ident is not None:

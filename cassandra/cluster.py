@@ -2260,9 +2260,10 @@ class Cluster(object):
         not detected. Use an application thread for shutdown in those
         cases.
 
-        Shutdown does not wait for callbacks already running on the
-        lifecycle notification thread, even from an application thread.
-        Those callbacks can finish after this method returns. If
+        Normal application-thread shutdown preserves its executor and active
+        lifecycle-callback waits. Capture disposal can finish separately after
+        actual callback execution and native completion delivery retire. Calls
+        originating in managed contexts remain nonwaiting. If
         deferred cleanup submission raises, call ``shutdown()`` again
         from an application thread to finish the retained cleanup.
         """
@@ -4373,8 +4374,9 @@ class Session(object):
         custom I/O callbacks without management hooks are not detected.
         Use an application thread for shutdown in those cases.
 
-        Shutdown does not wait for callbacks already running on the
-        lifecycle notification thread, even from an application thread.
+        Session shutdown does not join the lifecycle notification lane.
+        Normal external Cluster shutdown separately waits for active lifecycle
+        callback execution; it does not wait for later capture disposal.
         If deferred cleanup submission raises, an application thread can
         call ``shutdown()`` again to finish the retained cleanup.
         """

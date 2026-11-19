@@ -2550,3 +2550,88 @@ def test_concurrent_public_shutdown_waits_for_original_executor(
                 assert not thread.is_alive()
         cluster.shutdown()
         manager.join(5)
+
+
+@pytest.mark.parametrize('mode', ['return', 'error', 'managed'])
+def test_shutdown_waits_listener_execution_but_not_its_capture_disposal(
+        connection_class, mode):
+    cluster = Cluster(connection_class=connection_class)
+    manager = cluster._lifecycle._ensure_runtime()
+    channel = manager._close_completion.__self__
+    listener_entered, release_listener, disposal_entered, release_disposal = (
+        Event(), Event(), Event(), Event())
+    retirement_entered, shutdown_returned, managed_returned = (
+        Event(), Event(), Event())
+    contexts, errors = [], []
+    retire_completion = manager.retire_completion
+
+    def observed_retirement():
+        retirement_entered.set()
+        return retire_completion()
+
+    manager.retire_completion = observed_retirement
+
+    class Listener:
+        def __call__(self):
+            contexts.append(execution_context())
+            listener_entered.set()
+            assert release_listener.wait(10)
+            if mode == 'managed':
+                cluster.shutdown()
+                managed_returned.set()
+            if mode == 'error':
+                raise SystemExit('injected application listener failure')
+
+        def __del__(self):
+            disposal_entered.set()
+            if not release_disposal.wait(10):
+                errors.append('listener capture disposal was not released')
+
+    def shutdown():
+        try:
+            cluster.shutdown()
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            shutdown_returned.set()
+
+    ordinary = Thread(target=shutdown, daemon=True)
+    try:
+        # This producer handed lifecycle callbacks to the executor in the
+        # baseline. Migration to L must preserve its external shutdown wait.
+        completion = cluster._lifecycle.submit_async(
+            cluster.executor, Listener())
+        assert completion is not None and listener_entered.wait(5)
+        ordinary.start()
+        assert retirement_entered.wait(5)
+        assert not shutdown_returned.wait(.05)
+        assert not channel._detached.is_set()
+        release_listener.set()
+        if mode != 'error':
+            assert disposal_entered.wait(5)
+        if mode == 'managed':
+            assert managed_returned.is_set()
+        assert shutdown_returned.wait(5)
+        assert contexts == ['callback']
+        assert channel._detached.is_set()
+        with manager._condition:
+            assert not any(record.notifying for record in manager._records)
+        if mode != 'error':
+            assert not manager.finalized.is_set()
+            assert manager.counts()['ordinary'] >= 1
+        else:
+            # Diagnostics may retain the raised exception traceback and its
+            # Listener self. Close already settled this receipt independently.
+            assert completion.done()
+        assert not errors
+    finally:
+        release_listener.set()
+        release_disposal.set()
+        if ordinary.ident is not None:
+            ordinary.join(5)
+            assert not ordinary.is_alive()
+        cluster.shutdown()
+        manager.join(5)
+        assert all(not thread.is_alive() for thread in manager._threads)
+        assert not manager._records and not manager._capture_obligations
+        assert not errors
