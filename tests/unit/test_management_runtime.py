@@ -127,6 +127,51 @@ def runtime(monkeypatch):
     assert all(value == 0 for value in assert_runtime_counts(runtime).values())
 
 
+@pytest.mark.skipif(platform.python_implementation() != 'CPython',
+                    reason='Requires synchronous reference destruction')
+@pytest.mark.parametrize('pool', [None, 'pool'])
+def test_handler_captures_retire_on_callback_lane_outside_locks(pool):
+    manager = ManagementRuntime(Dispatcher())
+    observed, probes = [], []
+    entered, released, cleanup_release = Event(), Event(), Event()
+    class Payload:
+        def __del__(self):
+            observed.append((execution_context(),
+                             manager._condition._is_owned()))
+            probe = Thread(target=lambda: (manager.counts(), released.set()),
+                           daemon=True)
+            probes.append(probe)
+            probe.start()
+            probe.join(2)
+            observed.append(released.is_set())
+            entered.set()
+            if released.is_set():
+                observed.append(cleanup_release.wait(5))
+
+    try:
+        with manager._condition:
+            payload = Payload()
+            future = manager.submit(lambda record, payload=payload: 7,
+                                    pool=pool)
+            del payload
+        assert future.result(5) == 7
+        assert entered.wait(5)
+        assert observed == [('callback', False), True]
+        manager.close()
+        assert not manager.finalized.is_set()
+        assert manager.counts()['close'] == 0
+        cleanup_release.set()
+        manager.join(5)
+        assert observed == [('callback', False), True, True]
+    finally:
+        cleanup_release.set()
+        manager.close()
+        manager.join(5)
+        for probe in probes:
+            probe.join(5)
+            assert not probe.is_alive()
+
+
 @pytest.mark.parametrize('kind,pool', [
     ('operation', None), ('operation', 'pool'), ('notification', None)])
 def test_handler_capture_retirement_retains_admission(kind, pool):
@@ -261,6 +306,27 @@ def test_callback_lane_wait_does_not_block_native_or_reactor_completion(
         release.set()
 
 
+@pytest.mark.parametrize('waiting', [
+    lambda future: future.result(),
+    lambda future: future.exception(),
+    lambda future: wait([future]),
+    lambda future: next(as_completed([future]))])
+def test_callback_lane_rejects_its_pending_notification_wait(runtime, waiting):
+    manager, dispatch = runtime
+    nested = []
+    def callback():
+        future = manager.notify(lambda: 17)
+        nested.append(future)
+        with pytest.raises(ManagementContextError, match='callback lane'):
+            waiting(future)
+        # Ordinary owner operations remain available to synchronous reentry.
+        with manager.synchronous_reentry() as budget:
+            future = manager.submit(lambda record: 18, budget=budget)
+            assert future.result(5) == 18
+    manager.notify(callback).result(5)
+    assert nested[0].result(5) == 17
+
+
 def test_owner_wait_fails_and_pool_handlers_are_serial(runtime):
     manager, dispatch = runtime
     entered, release = Event(), Event()
@@ -283,6 +349,31 @@ def test_owner_wait_fails_and_pool_handlers_are_serial(runtime):
         with pytest.raises(ManagementContextError):
             other.result()
     manager.submit(self_wait).result(5)
+
+
+@pytest.mark.parametrize('notification', [False, True])
+def test_callback_rejects_saturated_ordinary_admission(notification):
+    manager = ManagementRuntime(Dispatcher(), limit=1)
+    finished = Event()
+    errors = []
+    def callback():
+        try:
+            if notification:
+                manager.notify(lambda: None, wait=True)
+            else:
+                manager.submit(lambda record: None, wait=True)
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            finished.set()
+    try:
+        manager.notify(callback)
+        assert finished.wait(5), 'callback waited behind its own credit'
+        assert len(errors) == 1
+        assert isinstance(errors[0], ManagementContextError)
+    finally:
+        manager.close()
+        manager.join(5)
 
 
 @pytest.mark.parametrize('failed_phase', [1, 2, 3, 4, 5])
@@ -373,6 +464,287 @@ def test_start_failure_retires_registered_lifetimes(
         manager.join(5)
 
 
+def test_delivery_failure_reentering_close_waits_for_lifetime_retirement():
+    from cassandra._management import ManagementDeliveryFailed
+
+    finalized, preconditions = [], []
+    def reject(callback):
+        # The outer close has begun, but its retirement is still in progress.
+        preconditions.append(manager._closing and not manager.closed.is_set())
+        raise RuntimeError('reactor failed')
+
+    manager = ManagementRuntime(reject, on_finalized=lambda done: (
+        finalized.append((manager.closed.is_set(), handle.closed.is_set(),
+                          manager.counts())), done()))
+    handle = manager.register_lifetime()
+    # Hold admission in the mailbox so close publishes the terminal state.
+    manager._started = True
+    future = manager.submit(lambda record: pytest.fail('shutdown work ran'))
+    future.add_done_callback(lambda future: pytest.fail('delivery ran'))
+    manager.close()
+    assert not manager.finalized.is_set()
+    # This controlled runtime has no launched lanes; drain retained callback
+    # references using the same lane loop before waiting for finalization.
+    drain_controlled_callbacks(manager)
+    assert preconditions == [True]
+    manager.join(5)
+    manager.close()
+    assert isinstance(manager.completion_error, ManagementDeliveryFailed)
+    assert len(finalized) == 1
+    closed, retired, counts = finalized[0]
+    assert closed and retired and all(value == 0 for value in counts.values())
+
+
+@pytest.mark.parametrize('bootstrap_pending', [False, True])
+def test_start_interruption_retires_entered_or_revokes_unentered_runner(
+        monkeypatch, bootstrap_pending):
+    manager = ManagementRuntime(Dispatcher())
+    launched, entered, release = Event(), Event(), Event()
+    threads = []
+    real_start = Thread.start
+    real_bootstrap = Thread._bootstrap_inner
+    real_run = manager._run
+    def run(kind, target):
+        entered.set()
+        real_run(kind, target)
+    manager._run = run
+    def bootstrap(thread):
+        if bootstrap_pending:
+            launched.set()
+            assert release.wait(5)
+        real_bootstrap(thread)
+    def start(thread):
+        threads.append(thread)
+        if not bootstrap_pending:
+            real_start(thread)
+            assert entered.wait(5)
+            raise KeyboardInterrupt('interrupted after launch')
+        original_wait = thread._started.wait
+        def interrupted_wait(*args, **kwargs):
+            assert launched.wait(5)
+            assert thread.ident is None
+            raise KeyboardInterrupt('interrupted before bootstrap')
+        thread._started.wait = interrupted_wait
+        try:
+            real_start(thread)
+        finally:
+            thread._started.wait = original_wait
+    try:
+        with monkeypatch.context() as patcher:
+            patcher.setattr(Thread, '_bootstrap_inner', bootstrap)
+            patcher.setattr(Thread, 'start', start)
+            with pytest.raises(KeyboardInterrupt):
+                manager.start()
+            manager.close()
+            if bootstrap_pending:
+                # The native runner cannot touch the runtime after revocation,
+                # even if its bootstrap has not published an ident yet.
+                manager.join(5)
+                assert not manager._threads
+                assert manager.finalized.is_set()
+                assert not entered.is_set()
+            else:
+                assert manager._threads == threads
+    finally:
+        release.set()
+        for thread in threads:
+            assert thread._started.wait(5)
+            thread.join(5)
+            assert not thread.is_alive()
+        manager.close()
+        manager.join(5)
+    assert manager._exited == (0 if bootstrap_pending else 1)
+    assert entered.is_set() is (not bootstrap_pending)
+
+
+@pytest.mark.parametrize('failed_phase', [1, 2, 3, 4, 5])
+def test_start_interruption_before_native_launch_retires_limbo_entry(
+        monkeypatch, failed_phase):
+    import threading
+
+    primitive = ('_start_joinable_thread'
+                 if hasattr(threading, '_start_joinable_thread')
+                 else '_start_new_thread')
+    if not hasattr(threading, primitive):
+        pytest.skip('threading native launch primitive is unavailable')
+    real_launch = getattr(threading, primitive)
+    attempts, abandoned = [], []
+    manager = ManagementRuntime(Dispatcher())
+    handle = manager.register_lifetime()
+    def launch(target, *args, **kwargs):
+        attempts.append(target)
+        if len(attempts) == failed_phase:
+            abandoned.append(target.__self__)
+            raise KeyboardInterrupt('interrupted before native launch')
+        return real_launch(target, *args, **kwargs)
+    try:
+        with monkeypatch.context() as patcher:
+            patcher.setattr(threading, primitive, launch)
+            with pytest.raises(KeyboardInterrupt):
+                manager.start()
+        assert len(abandoned) == 1
+        thread = abandoned[0]
+        assert thread.ident is None
+        manager.join(5)
+        assert manager.closed.is_set() and handle.closed.is_set()
+        assert manager.finalized.is_set()
+        assert thread not in manager._threads
+        assert thread._target._callback is None
+        # Running an abandoned target later cannot enter the retired runtime.
+        thread._target()
+        assert manager._exited == len(manager._threads)
+    finally:
+        # CPython can retain its own unlaunched Thread in _limbo after a
+        # BaseException. The driver must not wait for or retain that entry.
+        with threading._active_limbo_lock:
+            for thread in abandoned:
+                threading._limbo.pop(thread, None)
+        manager.close()
+        manager.join(5)
+
+
+def test_post_terminal_owner_callbacks_use_current_charged_batch(runtime):
+    manager, dispatch = runtime
+    old = manager.submit(lambda record: 3)
+    assert old.result(5) == 3
+    wait_for_retirement(manager, old)
+    calls = []
+    def handler(record):
+        for i in range(20):
+            old.add_done_callback(
+                lambda f, i=i: calls.append((i, execution_context())))
+        assert old._delivery.record is record
+        assert calls == []
+    current = manager.submit(handler)
+    current.result(5)
+    assert manager._credits == 1
+    assert len(dispatch.queue) == 1
+    dispatch.drain()
+    assert calls == [(i, 'bridge') for i in range(20)]
+    wait_for_retirement(manager, current)
+    assert manager._credits == 0
+
+
+def test_owner_callback_reselects_batch_retired_during_registration(runtime):
+    manager, dispatch = runtime
+    entered, finish, selected, register = [Event() for _ in range(4)]
+    armed = Event()
+    calls = []
+    old = manager.submit(lambda record: (entered.set(), finish.wait(5), 1)[2])
+    assert entered.wait(5)
+    old.add_done_callback(lambda future: calls.append('old'))
+    finish.set()
+    assert old.result(5) == 1
+    condition = manager._condition
+
+    class RegistrationGate:
+        def __getattr__(self, name):
+            return getattr(condition, name)
+
+        def __enter__(self):
+            if execution_context() == 'cluster' and armed.is_set():
+                armed.clear()
+                selected.set()
+                assert register.wait(5)
+            return condition.__enter__()
+
+        def __exit__(self, *args):
+            return condition.__exit__(*args)
+
+    manager._condition = RegistrationGate()
+    current = None
+    try:
+        def handler(record):
+            armed.set()
+            old.add_done_callback(lambda future: calls.append('new'))
+            assert old._delivery.record is record
+        current = manager.submit(handler)
+        assert selected.wait(5)
+        dispatch.drain()
+        wait_for_retirement(manager, old)
+        assert old._record.released
+        register.set()
+        current.result(5)
+        dispatch.drain()
+        assert calls == ['old', 'new']
+    finally:
+        register.set()
+        if current is not None:
+            current.result(5)
+        manager._condition = condition
+
+
+def test_post_terminal_registration_is_serial_across_threads(runtime):
+    manager, dispatch = runtime
+    future = manager.submit(lambda record: 1)
+    future.result(5)
+    wait_for_retirement(manager, future)
+    entered, release = Event(), Event()
+    order = []
+    def first(future):
+        order.append('first-enter')
+        entered.set()
+        assert release.wait(5)
+        order.append('first-exit')
+    thread = Thread(target=lambda: future.add_done_callback(first))
+    thread.start()
+    assert entered.wait(5)
+    future.add_done_callback(lambda f: order.append('second'))
+    assert order == ['first-enter']
+    release.set()
+    thread.join(5)
+    assert order == ['first-enter', 'first-exit', 'second']
+
+
+def test_concurrent_producers_have_one_fifo_owner(monkeypatch):
+    dispatch = Dispatcher()
+    manager = ManagementRuntime(dispatch, limit=64)
+    admitted, handled, owners, errors = [], [], set(), []
+    producer_lock = Lock()
+    start = Event()
+    admission = Barrier(8)
+    original_start = manager.start
+    def synchronized_start():
+        # All eight callers have entered the actual submit() frame before any
+        # reaches its internal admission lock. No producer lock serializes it.
+        admission.wait(5)
+        original_start()
+    monkeypatch.setattr(manager, 'start', synchronized_start)
+    def producer():
+        try:
+            assert start.wait(5)
+            for _ in range(8):
+                future = manager.submit(lambda r: (
+                    handled.append(r.envelope.operation),
+                    owners.add(get_ident())))
+                with producer_lock:
+                    admitted.append(
+                        (future._record.envelope.operation, future))
+        except BaseException as exc:
+            with producer_lock:
+                errors.append(exc)
+    threads = [Thread(target=producer) for _ in range(8)]
+    try:
+        for thread in threads:
+            thread.start()
+        start.set()
+        for thread in threads:
+            thread.join(5)
+            assert not thread.is_alive()
+        assert not errors
+        assert len(admitted) == 64
+        for _, future in admitted:
+            future.result(5)
+        assert handled == sorted(number for number, _ in admitted)
+        assert len(handled) == 64
+        assert len(owners) == 1
+    finally:
+        start.set()
+        admission.abort()
+        manager.close()
+        manager.join(5)
+
+
 def test_synchronous_admission_waits_without_allocating_pending_records(
         runtime, monkeypatch):
     manager, dispatch = runtime
@@ -408,6 +780,47 @@ def test_synchronous_admission_waits_without_allocating_pending_records(
     assert done.wait(5)
     thread.join(5)
     assert result == [8]
+
+
+def test_pool_mailboxes_share_two_runners_without_concurrent_handlers():
+    dispatch = Dispatcher()
+    manager = ManagementRuntime(dispatch, limit=20)
+    entered = [Event(), Event()]
+    release = Event()
+    pools = [object(), object(), object()]
+    running = set()
+    lock = Lock()
+    seen = []
+    def handler(index):
+        def run(record):
+            manager.assert_owner(pools[index])
+            with lock:
+                assert pools[index] not in running
+                running.add(pools[index])
+                seen.append((index, get_ident()))
+            if index < 2:
+                entered[index].set()
+                assert release.wait(5)
+            with lock:
+                running.remove(pools[index])
+        return run
+    try:
+        first = manager.submit(handler(0), pool=pools[0])
+        second = manager.submit(handler(1), pool=pools[1])
+        assert all(event.wait(5) for event in entered)
+        queued_same = manager.submit(handler(0), pool=pools[0])
+        third = manager.submit(handler(2), pool=pools[2])
+        assert not third.done()
+        assert not queued_same.done()
+        release.set()
+        for future in [first, second, queued_same, third]:
+            future.result(5)
+        assert len({thread for _, thread in seen}) == 2
+        assert len(manager._threads) == 5
+    finally:
+        release.set()
+        manager.close()
+        manager.join(5)
 
 
 def test_inherited_future_rejects_before_parent_held_condition(runtime):
@@ -459,6 +872,147 @@ def test_inherited_future_rejects_before_parent_held_condition(runtime):
         os.waitpid(pid, 0)
 
 
+def test_fatal_service_loss_abandons_queued_tickets_without_retaining_results(
+):
+    from cassandra._management import ManagementDeliveryFailed
+    queue = []
+    calls = []
+    def dispatch(ticket):
+        if queue:
+            raise RuntimeError('validated reactor lost')
+        queue.append(ticket)
+    manager = ManagementRuntime(dispatch, limit=2)
+    (first_entered, first_release, second_entered,
+     second_release) = [Event() for _ in range(4)]
+    def first_handler(record):
+        first_entered.set()
+        assert first_release.wait(5)
+        return object()
+    def second_handler(record):
+        second_entered.set()
+        assert second_release.wait(5)
+    try:
+        first = manager.submit(first_handler)
+        assert first_entered.wait(5)
+        first.add_done_callback(lambda f: calls.append('first'))
+        first_release.set()
+        first.result(5)
+        second = manager.submit(second_handler)
+        assert second_entered.wait(5)
+        second.add_done_callback(lambda f: calls.append('second'))
+        second_release.set()
+        second.result(5)
+        assert manager.closed.wait(5)
+        manager.join(5)
+    finally:
+        first_release.set()
+        second_release.set()
+        manager.close()
+        for ticket in queue:
+            ticket()
+        manager.join(5)
+    assert isinstance(first._delivery.error, ManagementDeliveryFailed)
+    assert queue[0]._callback is None
+    queue[0]()  # A late reactor wakeup cannot resurrect an abandoned batch.
+    assert calls == []
+    assert manager._credits == 0
+
+
+def test_cancellation_racing_settlement_does_not_strand_coalesced_waiters(
+        runtime, monkeypatch):
+    manager, dispatch = runtime
+    entered, release, at_setter, cancel_attempted = [Event() for _ in range(4)]
+    cancelled_state = Event()
+    def handler(record):
+        entered.set()
+        assert release.wait(5)
+        return 17
+    first = manager.submit(handler, key='shared')
+    second = manager.submit(handler, key='shared')
+    assert entered.wait(5)
+    setter = first.set_result
+    invoke = first._invoke_callbacks
+    def observed_cancel():
+        cancelled_state.set()
+        invoke()
+    def paused_setter(value):
+        at_setter.set()
+        assert cancel_attempted.wait(5)
+        # If settlement owns the future lock, cancellation must wait for its
+        # terminal update. Otherwise force the competing cancellation to win.
+        if not first._condition._is_owned():
+            assert cancelled_state.wait(5)
+        setter(value)
+    monkeypatch.setattr(first, '_invoke_callbacks', observed_cancel)
+    monkeypatch.setattr(first, 'set_result', paused_setter)
+    def cancel():
+        assert at_setter.wait(5)
+        cancel_attempted.set()
+        first.cancel()
+    thread = Thread(target=cancel)
+    thread.start()
+    try:
+        release.set()
+        assert second.result(5) == 17
+        assert first.done()
+    finally:
+        release.set()
+        thread.join(5)
+        assert not thread.is_alive()
+
+
+def test_notification_admission_after_close_does_not_retain_callback(
+        runtime, monkeypatch):
+    import gc
+    import weakref
+    manager, dispatch = runtime
+    entered, release = Event(), Event()
+    original = manager.submit
+    def submit(handler, **kwargs):
+        def paused(record):
+            entered.set()
+            assert release.wait(5)
+            return handler(record)
+        return original(paused, **kwargs)
+    monkeypatch.setattr(manager, 'submit', submit)
+    class Callback:
+        def __call__(self):
+            pytest.fail('closed notification ran')
+    callback = Callback()
+    reference = weakref.ref(callback)
+    future = manager.notify(callback)
+    assert entered.wait(5)
+    manager.close()
+    release.set()
+    manager.join(5)
+    del callback
+    gc.collect()
+    assert reference() is None
+    assert not manager._notifications
+    with pytest.raises(ManagementClosed):
+        future.result(5)
+
+
+def test_foreign_callback_uses_ordinary_admission(runtime):
+    first, dispatch = runtime
+    other = ManagementRuntime(dispatch, limit=1)
+    gate, entered = Event(), Event()
+    try:
+        other.submit(lambda record: (entered.set(), gate.wait(5)))
+        assert entered.wait(5)
+        def listener():
+            with other.synchronous_reentry() as budget:
+                assert budget == 'ordinary'
+                with pytest.raises(ManagementOverloaded):
+                    other.submit(lambda record: None, budget=budget)
+            assert not other._reentry_active
+        first.notify(listener).result(5)
+    finally:
+        gate.set()
+        other.close()
+        other.join(5)
+
+
 def test_standard_wait_rejects_owner_self_wait_and_allows_external_wait(
         runtime):
     manager, dispatch = runtime
@@ -503,6 +1057,64 @@ def test_external_standard_wait_wakes_when_pending_operation_is_cancelled(
     blocker.result(5)
 
 
+def test_close_handles_retire_history_but_preserve_live_duplicate_joins(
+        runtime):
+    import gc
+    import weakref
+    manager, dispatch = runtime
+    references, retired = [], []
+    for i in range(128):
+        handle = manager.register_lifetime()
+        references.append(weakref.ref(handle))
+        done = manager.close_lifetime(handle, lambda: retired.append(i))
+        assert done.is_set()
+        assert manager.close_lifetime(
+            handle, lambda: pytest.fail('duplicate')) is done
+    del handle
+    gc.collect()
+    assert all(reference() is None for reference in references)
+    assert retired == list(range(128))
+    assert manager.counts()['close'] == 0
+    first, second = manager.register_lifetime(), manager.register_lifetime()
+    manager.close_lifetime(first, lambda: None)
+    assert not second.closed.is_set()
+    manager.close()
+    assert second.closed.is_set()
+    assert not manager._lifetimes
+    assert manager.close_lifetime(
+        second, lambda: pytest.fail('after close')) is second.closed
+    with pytest.raises(ManagementClosed):
+        manager.register_lifetime()
+
+
+@pytest.mark.parametrize('terminal_first', [False, True])
+def test_bulk_owner_rejection_unwinds_all_conditions(runtime, terminal_first):
+    manager, dispatch = runtime
+    already = manager.submit(lambda record: 1)
+    assert already.result(5) == 1
+    following = []
+    def handler(record):
+        pair = [manager.submit(lambda record: 2) for _ in range(2)]
+        terminal, pending = sorted(pair, key=id, reverse=not terminal_first)
+        assert terminal.cancel()
+        assert wait([already, terminal], timeout=0).done == {already, terminal}
+        with pytest.raises(ManagementContextError):
+            wait([terminal, pending], timeout=0)
+        # Rejection must not contaminate this thread's ordinary status access.
+        assert not pending.done()
+        following.extend(pair)
+    manager.submit(handler).result(5)
+    assert not wait(following, timeout=5).not_done
+    for future in following:
+        acquired = future._condition.acquire(timeout=1)
+        try:
+            assert acquired, (
+                'bulk wait rejection retained an earlier condition')
+        finally:
+            if acquired:
+                future._condition.release()
+
+
 def test_cleanup_cannot_join_an_already_started_async_finalization():
     detached = []
     manager = ManagementRuntime(Dispatcher(), on_finalized=detached.append)
@@ -527,6 +1139,331 @@ def test_cleanup_cannot_join_an_already_started_async_finalization():
         if detached:
             detached[0]()
         manager.join(5)
+
+
+@pytest.mark.parametrize('pool', [None, 'logical-pool'])
+@pytest.mark.parametrize(
+    'ending', ['normal', 'close', 'fatal', 'close_fatal'])
+def test_owner_callback_handoff_yields_reactor_while_caller_callback_runs(
+        runtime, monkeypatch, pool, ending):
+    from cassandra._management import ManagementDeliveryFailed
+    manager, dispatch = runtime
+    old = manager.submit(lambda record: 3)
+    assert old.result(5) == 3
+    with manager._condition:
+        assert manager._condition.wait_for(lambda: old._record.released, 5)
+    entered, resume, io_progress = Event(), Event(), Event()
+    callback_parked = Event()
+    condition_wait = manager._condition.wait
+    def observe_wait(timeout=None):
+        if execution_context() == 'callback' and manager._closing:
+            callback_parked.set()
+        return condition_wait(timeout)
+    monkeypatch.setattr(manager._condition, 'wait', observe_wait)
+    calls = []
+    def caller_callback(future):
+        calls.append(('caller-enter', execution_context()))
+        entered.set()
+        assert resume.wait(5)
+        calls.append(('caller-exit', execution_context()))
+    caller = Thread(target=lambda: old.add_done_callback(caller_callback))
+    reactor = Thread(target=dispatch.drain)
+    caller.start()
+    try:
+        assert entered.wait(5)
+        def owner(record):
+            old.add_done_callback(
+                lambda f: calls.append(('owner', execution_context())))
+        current = manager.submit(owner, pool=pool)
+        current.result(5)
+        dispatch(io_progress.set)
+        reactor.start()
+        assert io_progress.wait(5), (
+            'callback handoff blocked shared reactor progress')
+        reactor.join(5)
+        assert not reactor.is_alive()
+        assert calls == [('caller-enter', None)]
+        assert manager.counts()['ordinary'] == 1
+        if ending in ('close', 'close_fatal'):
+            manager.close()
+            assert not manager.finalized.is_set()
+            if ending == 'close_fatal':
+                # L must remain available for disposal if the deferred batch
+                # loses its completion service only after shutdown begins.
+                assert callback_parked.wait(5)
+                def reject(ticket):
+                    raise RuntimeError('reactor lost after close')
+                monkeypatch.setattr(manager, '_dispatch', reject)
+        elif ending == 'fatal':
+            def reject(ticket):
+                raise RuntimeError('validated reactor lost during handoff')
+            monkeypatch.setattr(manager, '_dispatch', reject)
+            with manager._condition:
+                failed_delivery = manager.submit(lambda record: 9)
+                failed_delivery.add_done_callback(
+                    lambda f: pytest.fail('undeliverable callback ran'))
+            assert failed_delivery.result(5) == 9
+            assert manager.closed.wait(5)
+            manager.join(5)
+            assert isinstance(old._delivery.error, ManagementDeliveryFailed)
+            assert manager.counts()['ordinary'] == 0
+    finally:
+        resume.set()
+        caller.join(5)
+        if reactor.ident is not None:
+            reactor.join(5)
+        assert not caller.is_alive() and not reactor.is_alive()
+    dispatch.drain()
+    expected = [('caller-enter', None), ('caller-exit', None)]
+    if ending not in ('fatal', 'close_fatal'):
+        expected.append(('owner', 'bridge'))
+    assert calls == expected
+    wait_for_retirement(manager, current)
+    assert manager.counts()['ordinary'] == 0
+    assert not old._delivery.waiters
+    if ending == 'close_fatal':
+        manager.join(5)
+        assert isinstance(old._delivery.error, ManagementDeliveryFailed)
+        assert not manager._callback_garbage
+        assert all(value == 0
+                   for value in assert_runtime_counts(manager).values())
+
+
+@pytest.mark.parametrize('one_record', [False, True])
+def test_deferred_callback_handoffs_keep_one_ticket_per_charged_record(
+        runtime, one_record):
+    manager, dispatch = runtime
+    old = [manager.submit(lambda record: 1) for _ in range(3)]
+    assert all(f.result(5) == 1 for f in old)
+    with manager._condition:
+        assert manager._condition.wait_for(
+            lambda: not manager._records, 5)
+    count = 1 if one_record else 3
+    manager.limit = count
+    entered = [Event() for _ in old]
+    resume, io_progress = Event(), Event()
+    calls, owners = [], []
+    def caller_callback(future, ready):
+        ready.set()
+        assert resume.wait(5)
+    callers = [Thread(target=lambda f=f, ready=ready:
+                      f.add_done_callback(lambda f: caller_callback(f, ready)))
+               for f, ready in zip(old, entered)]
+    reactor = Thread(target=dispatch.drain)
+    for thread in callers:
+        thread.start()
+    try:
+        assert all(ready.wait(5) for ready in entered)
+        def owner(futures):
+            for future in futures:
+                future.add_done_callback(
+                    lambda f: calls.append(execution_context()))
+        if one_record:
+            owners.append(manager.submit(lambda record: owner(old)))
+            owners[-1].result(5)
+        else:
+            for future in old:
+                owners.append(manager.submit(
+                    lambda record, f=future: owner([f])))
+                owners[-1].result(5)
+        dispatch(io_progress.set)
+        reactor.start()
+        assert io_progress.wait(5)
+        reactor.join(5)
+        assert not reactor.is_alive()
+        with manager._condition:
+            assert len(manager._records) == count
+            assert assert_runtime_counts(manager)['delivery'] == count
+            assert all(r.delivery and r.delivery_ticket is None
+                       for r in manager._records)
+        assert not dispatch.queue
+        with pytest.raises(ManagementOverloaded):
+            manager.submit(lambda record: None)
+        resume.set()
+        for thread in callers:
+            thread.join(5)
+            assert not thread.is_alive()
+        assert len(dispatch.queue) == count
+        dispatch.drain()
+        assert calls == ['bridge'] * 3
+        wait_for_retirement(manager, *owners)
+        assert manager.counts()['ordinary'] == 0
+        assert all(not f._delivery.waiters for f in old)
+    finally:
+        resume.set()
+        for thread in callers:
+            thread.join(5)
+        if reactor.ident is not None:
+            reactor.join(5)
+
+
+def test_callback_handoff_completion_during_active_delivery_cannot_lose_wakeup(
+        runtime, monkeypatch):
+    manager, dispatch = runtime
+    future = manager.submit(lambda record: 1)
+    assert future.result(5) == 1
+    with manager._condition:
+        assert manager._condition.wait_for(lambda: future._record.released, 5)
+    entered, resume, deferred, return_delivery = [Event() for _ in range(4)]
+    calls = []
+    def callback(future):
+        entered.set()
+        assert resume.wait(5)
+    caller = Thread(target=lambda: future.add_done_callback(callback))
+    reactor = Thread(target=dispatch.drain)
+    original = future._delivery.drain
+    def drain(record=None):
+        result = original(record)
+        if record is not None and not result:
+            deferred.set()
+            assert return_delivery.wait(5)
+        return result
+    monkeypatch.setattr(future._delivery, 'drain', drain)
+    caller.start()
+    try:
+        assert entered.wait(5)
+        owner = manager.submit(lambda record: future.add_done_callback(
+            lambda f: calls.append(execution_context())))
+        owner.result(5)
+        reactor.start()
+        assert deferred.wait(5)
+        resume.set()
+        caller.join(5)
+        assert not caller.is_alive()
+        with manager._condition:
+            assert assert_runtime_counts(manager)['delivery'] == 1
+            assert owner._record.delivery_again
+            assert owner._record.delivery_ticket is not None
+        return_delivery.set()
+        reactor.join(5)
+        assert not reactor.is_alive()
+        assert calls == ['bridge']
+        assert not dispatch.queue
+        wait_for_retirement(manager, owner)
+        assert manager.counts()['ordinary'] == 0
+    finally:
+        resume.set()
+        return_delivery.set()
+        caller.join(5)
+        if reactor.ident is not None:
+            reactor.join(5)
+
+
+@pytest.mark.parametrize('budget', ['reentry', 'aggregate'])
+def test_private_owner_record_cannot_borrow_an_old_future_callback_batch(
+        runtime, budget):
+    manager, dispatch = runtime
+    future = manager.submit(lambda record: 1)
+    assert future.result(5) == 1
+    with manager._condition:
+        assert manager._condition.wait_for(lambda: future._record.released, 5)
+    def handler(record):
+        with pytest.raises(ManagementContextError):
+            future.add_done_callback(
+                lambda f: pytest.fail('uncharged callback'))
+    manager.submit(handler, budget=budget).result(5)
+    assert future._delivery.record is future._record
+    assert not dispatch.queue
+
+
+@pytest.mark.parametrize('outcome', ['result', 'error'])
+def test_coalesced_settlement_and_bulk_wait_use_compatible_lock_order(outcome):
+    import subprocess
+    import sys
+    # The broken lock order also blocks close, so isolate and reap the child.
+    # Preallocate real futures in reverse ID order rather than assume an
+    # allocator order. Admission and stdlib bulk waiting remain unchanged.
+    script = r'''import faulthandler
+faulthandler.dump_traceback_later(7)
+"""Bounded child probe; parent terminates a genuine bulk-lock deadlock."""
+from concurrent.futures import wait
+from threading import Event, Thread, get_ident
+import sys
+
+from cassandra import _management
+
+print('management-loader', _management.__file__, flush=True)
+manager = _management.ManagementRuntime(lambda callback: None)
+gate, owner_held, waiter_held = Event(), Event(), Event()
+original = _management.OperationFuture
+available = []
+
+
+def factory(record):
+    if not available:
+        available.extend(sorted([original(record), original(record)],
+                                key=id, reverse=True))
+    return available.pop(0)
+
+
+def handler(record):
+    assert gate.wait(5)
+    if sys.argv[1] == 'error':
+        raise ValueError('controlled failure')
+    return 17
+
+
+_management.OperationFuture = factory
+try:
+    first = manager.submit(handler, key='shared')
+    second = manager.submit(handler, key='shared')
+finally:
+    _management.OperationFuture = original
+assert first._record is second._record and id(second) < id(first)
+setter = 'set_exception' if sys.argv[1] == 'error' else 'set_result'
+original_setter = getattr(first, setter)
+
+
+def publish(value):
+    owner_held.set()
+    assert waiter_held.wait(5)
+    original_setter(value)
+
+
+setattr(first, setter, publish)
+original_acquire = second._condition.acquire
+
+
+def acquire(*args, **kwargs):
+    result = original_acquire(*args, **kwargs)
+    if get_ident() == waiter.ident:
+        waiter_held.set()
+    return result
+
+
+second._condition.acquire = acquire
+results = []
+
+
+def bulk_wait():
+    assert owner_held.wait(5)
+    results.append(wait([first, second], timeout=5))
+
+
+waiter = Thread(target=bulk_wait)
+waiter.start()
+gate.set()
+waiter.join(6)
+assert not waiter.is_alive(), 'coalesced settlement deadlocked bulk wait'
+assert results and results[0].done == {first, second}
+assert not results[0].not_done
+for future in (first, second):
+    if sys.argv[1] == 'error':
+        assert isinstance(future.exception(1), ValueError)
+    else:
+        assert future.result(1) == 17
+assert manager.submit(lambda record: 18).result(5) == 18
+manager.close()
+manager.join(5)
+assert manager.finalized.is_set()
+print('bulk-wait-and-close-complete', flush=True)
+
+faulthandler.cancel_dump_traceback_later()
+'''
+    result = subprocess.run(
+        [sys.executable, '-c', script, outcome], capture_output=True,
+        text=True, timeout=12)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.parametrize('still_alive', [False, True])
