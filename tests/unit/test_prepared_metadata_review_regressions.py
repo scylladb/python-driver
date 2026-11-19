@@ -26,7 +26,8 @@ from cassandra.cluster import (
 from cassandra.connection import Connection, ConnectionException
 from cassandra.protocol import (
     ErrorMessage, ExecuteMessage, PreparedQueryNotFound, ProtocolHandler,
-    RESULT_KIND_PREPARED, RESULT_KIND_SET_KEYSPACE, ResultMessage,
+    QueryMessage, RESULT_KIND_PREPARED, RESULT_KIND_SET_KEYSPACE,
+    ResultMessage,
 )
 from cassandra.query import PreparedStatement, SimpleStatement
 from tests.unit import test_response_future as fixtures
@@ -168,6 +169,101 @@ def test_reprepare_keyspace_send_failure_cannot_fail_the_next_page():
 
     assert future._final_exception is None
     assert not future._event.is_set()
+
+
+def _check_fallback_binding_error_page_generation(error_path, advance):
+    from threading import Event, Thread, current_thread
+
+    case, session, prepared, _, future = _future()
+    control = session.cluster.control_connection
+    connection = case.make_control_connection()
+    control._connection = connection
+    other = case.make_session()
+    assert control._attach_application_session('other_ks', other) is None
+    session.keyspace = 'ks'
+    message = QueryMessage('USE ks', ConsistencyLevel.ONE)
+    if error_path == 'keyspace-change':
+        control._application_keyspace_change = (connection, 19, other)
+        expected = 'already in progress'
+    elif error_path == 'internal-keyspace-change':
+        control._application_internal_keyspace_changes.add((connection, 19))
+        expected = 'another Session'
+    else:
+        expected = 'already attached'
+    admitted = Event()
+    errors = []
+    binding_lock = control._application_query_lock
+
+    class ObservedLock:
+        def __enter__(self):
+            if current_thread() is replay:
+                admitted.set()
+            binding_lock.acquire()
+
+        def __exit__(self, *args):
+            binding_lock.release()
+
+    def run_replay():
+        try:
+            if error_path == 'binding':
+                future._execute_after_prepare(
+                    case.host1, connection, None,
+                    _prepared_response(prepared))
+            else:
+                future._query_control_connection(
+                    message=message, page_generation=0)
+        except BaseException as error:
+            errors.append(error)
+
+    replay = Thread(target=run_replay, daemon=True)
+    errback = Mock()
+    future.add_errback(errback)
+    with patch.object(control, '_application_query_lock', ObservedLock()), \
+            patch.object(future, '_set_final_exception',
+                         wraps=future._set_final_exception) as finish, \
+            patch.object(future, '_cancel_timer') as cancel:
+        try:
+            with binding_lock:
+                replay.start()
+                assert admitted.wait(2)
+                if advance:
+                    _advance_page(case, future)
+                snapshot = future._request_snapshot
+                cancel.reset_mock()
+        finally:
+            replay.join(3)
+        assert not replay.is_alive()
+        assert not errors, errors
+        finish.assert_called_once()
+        error = finish.call_args.args[0]
+        assert isinstance(error, InvalidRequest)
+        assert expected in str(error)
+        if advance:
+            assert future._page_generation == 1
+            assert future._request_snapshot is snapshot
+            assert future._final_exception is None
+            assert not future._event.is_set()
+            cancel.assert_not_called()
+            errback.assert_not_called()
+        else:
+            assert future._final_exception is error
+            assert future._event.is_set()
+            cancel.assert_called_once()
+            errback.assert_called_once_with(error)
+    connection.get_request_id.assert_not_called()
+    connection.send_msg.assert_not_called()
+
+
+@pytest.mark.parametrize('error_path', [
+    'binding', 'keyspace-change', 'internal-keyspace-change',
+])
+@pytest.mark.parametrize('advance', [False, True])
+def test_fallback_binding_error_stays_with_its_page(error_path, advance):
+    run_isolated_subprocess(
+        'from tests.unit.test_prepared_metadata_review_regressions import '
+        '_check_fallback_binding_error_page_generation; '
+        '_check_fallback_binding_error_page_generation({!r}, {!r})'.format(
+            error_path, advance), timeout=10)
 
 
 def test_reprepare_error_conversion_cannot_fail_the_next_page():

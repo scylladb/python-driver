@@ -8213,7 +8213,8 @@ class ResponseFuture(object):
             keyspace = self.session.keyspace or None
             if changing_keyspace and control_connection._application_keyspace_change is not None:
                 self._set_final_exception(InvalidRequest(
-                    "A control-connection keyspace change is already in progress"))
+                    "A control-connection keyspace change "
+                    "is already in progress"), **options)
                 return _NOT_SET
             if changing_keyspace and \
                     control_connection._application_internal_keyspace_changes:
@@ -8222,7 +8223,7 @@ class ResponseFuture(object):
                        control_connection._application_sessions):
                     self._set_final_exception(InvalidRequest(
                         "Cannot change keyspace while another Session uses "
-                        "control-connection fallback"))
+                        "control-connection fallback"), **options)
                 else:
                     control_connection._application_keyspace_waiters.append(
                         (self, host))
@@ -8232,7 +8233,7 @@ class ResponseFuture(object):
             conflict = control_connection._attach_application_session(
                 keyspace, self.session, changing_keyspace=changing_keyspace)
             if conflict is not None:
-                self._set_final_exception(InvalidRequest(conflict))
+                self._set_final_exception(InvalidRequest(conflict), **options)
                 return _NOT_SET
             provisional_session = \
                 control_connection._begin_application_session_claim(
