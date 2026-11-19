@@ -25,10 +25,10 @@ cdef class ParseDesc:
             raise ValueError("coltypes and deserializers must have one entry per column (%d)" % len(colnames))
         if column_encryption_policy and (coldescs is None or len(coldescs) != len(colnames)):
             raise ValueError("coldescs must have one entry per column when a column_encryption_policy is set")
-        self.colnames = colnames
-        self.coltypes = coltypes
+        self.colnames = tuple(colnames)
+        self.coltypes = tuple(coltypes)
         self.column_encryption_policy = column_encryption_policy
-        self.coldescs = coldescs
+        self.coldescs = None if coldescs is None else tuple(coldescs)
         self.deserializers = deserializers
         self.protocol_version = protocol_version
         self.rowsize = len(colnames)
