@@ -181,7 +181,10 @@ def test_reprepare_error_conversion_cannot_fail_the_next_page():
     assert not future._event.is_set()
 
 
-def test_direct_future_preserves_explicit_full_metadata_request():
+@pytest.mark.parametrize('transition', ['construct', 'page', 'reprepare'])
+@pytest.mark.parametrize('explicit_metadata', [False, True])
+def test_direct_future_preserves_explicit_full_metadata_request(
+        transition, explicit_metadata):
     case = _case()
     session = case.make_session()
     metadata = [('ks', 'tbl', 'col', Mock())]
@@ -189,13 +192,72 @@ def test_direct_future_preserves_explicit_full_metadata_request():
     message = ExecuteMessage(
         prepared.query_id, [], ConsistencyLevel.ONE,
         skip_meta=False, result_metadata_id=b'id')
-
+    options = {}
+    if explicit_metadata:
+        options = {
+            'bound_result_metadata': metadata,
+            'result_metadata_decoder_context': fixtures._decoder_context(),
+        }
     future = ResponseFuture(
         session, message, SimpleStatement('SELECT * FROM foo'), 1,
-        prepared_statement=prepared)
+        prepared_statement=prepared, **options)
+    assert message.skip_meta is False
+
+    if transition == 'page':
+        _advance_page(case, future)
+        assert future._page_generation == 1
+    elif transition == 'reprepare':
+        with patch.object(future, '_query', return_value=0) as replay:
+            future._execute_after_prepare(
+                case.host1, None, None, _prepared_response(prepared))
+        replay.assert_called_once_with(case.host1, page_generation=0)
+        assert future.message.result_metadata_id == b'late-id'
 
     assert future.message.skip_meta is False
+    assert future.message._should_skip_metadata(
+        4, Mock(use_metadata_id=True)) is False
     assert message.skip_meta is False
+
+
+def test_factory_future_can_enable_skip_after_full_metadata_page():
+    case = _case()
+    session = case.make_session()
+    prepared = case._make_prepared_statement([], None)
+    future = case._create_execute_future(prepared, session=session)
+    assert future.message.skip_meta is False
+    metadata = [('ks', 'tbl', 'col', Mock())]
+    response = case._make_rows_response(b'new-id', metadata)
+    response.paging_state = b'next-page'
+    future._set_result(case.host1, None, None, response)
+    assert future._event.is_set()
+
+    with patch.object(future, 'send_request'):
+        future.start_fetching_next_page()
+
+    assert future.message.skip_meta is True
+    assert future.message.result_metadata_id == b'new-id'
+    assert future._bound_result_metadata == tuple(metadata)
+
+
+def test_direct_future_freezes_empty_explicit_metadata():
+    case = _case()
+    session = case.make_session()
+    metadata = [('ks', 'tbl', 'col', Mock())]
+    prepared = case._make_prepared_statement(metadata, b'id')
+    supplied = []
+    message = ExecuteMessage(
+        prepared.query_id, [], ConsistencyLevel.ONE,
+        skip_meta=True, result_metadata_id=b'id')
+    future = ResponseFuture(
+        session, message, SimpleStatement('SELECT * FROM foo'), 1,
+        prepared_statement=prepared, bound_result_metadata=supplied,
+        result_metadata_decoder_context=fixtures._decoder_context())
+
+    supplied.append(metadata[0])
+
+    assert future._bound_result_metadata == ()
+    assert future._request_snapshot[1] == ()
+    assert future.message.skip_meta is False
 
 
 @pytest.mark.parametrize('mismatch', [False, True])

@@ -7461,6 +7461,12 @@ class ResponseFuture(object):
         self._protocol_handler = protocol_handler
         self._prepared_metadata_skip_allowed = \
             prepared_metadata_skip_allowed
+        if (not _prepared_metadata_resolved
+                and isinstance(message, ExecuteMessage)):
+            # A direct caller's full-metadata request applies to every page.
+            # Factory requests can be temporarily ineligible and recover.
+            self._prepared_metadata_skip_allowed = (
+                self._prepared_metadata_skip_allowed and message.skip_meta)
         # TODO: normalize handling of retry policy and row factory
         self.row_factory = row_factory or session.row_factory
         self._load_balancer = load_balancer or session.cluster._default_load_balancing_policy
@@ -7505,6 +7511,7 @@ class ResponseFuture(object):
             explicit_metadata = PreparedStatement._freeze_result_metadata(
                 bound_result_metadata)
             if not explicit_metadata:
+                bound_result_metadata = explicit_metadata
                 if message.skip_meta:
                     message = copy(message)
                     message.skip_meta = False
