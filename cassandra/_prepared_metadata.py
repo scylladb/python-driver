@@ -33,6 +33,23 @@ _PREPARED_METADATA_HANDLER_SNAPSHOTS = {}
 _PREPARED_METADATA_HANDLER_SNAPSHOT_LOCK = Lock()
 
 
+def _same_decoder_config(current, expected):
+    """Compare captured decoder objects without application equality."""
+    if (current[1] is not expected[1]
+            or current[4] is not expected[4]
+            or current[6] is not expected[6]):
+        return False
+    for index in (0, 2, 3, 5):
+        entries, expected_entries = current[index], expected[index]
+        if len(entries) != len(expected_entries):
+            return False
+        if any(key is not expected_key or value is not expected_value
+               for (key, value), (expected_key, expected_value)
+               in zip(entries, expected_entries)):
+            return False
+    return True
+
+
 def protocol_handler_snapshot(protocol_handler):
     """
     Freeze the result-decoder configuration of a driver-owned handler.
@@ -90,20 +107,10 @@ def protocol_handler_snapshot(protocol_handler):
         canonical_config = handler_vars.get(
             '_prepared_metadata_cache_config')
         if (canonical_config is None
-                or handler_config[:-1] != canonical_config[:-1]
-                or column_encryption_policy is not canonical_config[-1]):
+                or not _same_decoder_config(handler_config, canonical_config)):
             return protocol_handler
-        cache_key = (
-            protocol_handler,
-            handler_token,
-            handler_config[:-1],
-            id(column_encryption_policy),
-        )
-        # A malformed in-place customization should fall back to full
-        # metadata, not make request construction fail or create an
-        # uncached snapshot whose identity never matches the PREPARE
-        # provenance.
-        hash(cache_key)
+        # Keep the actual objects alive while their identities are used.
+        cache_key = (handler_token, handler_config)
     except Exception:
         log.debug(
             "Cannot validate protocol handler %r; prepared executions will "
@@ -115,7 +122,8 @@ def protocol_handler_snapshot(protocol_handler):
         try:
             cached = _PREPARED_METADATA_HANDLER_SNAPSHOTS.get(
                 protocol_handler)
-            if cached is not None and cached[0] == cache_key:
+            if (cached is not None and cached[0][0] is handler_token
+                    and _same_decoder_config(cached[0][1], handler_config)):
                 return cached[1]
         except Exception:
             log.debug(

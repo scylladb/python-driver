@@ -36,6 +36,7 @@ from cassandra.protocol import (
     ProtocolHandler,
     RESULT_KIND_ROWS,
     ResultMessage,
+    _ProtocolHandler,
 )
 from cassandra.protocol_features import ProtocolFeatures
 from cassandra.query import (
@@ -1005,6 +1006,80 @@ def test_custom_result_comparison_error_falls_back_to_full_metadata(
 
     assert _prepared_metadata_protocol_handler_snapshot(
         ProtocolHandler) is ProtocolHandler
+
+
+@pytest.mark.parametrize('handler', list(dict.fromkeys((
+    _ProtocolHandler, ProtocolHandler,
+))))
+@pytest.mark.parametrize('warm_cache', (False, True))
+def test_equal_custom_decoder_is_not_a_canonical_snapshot(
+        monkeypatch, handler, warm_cache):
+    comparisons = []
+
+    class EqualDecoderMeta(CassandraTypeType):
+        def __eq__(cls, other):
+            if other is Int32Type:
+                comparisons.append(other)
+                return True
+            return cls is other
+
+        __hash__ = type.__hash__
+
+    class EqualInt32Type(Int32Type, metaclass=EqualDecoderMeta):
+        @staticmethod
+        def deserialize(byts, protocol_version):
+            return Int32Type.deserialize(byts, protocol_version) * 10
+
+    result_class = handler.message_types_by_opcode[ResultMessage.opcode]
+    initial = _decode_rows(result_class, _int_rows_body(7))
+    prepared = _prepared_statement(initial.column_metadata, b'metadata-id')
+    cluster = Mock()
+    cluster._prepared_metadata_context = object()
+
+    def new_session():
+        session = Mock(spec=Session)
+        session.cluster = cluster
+        session.client_protocol_handler = handler
+        _configure_execute_session(session)
+        return session
+
+    def execute(session):
+        with patch.object(ResponseFuture, '_start_timer'):
+            return Session._create_response_future(
+                session, prepared.bind(()), parameters=None, trace=False,
+                custom_payload=None, timeout=1)
+
+    if warm_cache:
+        captured_session = new_session()
+        captured = execute(captured_session)._protocol_handler
+        prepared._update_result_metadata(
+            initial.column_metadata, b'metadata-id',
+            _prepared_metadata_decoder_context(
+                captured, cluster._prepared_metadata_context))
+        assert execute(captured_session).message.skip_meta is True
+
+    code = type_code_constants.Int32Type
+    monkeypatch.setitem(result_class.type_codes, code, EqualInt32Type)
+    monkeypatch.setitem(result_class._cqltypes_by_code, code, EqualInt32Type)
+    selected = execute(new_session())
+    selected_class = selected._protocol_handler.message_types_by_opcode[
+        ResultMessage.opcode]
+
+    assert _decode_rows(result_class, _int_rows_body(7)).parsed_rows == [(70,)]
+    assert _decode_rows(
+        selected_class, _int_rows_body(7)).parsed_rows == [(70,)]
+    assert selected._protocol_handler is handler
+    assert selected.message.skip_meta is False
+    assert selected._result_metadata_decoder_context is None
+    assert not comparisons
+
+    if warm_cache:
+        retained = execute(captured_session)
+        assert retained._protocol_handler is captured
+        assert retained.message.skip_meta is True
+        retained_class = captured.message_types_by_opcode[ResultMessage.opcode]
+        assert _decode_rows(
+            retained_class, _int_rows_body(7)).parsed_rows == [(7,)]
 
 
 def test_handler_snapshot_does_not_register_its_internal_result_class():
