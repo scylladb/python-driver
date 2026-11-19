@@ -364,7 +364,7 @@ class PreparedStatementMetadataPairTest(unittest.TestCase):
     def test_rejects_malformed_column_definition(self):
         ps = self._make_statement([], None)
 
-        with pytest.raises(ValueError, match='exactly four'):
+        with pytest.raises(ValueError, match='at least four'):
             ps.update_result_metadata([('ks', 'tb', 'col')], b'hash')
 
     def test_internal_update_tracks_decoder_context_atomically(self):

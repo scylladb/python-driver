@@ -438,7 +438,8 @@ class PreparedStatement(object):
     |prepared_stmt_head|: Take care when using ``*`` in a prepared statement if
     the queried table's schema may change. On connections that negotiate
     ``SCYLLA_USE_METADATA_ID``, the server reports a result-metadata change and
-    the driver refreshes its cached column definitions before decoding rows.
+    the changed result carries column definitions for decoding its rows. The
+    driver then updates its cache from those definitions.
     Other connections do not use this driver's skip-metadata optimization and
     continue to receive column definitions with each result. The general
     prepared-metadata invalidation problem is tracked by `CASSANDRA-10786
@@ -504,9 +505,9 @@ class PreparedStatement(object):
         frozen_metadata = []
         for column in result_metadata:
             column = tuple(column)
-            if len(column) != 4:
+            if len(column) < 4:
                 raise ValueError(
-                    "Result metadata columns must contain exactly four "
+                    "Result metadata columns must contain at least four "
                     "items: keyspace, table, name, and type")
             frozen_metadata.append(column)
         return tuple(frozen_metadata)
@@ -568,6 +569,10 @@ class PreparedStatement(object):
         Also re-arms :attr:`_warned_missing_column_metadata`, so an anomaly that
         recurs after the metadata was recovered is logged again.
 
+        Each column entry must contain at least keyspace, table, name and
+        type, in that order. Additional application fields are preserved.
+        Entries with fewer than four items raise ValueError before publication.
+
         This compatibility method cannot establish which decoder context
         produced ``result_metadata``, so its provenance is cleared. Internal
         response paths should use :meth:`_update_result_metadata` instead.
@@ -617,8 +622,8 @@ class PreparedStatement(object):
         """
         Restore pickles created before ``_result_metadata_state`` was added.
 
-        The metadata pair shipped in 3.29.13. Older pickles stored the metadata
-        and id as independent attributes. Both predate decoder-context
+        The metadata pair first shipped in 3.29.12. Older pickles stored
+        metadata and id as independent attributes. Both predate decoder-context
         provenance and therefore migrate with unknown provenance.
         """
         state = state.copy()

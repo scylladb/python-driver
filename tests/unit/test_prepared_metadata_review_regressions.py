@@ -24,7 +24,7 @@ from cassandra.protocol import (
     ErrorMessage, ExecuteMessage, PreparedQueryNotFound, ProtocolHandler,
     RESULT_KIND_PREPARED, RESULT_KIND_SET_KEYSPACE, ResultMessage,
 )
-from cassandra.query import SimpleStatement
+from cassandra.query import PreparedStatement, SimpleStatement
 from tests.unit import test_response_future as fixtures
 from tests.unit.utils import run_isolated_subprocess
 
@@ -319,3 +319,44 @@ def test_udt_mapping_truth_callback_can_reenter_cache():
         '    UserType.evict_udt_class("review", "truth")\n',
         timeout=10,
     )
+
+
+@pytest.mark.parametrize('source', [
+    'constructor', 'update', 'legacy-pair', 'legacy-attributes',
+    'current-state',
+])
+@pytest.mark.parametrize('decoder', ['python', 'default'])
+def test_extended_metadata_entries_remain_compatible(source, decoder):
+    from cassandra.cqltypes import Int32Type
+    from tests.unit import test_prepared_metadata_cache_regressions as wire
+
+    metadata = [('ks', 'tbl', 'value', Int32Type, 'extension')]
+    case = _case()
+    if source == 'constructor':
+        prepared = case._make_prepared_statement(metadata, b'id')
+    else:
+        prepared = case._make_prepared_statement([], None)
+        if source == 'update':
+            prepared.update_result_metadata(metadata, b'id')
+        else:
+            state = prepared.__dict__.copy()
+            state.pop('_result_metadata_state')
+            if source == 'legacy-pair':
+                state['_result_metadata_and_id'] = (metadata, b'id')
+            elif source == 'legacy-attributes':
+                state['result_metadata'] = metadata
+                state['result_metadata_id'] = b'id'
+            else:
+                state['_result_metadata_state'] = (metadata, b'id', None)
+            prepared = object.__new__(PreparedStatement)
+            prepared.__setstate__(state)
+    metadata.clear()
+    frozen = prepared._result_metadata_snapshot[0]
+    assert frozen == (('ks', 'tbl', 'value', Int32Type, 'extension'),)
+    result_class = (ResultMessage if decoder == 'python' else
+                    ProtocolHandler.message_types_by_opcode[
+                        ResultMessage.opcode])
+    response = wire._decode_rows(
+        result_class, wire._int_rows_body(7, no_metadata=True),
+        result_metadata=frozen)
+    assert list(response.parsed_rows) == [(7,)]
