@@ -38,7 +38,7 @@ def make_recv_results_rows(ColumnParser colparser):
         reader = BytesIOReader(f.read())
         try:
             self.parsed_rows = colparser.parse_rows(reader, desc)
-        except Exception as e:
+        except Exception:
             # Use explicitly the TupleRowParser to display better error messages for column decoding failures
             rowparser = TupleRowParser()
             reader.buf_ptr = reader.buf
@@ -46,5 +46,7 @@ def make_recv_results_rows(ColumnParser colparser):
             rowcount = read_int(reader)
             for i in range(rowcount):
                 rowparser.unpack_row(reader, desc)
+            # The re-parse succeeded (e.g. NumpyParser-only failure); don't leave parsed_rows unset.
+            raise
 
     return recv_results_rows
