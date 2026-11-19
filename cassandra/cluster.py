@@ -7771,7 +7771,7 @@ class ResponseFuture(object):
         options = ({} if page_generation is None else
                    {'page_generation': page_generation})
         final_options = ({} if page_generation is None else
-                         {'retry_abort_generation': page_generation})
+                         {'page_generation': page_generation})
         # query_plan is an iterator, so this will resume where we last left
         # off if send_request() is called multiple times
         for host in self.query_plan:
@@ -7869,7 +7869,8 @@ class ResponseFuture(object):
             return request_id
 
     def _release_control_connection_request(self, connection, request_id,
-                                            provisional_session=None):
+                                            provisional_session=None,
+                                            reserved=False):
         control_connection = self.session.cluster.control_connection
         with control_connection._application_query_lock:
             request_key = (connection, request_id)
@@ -7884,13 +7885,13 @@ class ResponseFuture(object):
             # A timeout may have taken ownership while send_msg() was still
             # encoding and then send_msg() may fail before pushing any bytes.
             # Retire either form of ownership exactly once in that case.
-            if active_request is not None or orphaned_request:
+            if active_request is not None or orphaned_request or reserved:
                 with connection.lock:
                     connection.in_flight -= 1
                     connection.request_ids.append(request_id)
                     connection._requests.pop(request_id, None)
                     connection.orphaned_request_ids.discard(request_id)
-                if active_request is not None:
+                if active_request is not None or reserved:
                     control_connection._application_requests_in_flight -= 1
             control_connection._finish_application_session_claim(
                 provisional_session, False)
@@ -7987,7 +7988,7 @@ class ResponseFuture(object):
         options = ({} if page_generation is None else
                    {'page_generation': page_generation})
         final_options = ({} if page_generation is None else
-                         {'retry_abort_generation': page_generation})
+                         {'page_generation': page_generation})
 
         def set_exception(response):
             self._set_final_exception(response, **final_options)
@@ -8075,8 +8076,10 @@ class ResponseFuture(object):
                     decoder_context = self._result_metadata_decoder_context
         if stale:
             if request_id is not _NOT_SET and request_id is not None:
+                # This stream was borrowed by the caller, before this send
+                # could register a callback or become an orphaned request.
                 self._release_control_connection_request(
-                    connection, request_id, provisional_session)
+                    connection, request_id, provisional_session, reserved=True)
             return _NOT_SET
 
         if connection is None:
@@ -8295,6 +8298,10 @@ class ResponseFuture(object):
                 message=message, cb=keyspace_changed, connection=connection,
                 host=host, request_id=request_id,
                 provisional_session=provisional_session, **options)
+            if sent is _NOT_SET:
+                control_connection._finish_application_keyspace_change(
+                    connection, request_id)
+                return sent
             if sent is None:
                 control_connection._finish_application_keyspace_change(
                     connection, request_id)
@@ -8564,6 +8571,8 @@ class ResponseFuture(object):
         A future is reused for manual paging and after UNPREPARED recovery.  In
         both cases the shared PreparedStatement may have acquired fresher
         metadata since the original message was built.
+
+        The caller must hold _callback_lock while publishing this snapshot.
         """
         if (self.prepared_statement is None
                 or not isinstance(self.message, ExecuteMessage)):
@@ -8892,7 +8901,7 @@ class ResponseFuture(object):
             if (page_generation != self._page_generation or self._is_final()):
                 return
         options = {'page_generation': page_generation}
-        final_options = {'retry_abort_generation': page_generation}
+        final_options = {'page_generation': page_generation}
         if result_metadata_decoder_context is _NOT_SET:
             result_metadata_decoder_context = \
                 self._result_metadata_decoder_context
@@ -9008,21 +9017,24 @@ class ResponseFuture(object):
             callback_partial()
 
     def _set_final_exception(self, response,
-                             retry_abort_generation=_NOT_SET):
-        self._finish_control_connection_keyspace_change()
+                             retry_abort_generation=_NOT_SET,
+                             page_generation=_NOT_SET):
         abort_retry = retry_abort_generation is not _NOT_SET
-        if not abort_retry:
+        guarded = abort_retry or page_generation is not _NOT_SET
+        if not guarded:
+            self._finish_control_connection_keyspace_change()
             self._cancel_timer()
 
         with self._callback_lock:
             if self._retry_aborted:
                 return
-            if abort_retry:
-                if retry_abort_generation != self._page_generation or \
-                        self._final_result is not _NOT_SET or \
-                        self._final_exception is not None:
+            if guarded:
+                generation = (retry_abort_generation if abort_retry else
+                              page_generation)
+                if generation != self._page_generation or self._is_final():
                     return
-                self._retry_aborted = True
+                if abort_retry:
+                    self._retry_aborted = True
             elif self._is_final():
                 return
             self._final_exception = response
@@ -9035,7 +9047,8 @@ class ResponseFuture(object):
                 for (fn, args, kwargs) in self._errbacks
             )
 
-        if abort_retry:
+        if guarded:
+            self._finish_control_connection_keyspace_change()
             self._cancel_timer()
         if self._metrics is not None:
             self._metrics.request_timer.addValue(time.time() - self._start_time)
@@ -9072,27 +9085,38 @@ class ResponseFuture(object):
         self._errors[host] = exception_from_response(response)
 
     def _retry(self, reuse_connection, consistency_level, host, delay):
+        rejected_downgrade = False
         with self._callback_lock:
             if self._final_exception:
                 # the connection probably broke while we were waiting
                 # to retry the operation
                 return
             page_generation = self._page_generation
+            if consistency_level is not None:
+                # Keep a retry-policy update and metadata refresh in the same
+                # publication order. Already captured attempts keep their CL.
+                original_cl = self.message.consistency_level
+                rejected_downgrade = (
+                    ConsistencyLevel.is_serial(original_cl)
+                    and not ConsistencyLevel.is_serial(consistency_level))
+                if not rejected_downgrade:
+                    message = copy(self.message)
+                    message.consistency_level = consistency_level
+                    self.message = message
+                    self._request_snapshot = (
+                        message, self._bound_result_metadata,
+                        self._result_metadata_decoder_context)
 
         if self._metrics is not None:
             self._metrics.on_retry()
-        if consistency_level is not None:
-            # Never downgrade from serial to non-serial consistency, as that
-            # would break serial read (Paxos) guarantees.
-            original_cl = self.message.consistency_level
-            if ConsistencyLevel.is_serial(original_cl) and not ConsistencyLevel.is_serial(consistency_level):
-                log.debug(
-                    "Retry policy attempted to downgrade serial consistency %s to %s; "
-                    "keeping original consistency level.",
-                    ConsistencyLevel.value_to_name.get(original_cl, original_cl),
-                    ConsistencyLevel.value_to_name.get(consistency_level, consistency_level))
-            else:
-                self.message.consistency_level = consistency_level
+        if rejected_downgrade:
+            # Never downgrade serial reads: preserve Paxos guarantees.
+            log.debug(
+                "Retry policy attempted to downgrade serial consistency %s "
+                "to %s; keeping original consistency level.",
+                ConsistencyLevel.value_to_name.get(original_cl, original_cl),
+                ConsistencyLevel.value_to_name.get(
+                    consistency_level, consistency_level))
 
         # don't retry on the event loop thread
         self.session.cluster.scheduler.schedule_with_shutdown(

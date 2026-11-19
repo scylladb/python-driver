@@ -16,9 +16,13 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from cassandra import ConsistencyLevel, InvalidRequest
+from cassandra import (
+    ConsistencyLevel, InvalidRequest, OperationTimedOut,
+)
 from cassandra._prepared_metadata import protocol_handler_snapshot
-from cassandra.cluster import ResponseFuture
+from cassandra.cluster import (
+    ControlConnectionQueryFallback, NoHostAvailable, ResponseFuture,
+)
 from cassandra.connection import Connection, ConnectionException
 from cassandra.protocol import (
     ErrorMessage, ExecuteMessage, PreparedQueryNotFound, ProtocolHandler,
@@ -319,6 +323,131 @@ def test_udt_mapping_truth_callback_can_reenter_cache():
         '    UserType.evict_udt_class("review", "truth")\n',
         timeout=10,
     )
+
+
+def test_stale_use_send_releases_application_keyspace_change():
+    from cassandra.protocol import QueryMessage
+
+    case = _case()
+    session = case._make_fallback_session(keyspace='ks1')
+    control = session.cluster.control_connection
+    connection = case.make_control_connection()
+    connection.keyspace = 'ks1'
+    control._connection = connection
+    assert control._attach_application_session('ks1', session) is None
+    query = SimpleStatement('USE ks2')
+    future = ResponseFuture(
+        session, QueryMessage('USE ks2', ConsistencyLevel.ONE), query, 1)
+    send = future._send_control_connection_message
+
+    def timeout_before_send(*args, **kwargs):
+        assert control._application_keyspace_change is not None
+        future._on_timeout()
+        backstop = (
+            session.cluster.connection_class.create_timer.call_args.args[1])
+        backstop()
+        assert future._event.is_set()
+        return send(*args, **kwargs)
+
+    with patch.object(future, '_send_control_connection_message',
+                      side_effect=timeout_before_send):
+        future._query_control_connection(page_generation=0)
+
+    assert isinstance(future._final_exception, OperationTimedOut)
+    assert control._application_keyspace_change is None
+    assert connection.in_flight == 0
+    connection.send_msg.assert_not_called()
+    connection.defunct.assert_not_called()
+    following = ResponseFuture(
+        session, QueryMessage('USE ks3', ConsistencyLevel.ONE),
+        SimpleStatement('USE ks3'), 1)
+    assert following.send_request()
+    assert following._final_exception is None
+    assert connection.send_msg.call_args.args[0].query == 'USE ks3'
+
+
+def test_failed_page_can_be_fetched_again_after_retry_exhaustion():
+    case, session, prepared, connection, future = _future()
+    _advance_page(case, future)
+    session.cluster.allow_control_connection_query_fallback = (
+        ControlConnectionQueryFallback.Disabled)
+    future.query_plan = iter(())
+    assert not future.send_request(page_generation=1)
+    assert isinstance(future._final_exception, NoHostAvailable)
+    assert future._event.is_set()
+
+    with patch.object(future, 'send_request') as send:
+        future.start_fetching_next_page()
+
+    send.assert_called_once_with()
+    assert future._page_generation == 2
+    assert future._final_exception is None
+    assert not future._event.is_set()
+
+
+def _check_retry_consistency_during_metadata_refresh():
+    from threading import Event, Thread, current_thread
+    import cassandra.cluster as cluster
+
+    case, session, prepared, connection, future = _future()
+    future.message.consistency_level = ConsistencyLevel.QUORUM
+    retry_ready, copied, retry_done = Event(), Event(), Event()
+    errors = []
+    original_copy = cluster.copy
+
+    def on_retry():
+        retry_ready.set()
+        assert copied.wait(2)
+
+    def copy_message(message):
+        result = original_copy(message)
+        if current_thread() is refresh:
+            copied.set()
+            assert retry_done.wait(2)
+        return result
+
+    def run_retry():
+        try:
+            future._retry(False, ConsistencyLevel.ONE, case.host1, 0)
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            retry_done.set()
+
+    def run_refresh():
+        try:
+            assert retry_ready.wait(2)
+            with future._callback_lock:
+                future._refresh_prepared_result_metadata()
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            copied.set()
+
+    future._metrics = Mock()
+    future._metrics.on_retry.side_effect = on_retry
+    retry = Thread(target=run_retry, daemon=True)
+    refresh = Thread(target=run_refresh, daemon=True)
+    with patch.object(cluster, 'copy', side_effect=copy_message):
+        retry.start()
+        refresh.start()
+        try:
+            retry.join(3)
+            refresh.join(3)
+            assert not retry.is_alive() and not refresh.is_alive()
+        finally:
+            copied.set()
+            retry_done.set()
+    assert not errors, errors
+    assert future.message.consistency_level == ConsistencyLevel.ONE
+    assert future._request_snapshot[0] is future.message
+
+
+def test_retry_consistency_is_retained_during_metadata_refresh():
+    run_isolated_subprocess(
+        'from tests.unit.test_prepared_metadata_review_regressions import '
+        '_check_retry_consistency_during_metadata_refresh; '
+        '_check_retry_consistency_during_metadata_refresh()', timeout=10)
 
 
 @pytest.mark.parametrize('source', [
