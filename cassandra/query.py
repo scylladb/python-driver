@@ -20,10 +20,11 @@ queries.
 
 from collections import namedtuple
 from datetime import datetime, timedelta, timezone
+import os
 import re
 import struct
+import threading
 import time
-import warnings
 
 from cassandra import ConsistencyLevel, OperationTimedOut
 from cassandra.util import unix_time_from_uuid1, maybe_add_timeout_to_query
@@ -54,16 +55,9 @@ NON_ALPHA_REGEX = re.compile('[^a-zA-Z0-9]')
 START_BADCHAR_REGEX = re.compile('^[^a-zA-Z0-9]*')
 END_BADCHAR_REGEX = re.compile('[^a-zA-Z0-9_]*$')
 
-_clean_name_cache = {}
-
 
 def _clean_column_name(name):
-    try:
-        return _clean_name_cache[name]
-    except KeyError:
-        clean = NON_ALPHA_REGEX.sub("_", START_BADCHAR_REGEX.sub("", END_BADCHAR_REGEX.sub("", name)))
-        _clean_name_cache[name] = clean
-        return clean
+    return NON_ALPHA_REGEX.sub("_", START_BADCHAR_REGEX.sub("", END_BADCHAR_REGEX.sub("", name)))
 
 
 def tuple_factory(colnames, rows):
@@ -111,11 +105,87 @@ class PseudoNamedTupleRow(object):
 
 def pseudo_namedtuple_factory(colnames, rows):
     """
-    Returns each row as a :class:`.PseudoNamedTupleRow`. This is the fallback
-    factory for cases where :meth:`.named_tuple_factory` fails to create rows.
+    Returns each row as a :class:`.PseudoNamedTupleRow`. Not used as an
+    automatic fallback by :meth:`.named_tuple_factory`.
     """
     return [PseudoNamedTupleRow(od)
             for od in ordered_dict_factory(colnames, rows)]
+
+
+_NAMED_TUPLE_ROW_CLASS_CACHE_SIZE = 1024
+
+
+def _build_named_tuple_row_class(colnames):
+    """Return ``(Row class, warning message or None)``; the caller logs only if it inserts."""
+    clean_column_names = [_clean_column_name(c) for c in colnames]
+    try:
+        return namedtuple('Row', clean_column_names), None
+    except Exception:
+        warning = ("Failed creating named tuple for results with column names %s (cleaned: %s) "
+                   "(see Python 'namedtuple' documentation for details on name rules). "
+                   "Results will be returned with positional names. "
+                   "Avoid this by choosing different names, using SELECT \"<col name>\" AS aliases, "
+                   "or specifying a different row_factory on your Session" %
+                   (list(colnames), clean_column_names))
+        return namedtuple('Row', _sanitize_identifiers(clean_column_names)), warning
+
+
+class _NamedTupleRowClassCache(object):
+    """Bounded LRU of ``Row`` classes; builds run unlocked and the first insert wins."""
+
+    def __init__(self, maxsize):
+        self._maxsize = maxsize
+        self._lock = threading.Lock()
+        # A plain dict (insertion order = recency): its lock-free reads stay safe on
+        # free-threaded builds while writers reorder or evict under the lock.
+        self._cache = {}
+        # A fork while another thread holds the lock would leave it held in the child.
+        if hasattr(os, 'register_at_fork'):  # absent on Windows
+            os.register_at_fork(after_in_child=self._reset_lock)
+
+    def _reset_lock(self):
+        self._lock = threading.Lock()
+
+    def __call__(self, colnames):
+        row_class = self._cache.get(colnames)
+        if row_class is not None:
+            # Hits never wait: refresh recency only when the lock is free.
+            if self._lock.acquire(blocking=False):
+                try:
+                    self._touch(colnames)
+                finally:
+                    self._lock.release()
+            return row_class
+        # Recheck under the lock: the lock-free get may have hit a _touch() mid-move.
+        with self._lock:
+            row_class = self._cache.get(colnames)
+        if row_class is not None:
+            return row_class
+        row_class, warning = _build_named_tuple_row_class(colnames)
+        with self._lock:
+            existing = self._cache.get(colnames)
+            if existing is not None:
+                self._touch(colnames)
+                return existing
+            self._cache[colnames] = row_class
+            if len(self._cache) > self._maxsize:
+                del self._cache[next(iter(self._cache))]
+        if warning:
+            log.warning(warning)
+        return row_class
+
+    def _touch(self, colnames):
+        # Re-insert to move to the most-recent end; caller holds the lock.
+        row_class = self._cache.pop(colnames, None)
+        if row_class is not None:
+            self._cache[colnames] = row_class
+
+    def cache_clear(self):
+        with self._lock:
+            self._cache.clear()
+
+
+_named_tuple_row_class = _NamedTupleRowClassCache(_NAMED_TUPLE_ROW_CLASS_CACHE_SIZE)
 
 
 def named_tuple_factory(colnames, rows):
@@ -144,36 +214,14 @@ def named_tuple_factory(colnames, rows):
         >>> print("name: %s, age: %d" % (name, age))
         name: Bob, age: 42
 
+    Invalid identifiers, duplicates and keywords among the column names are
+    sanitized to positional names (``field_0_``, ...), with a warning logged
+    each time the schema's class is built (again after LRU eviction).
+
     .. versionchanged:: 2.0.0
         moved from ``cassandra.decoder`` to ``cassandra.query``
     """
-    clean_column_names = map(_clean_column_name, colnames)
-    try:
-        Row = namedtuple('Row', clean_column_names)
-    except SyntaxError:
-        warnings.warn(
-            "Failed creating namedtuple for a result because there were too "
-            "many columns. This is due to a Python limitation that affects "
-            "namedtuple in Python 3.0-3.6 (see issue18896). The row will be "
-            "created with {substitute_factory_name}, which lacks some namedtuple "
-            "features and is slower. To avoid slower performance accessing "
-            "values on row objects, Upgrade to Python 3.7, or use a different "
-            "row factory. (column names: {colnames})".format(
-                substitute_factory_name=pseudo_namedtuple_factory.__name__,
-                colnames=colnames
-            )
-        )
-        return pseudo_namedtuple_factory(colnames, rows)
-    except Exception:
-        clean_column_names = list(map(_clean_column_name, colnames))  # create list because py3 map object will be consumed by first attempt
-        log.warning("Failed creating named tuple for results with column names %s (cleaned: %s) "
-                    "(see Python 'namedtuple' documentation for details on name rules). "
-                    "Results will be returned with positional names. "
-                    "Avoid this by choosing different names, using SELECT \"<col name>\" AS aliases, "
-                    "or specifying a different row_factory on your Session" %
-                    (colnames, clean_column_names))
-        Row = namedtuple('Row', _sanitize_identifiers(clean_column_names))
-
+    Row = _named_tuple_row_class(tuple(colnames))
     return [Row(*row) for row in rows]
 
 
