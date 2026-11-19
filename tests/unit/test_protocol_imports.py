@@ -181,7 +181,8 @@ builds = Barrier(2)
 build_calls = []
 results = []
 
-def build_handler(parser):
+def build_handler(parser, _prepared_metadata_cache=False):
+    assert _prepared_metadata_cache
     build_calls.append(parser)
     try:
         builds.wait(timeout=0.2)

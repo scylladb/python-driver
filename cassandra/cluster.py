@@ -78,6 +78,7 @@ from cassandra.protocol import (QueryMessage, ResultMessage,
                                 RESULT_KIND_SET_KEYSPACE, RESULT_KIND_ROWS,
                                 RESULT_KIND_SCHEMA_CHANGE, ProtocolHandler,
                                 RESULT_KIND_VOID, ProtocolException)
+from cassandra import _prepared_metadata
 from cassandra.metadata import Metadata, Token, protect_name, murmur3, _NodeInfo
 from cassandra.policies import (TokenAwarePolicy, DCAwareRoundRobinPolicy, SimpleConvictionPolicy,
                                 ExponentialReconnectionPolicy, HostDistance,
@@ -147,6 +148,41 @@ log = logging.getLogger(__name__)
 _GRAPH_PAGING_MIN_DSE_VERSION = Version('6.8.0')
 
 _NOT_SET = object()
+
+
+def _prepared_metadata_request_state(
+        prepared_statement, protocol_handler, cluster_context,
+        requested_metadata_id=_NOT_SET, decoder_context=_NOT_SET):
+    """
+    Resolve one coherent metadata/id/provenance snapshot for an EXECUTE.
+
+    ``requested_metadata_id`` is supplied by the compatibility path
+    where an extension constructs a ResponseFuture directly. A mismatch
+    with the PreparedStatement cache forces a self-describing response.
+    """
+    if decoder_context is _NOT_SET:
+        decoder_context = _prepared_metadata.decoder_context(
+            protocol_handler, cluster_context)
+
+    result_metadata, cached_metadata_id, cached_decoder_context = \
+        prepared_statement._result_metadata_snapshot
+    result_metadata_id = (
+        cached_metadata_id
+        if requested_metadata_id is _NOT_SET
+        else requested_metadata_id)
+
+    if (result_metadata_id != cached_metadata_id
+            or (result_metadata
+                and (decoder_context is None
+                     or cached_decoder_context != decoder_context))):
+        return (), None, False, decoder_context
+
+    return (
+        result_metadata,
+        result_metadata_id,
+        bool(result_metadata) and result_metadata_id is not None,
+        decoder_context,
+    )
 
 
 def _cancel_and_notify(future):
@@ -1385,6 +1421,8 @@ class Cluster(object):
     _is_setup = False
     _prepared_statements = None
     _prepared_statement_lock = None
+    _prepared_metadata_context = None
+    _user_type_registration_count = 0
     _idle_heartbeat = None
     _ssl_session_cache = _NOT_SET
     _ssl_session_cache_created = None
@@ -1736,6 +1774,11 @@ class Cluster(object):
         self.control_connection = None
         self._prepared_statements = WeakValueDictionary()
         self._prepared_statement_lock = Lock()
+        # Opaque and instance-unique: cached decoder metadata must not
+        # be reused by a Session from another Cluster merely because
+        # both have registered the same number of UDT mappings.
+        self._prepared_metadata_context = object()
+        self._user_type_registration_count = 0
 
         self._user_types = defaultdict(dict)
 
@@ -1801,6 +1844,26 @@ class Cluster(object):
         """
         return ThreadPoolExecutor(**kwargs)
 
+    def _invalidate_prepared_metadata_context(self, registration_delta):
+        """
+        Rotate this Cluster's decoder context and invalidate cached
+        server ids.
+
+        The token also covers statements not currently present in the
+        weak prepared cache: their old context will no longer match on
+        execute. An ineligible context prevents metadata decoded during
+        a client-side transition from enabling skip-metadata until all
+        registrations finish. The count also covers overlapping and
+        reentrant Session callbacks.
+        """
+        with self._prepared_statement_lock:
+            self._user_type_registration_count += registration_delta
+            self._prepared_metadata_context = (
+                None if self._user_type_registration_count else object())
+            prepared_statements = tuple(self._prepared_statements.values())
+            for prepared_statement in prepared_statements:
+                prepared_statement._invalidate_result_metadata_id()
+
     def register_user_type(self, keyspace, user_type, klass):
         """
         Registers a class to use to represent a particular user-defined type.
@@ -1854,10 +1917,26 @@ class Cluster(object):
                         "CQL encoding for simple statements will still work, but named tuples will "
                         "be returned when reading type %s.%s.", self.protocol_version, keyspace, user_type)
 
-        self._user_types[keyspace][user_type] = klass
-        for session in tuple(self.sessions):
-            session.user_type_registered(keyspace, user_type, klass)
-        UserType.evict_udt_class(keyspace, user_type)
+        # Enter a transition context before publishing any mapping
+        # changes. Executes created while Session callbacks run must
+        # request full metadata rather than retain the old id and
+        # decoder descriptors.
+        self._invalidate_prepared_metadata_context(registration_delta=1)
+        try:
+            self._user_types[keyspace][user_type] = klass
+            for session in tuple(self.sessions):
+                session.user_type_registered(keyspace, user_type, klass)
+        finally:
+            try:
+                UserType.evict_udt_class(keyspace, user_type)
+            finally:
+                # Only the last registration restores a distinct stable
+                # context. Metadata decoded during any overlapping
+                # transition remains ineligible, including when a
+                # callback fails. Balance entry even if map publication
+                # or eviction fails.
+                self._invalidate_prepared_metadata_context(
+                    registration_delta=-1)
 
     def add_execution_profile(self, name, profile, pool_wait_timeout=5):
         """
@@ -3562,6 +3641,7 @@ class Session(object):
     _profile_manager = None
     _metrics = None
     _request_init_callbacks = None
+    _prepared_metadata_handler_cache = None
 
     def __init__(self, cluster, hosts, keyspace=None):
         self.cluster = cluster
@@ -3576,6 +3656,7 @@ class Session(object):
         self._profile_manager = cluster.profile_manager
         self._metrics = cluster.metrics
         self._request_init_callbacks = []
+        self._prepared_metadata_handler_cache = None
         self._protocol_version = self.cluster.protocol_version
 
         self.encoder = Encoder()
@@ -3723,7 +3804,6 @@ class Session(object):
         future = self._create_response_future(
             query, parameters, trace, custom_payload, timeout,
             execution_profile, paging_state, host)
-        future._protocol_handler = self.client_protocol_handler
         self._on_request(future)
         future.send_request()
         return future
@@ -3851,10 +3931,18 @@ class Session(object):
 
     def _create_response_future(self, query, parameters, trace, custom_payload,
                                 timeout, execution_profile=EXEC_PROFILE_DEFAULT,
-                                paging_state=None, host=None):
+                                paging_state=None, host=None,
+                                protocol_handler=_NOT_SET):
         """ Returns the ResponseFuture before calling send_request() on it """
 
         prepared_statement = None
+        # A request's decoder and cached metadata must belong to one
+        # handler snapshot. Reading this attribute again after
+        # construction could pair metadata selected for one handler with
+        # another handler's decode_message when applications change it
+        # concurrently.
+        if protocol_handler is _NOT_SET:
+            protocol_handler = self.client_protocol_handler
 
         if isinstance(query, str):
             query = SimpleStatement(query)
@@ -3904,6 +3992,7 @@ class Session(object):
         # Snapshot passed to the ResponseFuture for decoding skip_meta responses; only
         # bound statements carry cached result metadata (set in the BoundStatement branch).
         bound_result_metadata = _NOT_SET
+        result_metadata_decoder_context = _NOT_SET
 
         # Compute the ring token once, here on the request path, and pass it
         # explicitly to the two consumers that run while sending: the
@@ -3937,6 +4026,8 @@ class Session(object):
                 continuous_paging_options, statement_keyspace)
         elif isinstance(query, BoundStatement):
             prepared_statement = query.prepared_statement
+            protocol_handler = _prepared_metadata.session_handler(
+                self, protocol_handler)
             # Snapshot metadata and its id as one atomic pair so the message never
             # carries the id of one schema version alongside a skip_meta decision
             # made for another. skip_meta is requested only when there is both an
@@ -3945,22 +4036,23 @@ class Session(object):
             # metadata-less response with, so the server must send it.
             # Whether skip_meta and the id actually reach the wire is decided per
             # connection at serialization time (see ExecuteMessage.send_body).
-            # Continuous paging sessions are excluded: Connection.process_msg hardcodes
-            # result_metadata=None for every page after the first (it isn't threaded
-            # through the paging session), so a skip_meta response has nothing to
+            # Continuous paging sessions are excluded:
+            # Connection.process_msg hardcodes result_metadata=None for
+            # every page after the first (it is not threaded through the
+            # paging session), so a skip_meta response has nothing to
             # decode page 2+ against.
-            result_metadata, result_metadata_id = prepared_statement.result_metadata_and_id
-            bound_result_metadata = result_metadata
-
-            # The tablet_version_block value is connection-independent, so compute
-            # it once here instead of copying the message per send attempt. The
-            # serializer emits it only when the serving connection negotiated
-            # TABLETS_ROUTING_V2 (see ExecuteMessage.send_body).
+            (bound_result_metadata,
+             result_metadata_id,
+             skip_meta,
+             result_metadata_decoder_context) = \
+                _prepared_metadata_request_state(
+                    prepared_statement,
+                    protocol_handler,
+                    self.cluster._prepared_metadata_context)
             message = ExecuteMessage(
                 prepared_statement.query_id, query.values, cl,
                 serial_cl, fetch_size, paging_state, timestamp,
-                skip_meta=bool(result_metadata) and result_metadata_id is not None
-                          and continuous_paging_options is None,
+                skip_meta=skip_meta and continuous_paging_options is None,
                 continuous_paging_options=continuous_paging_options,
                 result_metadata_id=result_metadata_id,
                 tablet_version_block=self._compute_tablet_version_block(query, routing_key, routing_token))
@@ -3981,12 +4073,18 @@ class Session(object):
         message.allow_beta_protocol_version = self.cluster.allow_beta_protocol_version
 
         spec_exec_plan = spec_exec_policy.new_plan(query.keyspace or self.keyspace, query) if query.is_idempotent and spec_exec_policy else None
-        return ResponseFuture(
+        future = ResponseFuture(
             self, message, query, timeout, metrics=self._metrics,
             prepared_statement=prepared_statement, retry_policy=retry_policy, row_factory=row_factory,
             load_balancer=load_balancing_policy, start_time=start_time, speculative_execution_plan=spec_exec_plan,
             continuous_paging_state=None, host=host, bound_result_metadata=bound_result_metadata,
-            routing_token=routing_token)
+            routing_token=routing_token,
+            result_metadata_decoder_context=result_metadata_decoder_context,
+            protocol_handler=protocol_handler,
+            prepared_metadata_skip_allowed=(
+                continuous_paging_options is None),
+            _prepared_metadata_resolved=True)
+        return future
 
     def _compute_tablet_version_block(self, query, routing_key: Optional[bytes],
                                       routing_token: Optional[Token]) -> int:
@@ -4147,7 +4245,19 @@ class Session(object):
         message. See :ref:`custom_payload`.
         """
         message = PrepareMessage(query=query, keyspace=keyspace)
-        future = ResponseFuture(self, message, query=None, timeout=self.default_timeout)
+        # PREPARE is client-initiated too: its bind and result type
+        # descriptors must be produced by the same handler snapshot that
+        # will decode EXECUTE.
+        protocol_handler = _prepared_metadata.session_handler(
+            self, self.client_protocol_handler)
+        result_metadata_decoder_context = \
+            _prepared_metadata.decoder_context(
+                protocol_handler,
+                self.cluster._prepared_metadata_context)
+        future = ResponseFuture(
+            self, message, query=None, timeout=self.default_timeout,
+            result_metadata_decoder_context=result_metadata_decoder_context,
+            protocol_handler=protocol_handler)
         try:
             future.send_request()
             response = future.result().one()
@@ -4157,8 +4267,12 @@ class Session(object):
 
         prepared_keyspace = keyspace if keyspace else None
         prepared_statement = PreparedStatement.from_message(
-            response.query_id, response.bind_metadata, response.pk_indexes, self.cluster.metadata, query, prepared_keyspace,
-            self._protocol_version, response.column_metadata, response.result_metadata_id, response.is_lwt, self.cluster.column_encryption_policy)
+            response.query_id, response.bind_metadata, response.pk_indexes,
+            self.cluster.metadata, query, prepared_keyspace,
+            self._protocol_version, response.column_metadata,
+            response.result_metadata_id, response.is_lwt,
+            self.cluster.column_encryption_policy,
+            result_metadata_decoder_context)
         prepared_statement.custom_payload = future.custom_payload
 
         self.cluster.add_prepared(response.query_id, prepared_statement)
@@ -7329,14 +7443,36 @@ class ResponseFuture(object):
     _TABLET_ROUTING_CTYPE = None
     _TABLET_ROUTING_V2_CTYPE = None
     _bound_result_metadata = None
+    _result_metadata_decoder_context = None
 
     _warned_timeout = False
 
     def __init__(self, session, message, query, timeout, metrics=None, prepared_statement=None,
                  retry_policy=RetryPolicy(), row_factory=None, load_balancer=None, start_time=None,
                  speculative_execution_plan=None, continuous_paging_state=None, host=None,
-                 bound_result_metadata=_NOT_SET, routing_token=None):
+                 bound_result_metadata=_NOT_SET, routing_token=None,
+                 result_metadata_decoder_context=_NOT_SET,
+                 protocol_handler=_NOT_SET,
+                 prepared_metadata_skip_allowed=True,
+                 _prepared_metadata_resolved=False):
         self.session = session
+        protocol_handler = (
+            session.client_protocol_handler
+            if protocol_handler is _NOT_SET else protocol_handler)
+        if (prepared_statement is not None
+                and isinstance(message, ExecuteMessage)):
+            protocol_handler = _prepared_metadata.session_handler(
+                session, protocol_handler)
+        self._protocol_handler = protocol_handler
+        self._prepared_metadata_skip_allowed = \
+            prepared_metadata_skip_allowed
+        if (not _prepared_metadata_resolved
+                and isinstance(message, ExecuteMessage)):
+            # A direct caller's full-metadata request applies to every
+            # page. Factory requests can be temporarily ineligible and
+            # recover.
+            self._prepared_metadata_skip_allowed = (
+                self._prepared_metadata_skip_allowed and message.skip_meta)
         # TODO: normalize handling of retry policy and row factory
         self.row_factory = row_factory or session.row_factory
         self._load_balancer = load_balancer or session.cluster._default_load_balancing_policy
@@ -7346,12 +7482,82 @@ class ResponseFuture(object):
         self._retry_policy = retry_policy
         self._metrics = metrics
         self.prepared_statement = prepared_statement
-        # Metadata snapshotted alongside the message's result_metadata_id at construction
-        # time (see Session._create_response_future). Decoding a skip_meta response uses
-        # this so the metadata decoded-with always pairs with the id the message sent,
-        # even if a concurrent METADATA_CHANGED replaces the prepared statement's cache in
-        # between. Defaults to [] for unprepared statements (no cached metadata).
-        self._bound_result_metadata = [] if bound_result_metadata is _NOT_SET else bound_result_metadata
+        # Factory-created requests retain the context captured with
+        # their descriptors, even if a later registration rotates the
+        # Cluster token. Extension code constructing an Execute
+        # ResponseFuture directly may omit it; resolve the same state
+        # here without mutating the caller's message, which could
+        # already be shared by speculative attempts.
+        if (bound_result_metadata is _NOT_SET
+                and prepared_statement is not None
+                and isinstance(message, ExecuteMessage)):
+            (bound_result_metadata,
+             result_metadata_id,
+             skip_meta,
+             result_metadata_decoder_context) = \
+                _prepared_metadata_request_state(
+                    prepared_statement,
+                    self._protocol_handler,
+                    session.cluster._prepared_metadata_context,
+                    requested_metadata_id=message.result_metadata_id,
+                    decoder_context=result_metadata_decoder_context)
+            message = copy(message)
+            message.result_metadata_id = result_metadata_id
+            message.skip_meta = (
+                message.skip_meta and skip_meta
+                and self._prepared_metadata_skip_allowed)
+            self.message = message
+        elif (prepared_statement is not None
+              and isinstance(message, ExecuteMessage)
+              and not _prepared_metadata_resolved):
+            (trusted_metadata, trusted_id, trusted_skip,
+             decoder_context) = _prepared_metadata_request_state(
+                prepared_statement, self._protocol_handler,
+                session.cluster._prepared_metadata_context,
+                requested_metadata_id=message.result_metadata_id)
+            explicit_metadata = PreparedStatement._freeze_result_metadata(
+                bound_result_metadata)
+            if not explicit_metadata:
+                bound_result_metadata = explicit_metadata
+                if message.skip_meta:
+                    message = copy(message)
+                    message.skip_meta = False
+                    self.message = message
+                result_metadata_decoder_context = decoder_context
+            elif (decoder_context is None
+                  or result_metadata_decoder_context != decoder_context
+                  or explicit_metadata != trusted_metadata):
+                # Provenance alone cannot establish a metadata/id pair.
+                # A direct caller must match the same trusted statement
+                # state.
+                bound_result_metadata = ()
+                message = copy(message)
+                message.skip_meta = False
+                message.result_metadata_id = None
+                self.message = message
+                result_metadata_decoder_context = decoder_context
+            else:
+                bound_result_metadata = trusted_metadata
+                if (message.skip_meta
+                        and (not trusted_skip
+                             or not self._prepared_metadata_skip_allowed)):
+                    message = copy(message)
+                    message.skip_meta = False
+                    self.message = message
+        elif bound_result_metadata is _NOT_SET:
+            bound_result_metadata = []
+        self._bound_result_metadata = bound_result_metadata
+        self._result_metadata_decoder_context = (
+            None if result_metadata_decoder_context is _NOT_SET
+            else result_metadata_decoder_context)
+        # Requests may be sent concurrently by speculative execution.
+        # Publish the message and the metadata handed to its decoder as
+        # one immutable snapshot so refreshes for paging/reprepare
+        # cannot tear the pair.
+        self._request_snapshot = (
+            self.message,
+            self._bound_result_metadata,
+            self._result_metadata_decoder_context)
         self._callback_lock = Lock()
         # Makes the timeout's "no connection yet" decision and send admission
         # (flag check + _connection assignment) atomic. Taken in three places:
@@ -7564,14 +7770,24 @@ class ResponseFuture(object):
             # they last left off
             self.query_plan = iter(self._load_balancer.make_query_plan(self.session.keyspace, self.query))
 
-    def send_request(self, error_no_hosts=True):
+    def send_request(self, error_no_hosts=True, page_generation=None):
         """ Internal """
+        with self._callback_lock:
+            if page_generation is not None and (
+                    page_generation != self._page_generation
+                    or self._is_final()):
+                return True
+        options = ({} if page_generation is None else
+                   {'page_generation': page_generation})
+        final_options = ({} if page_generation is None else
+                         {'page_generation': page_generation})
         # query_plan is an iterator, so this will resume where we last left
         # off if send_request() is called multiple times
         for host in self.query_plan:
             if not isinstance(host, Host):
                 self._set_final_exception(TypeError(
-                    "Query plan entries must be Host instances"))
+                    "Query plan entries must be Host instances"),
+                    **final_options)
                 return True
             # Public targets and extension query plans may retain a Host from
             # an older Cluster or endpoint generation. Resolve only new
@@ -7594,7 +7810,9 @@ class ResponseFuture(object):
                           host.host_id)
                 req_id = None
             else:
-                req_id = self._query(host)
+                req_id = self._query(host, **options)
+            if req_id is _NOT_SET:
+                return True
             if req_id is not None:
                 self._req_id = req_id
                 return True
@@ -7610,7 +7828,7 @@ class ResponseFuture(object):
             return True
         if error_no_hosts:
             if self._fallback_to_control_connection():
-                req_id = self._query_control_connection()
+                req_id = self._query_control_connection(**options)
                 if req_id is _NOT_SET:
                     return True
                 if req_id is not None:
@@ -7626,7 +7844,8 @@ class ResponseFuture(object):
                 self._on_timeout()
                 return True
             self._set_final_exception(NoHostAvailable(
-                "Unable to complete the operation against any hosts", self._errors))
+                "Unable to complete the operation against any hosts",
+                self._errors), **final_options)
         return False
 
     def _has_usable_node_pool(self):
@@ -7659,7 +7878,8 @@ class ResponseFuture(object):
             return request_id
 
     def _release_control_connection_request(self, connection, request_id,
-                                            provisional_session=None):
+                                            provisional_session=None,
+                                            reserved=False):
         control_connection = self.session.cluster.control_connection
         with control_connection._application_query_lock:
             request_key = (connection, request_id)
@@ -7674,13 +7894,13 @@ class ResponseFuture(object):
             # A timeout may have taken ownership while send_msg() was still
             # encoding and then send_msg() may fail before pushing any bytes.
             # Retire either form of ownership exactly once in that case.
-            if active_request is not None or orphaned_request:
+            if active_request is not None or orphaned_request or reserved:
                 with connection.lock:
                     connection.in_flight -= 1
                     connection.request_ids.append(request_id)
                     connection._requests.pop(request_id, None)
                     connection.orphaned_request_ids.discard(request_id)
-                if active_request is not None:
+                if active_request is not None or reserved:
                     control_connection._application_requests_in_flight -= 1
             control_connection._finish_application_session_claim(
                 provisional_session, False)
@@ -7770,9 +7990,18 @@ class ResponseFuture(object):
         self._set_final_exception(NoHostAvailable(
             "Unable to complete the operation against any hosts", self._errors))
 
-    def _set_control_connection_keyspace(self, connection, host, keyspace,
-                                         message=None, cb=None, request_id=_NOT_SET,
-                                         provisional_session=None):
+    def _set_control_connection_keyspace(
+            self, connection, host, keyspace, message=None, cb=None,
+            request_id=_NOT_SET, provisional_session=None,
+            page_generation=None):
+        options = ({} if page_generation is None else
+                   {'page_generation': page_generation})
+        final_options = ({} if page_generation is None else
+                         {'page_generation': page_generation})
+
+        def set_exception(response):
+            self._set_final_exception(response, **final_options)
+
         use_message = QueryMessage(
             query='USE %s' % protect_name(keyspace),
             consistency_level=ConsistencyLevel.ONE)
@@ -7784,12 +8013,15 @@ class ResponseFuture(object):
                 control_connection._finish_internal_keyspace_change(
                     connection, request_id)
                 if self._send_control_connection_message(
-                        message=message, cb=cb, connection=connection, host=host) is None:
-                    self._control_connection_failed()
+                        message=message, cb=cb, connection=connection,
+                        host=host, **options) is None:
+                    set_exception(NoHostAvailable(
+                        "Unable to complete the operation against any hosts",
+                        self._errors))
             elif isinstance(response, ErrorMessage):
                 control_connection._finish_internal_keyspace_change(
                     connection, request_id)
-                self._set_final_exception(response.to_exception())
+                set_exception(response.to_exception())
             elif isinstance(response, ConnectionException):
                 control_connection._finish_internal_keyspace_change(
                     connection, request_id)
@@ -7800,15 +8032,15 @@ class ResponseFuture(object):
                 # flapping control connection re-sends USE until the client-side
                 # timeout fires instead of failing fast. Routing it through the
                 # retry machinery shared with the pooled path would be the fix.
-                self.session.submit(self._retry_task, False, host)
+                self.session.submit(self._retry_task, False, host, **options)
             elif isinstance(response, Exception):
                 control_connection._finish_internal_keyspace_change(
                     connection, request_id)
-                self._set_final_exception(response)
+                set_exception(response)
             else:
                 control_connection._finish_internal_keyspace_change(
                     connection, request_id)
-                self._set_final_exception(ConnectionException(
+                set_exception(ConnectionException(
                     "Unexpected response while setting the control-connection keyspace: %r" %
                     (response,), connection.endpoint))
 
@@ -7818,7 +8050,11 @@ class ResponseFuture(object):
             message=use_message, cb=keyspace_set, connection=connection,
             host=host, record_attempt=False, record_size=False,
             request_id=request_id,
-            provisional_session=provisional_session)
+            provisional_session=provisional_session, **options)
+        if sent is _NOT_SET:
+            control_connection._finish_internal_keyspace_change(
+                connection, request_id)
+            return sent
         if sent is None:
             control_connection._finish_internal_keyspace_change(
                 connection, request_id)
@@ -7829,12 +8065,33 @@ class ResponseFuture(object):
                     "Failed sending control-connection keyspace setup", connection.endpoint))
         return sent
 
-    def _send_control_connection_message(self, message=None, cb=None, connection=None,
-                                         host=None, record_attempt=True, record_size=True,
-                                         request_id=_NOT_SET,
-                                         provisional_session=None):
-        if message is None:
-            message = self.message
+    def _send_control_connection_message(
+            self, message=None, cb=None, connection=None, host=None,
+            record_attempt=True, record_size=True, request_id=_NOT_SET,
+            provisional_session=None, page_generation=None):
+        # Paging publishes its message and generation under this same
+        # lock. Keep the captured tag while borrowing, even if another
+        # attempt completes this page and the application starts the
+        # next one.
+        with self._callback_lock:
+            stale = page_generation is not None and (
+                page_generation != self._page_generation or self._is_final())
+            if not stale:
+                page_generation = self._page_generation
+                if message is None:
+                    message, result_meta, decoder_context = \
+                        self._request_snapshot
+                else:
+                    result_meta = self._bound_result_metadata
+                    decoder_context = self._result_metadata_decoder_context
+        if stale:
+            if request_id is not _NOT_SET and request_id is not None:
+                # This stream was borrowed by the caller, before this
+                # send could register a callback or become an orphaned
+                # request.
+                self._release_control_connection_request(
+                    connection, request_id, provisional_session, reserved=True)
+            return _NOT_SET
 
         if connection is None:
             control_connection = self.session.cluster.control_connection
@@ -7854,10 +8111,10 @@ class ResponseFuture(object):
         try:
             if request_id is None:
                 request_id = self._borrow_control_connection(connection)
-            result_meta = self._bound_result_metadata
             if cb is None:
                 cb = partial(self._set_result, host, connection, None,
-                             page_generation=self._page_generation)
+                             page_generation=page_generation,
+                             result_metadata_decoder_context=decoder_context)
             cb = partial(self._handle_control_connection_response, connection,
                          request_id, cb)
 
@@ -7924,7 +8181,16 @@ class ResponseFuture(object):
 
         return None
 
-    def _query_control_connection(self, message=None, cb=None, connection=None, host=None):
+    def _query_control_connection(
+            self, message=None, cb=None, connection=None, host=None,
+            page_generation=None):
+        with self._callback_lock:
+            if page_generation is not None and (
+                    page_generation != self._page_generation
+                    or self._is_final()):
+                return _NOT_SET
+        options = ({} if page_generation is None else
+                   {'page_generation': page_generation})
         self._control_connection_query_attempted = True
         control_connection = self.session.cluster.control_connection
         if control_connection is None:
@@ -7947,7 +8213,8 @@ class ResponseFuture(object):
             keyspace = self.session.keyspace or None
             if changing_keyspace and control_connection._application_keyspace_change is not None:
                 self._set_final_exception(InvalidRequest(
-                    "A control-connection keyspace change is already in progress"))
+                    "A control-connection keyspace change "
+                    "is already in progress"), **options)
                 return _NOT_SET
             if changing_keyspace and \
                     control_connection._application_internal_keyspace_changes:
@@ -7956,7 +8223,7 @@ class ResponseFuture(object):
                        control_connection._application_sessions):
                     self._set_final_exception(InvalidRequest(
                         "Cannot change keyspace while another Session uses "
-                        "control-connection fallback"))
+                        "control-connection fallback"), **options)
                 else:
                     control_connection._application_keyspace_waiters.append(
                         (self, host))
@@ -7966,7 +8233,7 @@ class ResponseFuture(object):
             conflict = control_connection._attach_application_session(
                 keyspace, self.session, changing_keyspace=changing_keyspace)
             if conflict is not None:
-                self._set_final_exception(InvalidRequest(conflict))
+                self._set_final_exception(InvalidRequest(conflict), **options)
                 return _NOT_SET
             provisional_session = \
                 control_connection._begin_application_session_claim(
@@ -8042,7 +8309,11 @@ class ResponseFuture(object):
             sent = self._send_control_connection_message(
                 message=message, cb=keyspace_changed, connection=connection,
                 host=host, request_id=request_id,
-                provisional_session=provisional_session)
+                provisional_session=provisional_session, **options)
+            if sent is _NOT_SET:
+                control_connection._finish_application_keyspace_change(
+                    connection, request_id)
+                return sent
             if sent is None:
                 control_connection._finish_application_keyspace_change(
                     connection, request_id)
@@ -8058,22 +8329,35 @@ class ResponseFuture(object):
             return self._send_control_connection_message(
                 message=message, cb=cb, connection=connection, host=host,
                 request_id=request_id,
-                provisional_session=provisional_session)
+                provisional_session=provisional_session, **options)
 
         if needs_internal_use:
             return self._set_control_connection_keyspace(
                 connection, host, keyspace, message=message, cb=cb,
                 request_id=request_id,
-                provisional_session=provisional_session)
+                provisional_session=provisional_session, **options)
 
         return self._send_control_connection_message(
             message=message, cb=cb, connection=connection, host=host,
             request_id=request_id,
-            provisional_session=provisional_session)
+            provisional_session=provisional_session, **options)
 
-    def _query(self, host, message=None, cb=None):
-        if message is None:
-            message = self.message
+    def _query(self, host, message=None, cb=None, page_generation=None):
+        # Paging publishes its message and generation under this same
+        # lock. Keep the captured tag while borrowing, even if another
+        # attempt completes this page and the application starts the
+        # next one.
+        with self._callback_lock:
+            if page_generation is not None and (
+                    page_generation != self._page_generation
+                    or self._is_final()):
+                return _NOT_SET
+            page_generation = self._page_generation
+            if message is None:
+                message, result_meta, decoder_context = self._request_snapshot
+            else:
+                result_meta = self._bound_result_metadata
+                decoder_context = self._result_metadata_decoder_context
 
         self._control_connection_query_attempted = False
 
@@ -8129,11 +8413,12 @@ class ResponseFuture(object):
                     self._errors[host] = ConnectionException(
                         "Pool changed while borrowing connection")
                     return None
-                result_meta = self._bound_result_metadata
 
                 if cb is None:
                     cb = partial(self._set_result, host, connection, pool,
-                                 page_generation=self._page_generation)
+                                 page_generation=page_generation,
+                                 result_metadata_decoder_context=(
+                                     decoder_context))
 
                 # Timeout reads the connection, pool, and stream under this
                 # lock. Keep it until send_msg installs the callback, so it
@@ -8281,7 +8566,9 @@ class ResponseFuture(object):
             if self._retry_aborted:
                 raise self._final_exception
             self._page_generation += 1
-            self.message.paging_state = self._paging_state
+            if not self._refresh_prepared_result_metadata(
+                    paging_state=self._paging_state):
+                self.message.paging_state = self._paging_state
             self._event.clear()
             self._final_result = _NOT_SET
             self._final_exception = None
@@ -8290,17 +8577,68 @@ class ResponseFuture(object):
         self._start_timer()
         self.send_request()
 
-    def _reprepare(self, prepare_message, host, connection, pool, query_id=None):
+    def _refresh_prepared_result_metadata(self, paging_state=_NOT_SET):
+        """
+        Refresh this future's metadata/id snapshot before reusing its
+        EXECUTE.
+
+        A future is reused for manual paging and after UNPREPARED
+        recovery.  In both cases the shared PreparedStatement may have
+        acquired fresher metadata since the original message was built.
+
+        The caller must hold _callback_lock while publishing this
+        snapshot.
+        """
+        if (self.prepared_statement is None
+                or not isinstance(self.message, ExecuteMessage)):
+            return False
+
+        (result_metadata,
+         result_metadata_id,
+         skip_meta,
+         decoder_context) = _prepared_metadata_request_state(
+            self.prepared_statement,
+            self._protocol_handler,
+            self.session.cluster._prepared_metadata_context)
+
+        message = copy(self.message)
+        message.result_metadata_id = result_metadata_id
+        message.skip_meta = (
+            skip_meta and self._prepared_metadata_skip_allowed)
+        if paging_state is not _NOT_SET:
+            message.paging_state = paging_state
+
+        self.message = message
+        self._bound_result_metadata = result_metadata
+        self._result_metadata_decoder_context = decoder_context
+        self._request_snapshot = (
+            message, result_metadata, decoder_context)
+        return True
+
+    def _reprepare(self, prepare_message, host, connection, pool,
+                   query_id=None, page_generation=None):
+        with self._callback_lock:
+            if page_generation is None:
+                page_generation = self._page_generation
+            if (page_generation != self._page_generation or self._is_final()):
+                return
+        decoder_context = _prepared_metadata.decoder_context(
+            self._protocol_handler,
+            self.session.cluster._prepared_metadata_context)
         cb = partial(self.session.submit, self._execute_after_prepare, host, connection, pool,
-                     expected_query_id=query_id)
+                     expected_query_id=query_id,
+                     result_metadata_decoder_context=decoder_context,
+                     page_generation=page_generation)
         if pool is None and connection is not None and connection.is_control_connection:
-            request_id = self._query_control_connection(prepare_message, cb=cb,
-                                                        connection=connection, host=host)
+            request_id = self._query_control_connection(
+                prepare_message, cb=cb, connection=connection, host=host,
+                page_generation=page_generation)
         else:
-            request_id = self._query(host, prepare_message, cb=cb)
+            request_id = self._query(host, prepare_message, cb=cb,
+                                     page_generation=page_generation)
         if request_id is None:
             # try to submit the original prepared statement on some other host
-            self.send_request()
+            self.send_request(page_generation=page_generation)
 
     def _cache_tablet_from_payload(self, payload_key, ctype):
         """
@@ -8323,7 +8661,12 @@ class ResponseFuture(object):
         if tablet and keyspace and table:
             self.session.cluster.metadata._tablets.add_tablet(keyspace, table, tablet)
 
-    def _set_result(self, host, connection, pool, response, page_generation=None):
+    def _set_result(
+            self, host, connection, pool, response, page_generation=None,
+            result_metadata_decoder_context=_NOT_SET):
+        response_page_generation = (
+            self._page_generation if page_generation is None
+            else page_generation)
         try:
             if self._is_final() or (page_generation is not None and
                                     page_generation != self._page_generation):
@@ -8332,6 +8675,9 @@ class ResponseFuture(object):
                     pool.return_connection(connection)
                 return
 
+            if result_metadata_decoder_context is _NOT_SET:
+                result_metadata_decoder_context = \
+                    self._result_metadata_decoder_context
             self.coordinator_host = host
             if pool and not pool.is_shutdown:
                 pool.return_connection(connection)
@@ -8399,8 +8745,10 @@ class ResponseFuture(object):
                             # skip sending metadata and rows would be decoded
                             # against stale columns, with no recovery).
                             # (this also re-arms the anomaly warning below)
-                            self.prepared_statement.update_result_metadata(
-                                response.column_metadata, new_result_metadata_id)
+                            self.prepared_statement._update_result_metadata(
+                                response.column_metadata,
+                                new_result_metadata_id,
+                                result_metadata_decoder_context)
                         elif not self.prepared_statement._warned_missing_column_metadata:
                             # Anomalous response: a new id without the metadata it
                             # describes. Cache neither — adopting the id alone would
@@ -8476,7 +8824,8 @@ class ResponseFuture(object):
                             return
                         else:
                             prepared_statement = self.prepared_statement
-                            self.session.cluster._prepared_statements[query_id] = prepared_statement
+                            self.session.cluster.add_prepared(
+                                query_id, prepared_statement)
 
                     current_keyspace = self._connection.keyspace
                     prepared_keyspace = prepared_statement.keyspace
@@ -8498,7 +8847,9 @@ class ResponseFuture(object):
                     # since this might block, run on the executor to avoid hanging
                     # the event loop thread
                     self.session.submit(self._reprepare, prepare_message, host, connection, pool,
-                                        query_id=query_id)
+                                        query_id=query_id,
+                                        page_generation=(
+                                            response_page_generation))
                     return
                 else:
                     if hasattr(response, 'to_exception'):
@@ -8549,7 +8900,9 @@ class ResponseFuture(object):
             self._set_final_exception(ConnectionException(
                 "Failed to set keyspace on all hosts: %s" % (errors,)))
 
-    def _execute_after_prepare(self, host, connection, pool, response, expected_query_id=None):
+    def _execute_after_prepare(
+            self, host, connection, pool, response, expected_query_id=None,
+            result_metadata_decoder_context=_NOT_SET, page_generation=None):
         """
         Handle the response to our attempt to prepare a statement.
         If it succeeded, run the original query again against the same host.
@@ -8557,74 +8910,91 @@ class ResponseFuture(object):
         if pool:
             pool.return_connection(connection)
 
-        if self._final_exception:
-            return
+        with self._callback_lock:
+            if page_generation is None:
+                page_generation = self._page_generation
+            if (page_generation != self._page_generation or self._is_final()):
+                return
+        options = {'page_generation': page_generation}
+        final_options = {'page_generation': page_generation}
+        if result_metadata_decoder_context is _NOT_SET:
+            result_metadata_decoder_context = \
+                self._result_metadata_decoder_context
 
         if isinstance(response, ResultMessage):
             if response.kind == RESULT_KIND_PREPARED:
-                if self.prepared_statement:
-                    expected_query_id = self.prepared_statement.query_id
-                if expected_query_id is not None and expected_query_id != response.query_id:
-                    self._set_final_exception(DriverException(
-                        "ID mismatch while trying to reprepare (expected {expected}, got {got}). "
-                        "This prepared statement won't work anymore. "
-                        "This usually happens when you run a 'USE...' "
-                        "query after the statement was prepared.".format(
-                            expected=hexlify(expected_query_id), got=hexlify(response.query_id)
-                        )
-                    ))
+                error = None
+                with self._callback_lock:
+                    if (page_generation != self._page_generation
+                            or self._is_final()):
+                        return
+                    if self.prepared_statement:
+                        expected_query_id = self.prepared_statement.query_id
+                    if (expected_query_id is not None
+                            and expected_query_id != response.query_id):
+                        error = DriverException(
+                            "ID mismatch while trying to reprepare "
+                            "(expected {expected}, got {got}). "
+                            "This prepared statement won't work anymore. "
+                            "This usually happens when you run a 'USE...' "
+                            "query after the statement was prepared.".format(
+                                expected=hexlify(expected_query_id),
+                                got=hexlify(response.query_id)))
+                    elif self.prepared_statement:
+                        # Bind metadata and result provenance belong to
+                        # the page that received UNPREPARED. Publish
+                        # them with its refreshed request before another
+                        # page can advance.
+                        self.prepared_statement.column_metadata = \
+                            response.bind_metadata
+                        self.prepared_statement._update_result_metadata(
+                            response.column_metadata,
+                            response.result_metadata_id,
+                            result_metadata_decoder_context)
+                        self._refresh_prepared_result_metadata()
+                    else:
+                        prepared_statement = \
+                            self.session.cluster._prepared_statements.get(
+                                response.query_id)
+                        if prepared_statement is not None:
+                            prepared_statement.column_metadata = \
+                                response.bind_metadata
+                if error is not None:
+                    self._set_final_exception(error, **final_options)
                     return
-                if self.prepared_statement:
-                    # Replace all bind metadata for subsequent binds, including
-                    # names and types. Keep the original routing indexes and this
-                    # request's serialized values; type/layout changes require a
-                    # fresh prepare and bind.
-                    self.prepared_statement.column_metadata = response.bind_metadata
-                    # Update the metadata/id pair atomically from exactly what this
-                    # reprepare response carries. Falling back to the previously
-                    # cached id when this response has none would risk pairing it
-                    # with metadata from a different schema version than the one the
-                    # old id was computed for (e.g. schema changed and reverted
-                    # between the two PREPAREs) - a stale-but-plausible id a later
-                    # id-aware execute could send without the server detecting the
-                    # mismatch. Dropping it instead triggers the same self-healing
-                    # b'' sentinel path a never-prepared id would.
-                    self.prepared_statement.update_result_metadata(
-                        response.column_metadata, response.result_metadata_id)
-                else:
-                    prepared_statement = self.session.cluster._prepared_statements.get(
-                        response.query_id)
-                    if prepared_statement is not None:
-                        prepared_statement.column_metadata = response.bind_metadata
 
                 # use self._query to re-use the same host and
                 # at the same time properly borrow the connection
                 if pool is None and connection is not None and connection.is_control_connection:
-                    request_id = self._query_control_connection(connection=connection, host=host)
+                    request_id = self._query_control_connection(
+                        connection=connection, host=host, **options)
                 else:
-                    request_id = self._query(host)
+                    request_id = self._query(host, **options)
                 if request_id is None:
                     # this host errored out, move on to the next
-                    self.send_request()
+                    self.send_request(**options)
             else:
                 self._set_final_exception(ConnectionException(
                     "Got unexpected response when preparing statement "
-                    "on host %s: %s" % (host, response)))
+                    "on host %s: %s" % (host, response)),
+                    **final_options)
         elif isinstance(response, ErrorMessage):
             if hasattr(response, 'to_exception'):
-                self._set_final_exception(response.to_exception())
+                self._set_final_exception(
+                    response.to_exception(), **final_options)
             else:
-                self._set_final_exception(response)
+                self._set_final_exception(response, **final_options)
         elif isinstance(response, ConnectionException):
             log.debug("Connection error when preparing statement on host %s: %s",
                       host, response)
             # try again on a different host, preparing again if necessary
             self._errors[host] = response
-            self.send_request()
+            self.send_request(**options)
         else:
             self._set_final_exception(ConnectionException(
                 "Got unexpected response type when preparing "
-                "statement on host %s: %s" % (host, response)))
+                "statement on host %s: %s" % (host, response)),
+                **final_options)
 
     def _is_final(self):
         # A late response (e.g. speculative, or after client timeout) must not re-fire callbacks.
@@ -8663,21 +9033,24 @@ class ResponseFuture(object):
             callback_partial()
 
     def _set_final_exception(self, response,
-                             retry_abort_generation=_NOT_SET):
-        self._finish_control_connection_keyspace_change()
+                             retry_abort_generation=_NOT_SET,
+                             page_generation=_NOT_SET):
         abort_retry = retry_abort_generation is not _NOT_SET
-        if not abort_retry:
+        guarded = abort_retry or page_generation is not _NOT_SET
+        if not guarded:
+            self._finish_control_connection_keyspace_change()
             self._cancel_timer()
 
         with self._callback_lock:
             if self._retry_aborted:
                 return
-            if abort_retry:
-                if retry_abort_generation != self._page_generation or \
-                        self._final_result is not _NOT_SET or \
-                        self._final_exception is not None:
+            if guarded:
+                generation = (retry_abort_generation if abort_retry else
+                              page_generation)
+                if generation != self._page_generation or self._is_final():
                     return
-                self._retry_aborted = True
+                if abort_retry:
+                    self._retry_aborted = True
             elif self._is_final():
                 return
             self._final_exception = response
@@ -8690,7 +9063,8 @@ class ResponseFuture(object):
                 for (fn, args, kwargs) in self._errbacks
             )
 
-        if abort_retry:
+        if guarded:
+            self._finish_control_connection_keyspace_change()
             self._cancel_timer()
         if self._metrics is not None:
             self._metrics.request_timer.addValue(time.time() - self._start_time)
@@ -8727,27 +9101,39 @@ class ResponseFuture(object):
         self._errors[host] = exception_from_response(response)
 
     def _retry(self, reuse_connection, consistency_level, host, delay):
+        rejected_downgrade = False
         with self._callback_lock:
             if self._final_exception:
                 # the connection probably broke while we were waiting
                 # to retry the operation
                 return
             page_generation = self._page_generation
+            if consistency_level is not None:
+                # Keep a retry-policy update and metadata refresh in the
+                # same publication order. Already captured attempts keep
+                # their CL.
+                original_cl = self.message.consistency_level
+                rejected_downgrade = (
+                    ConsistencyLevel.is_serial(original_cl)
+                    and not ConsistencyLevel.is_serial(consistency_level))
+                if not rejected_downgrade:
+                    message = copy(self.message)
+                    message.consistency_level = consistency_level
+                    self.message = message
+                    self._request_snapshot = (
+                        message, self._bound_result_metadata,
+                        self._result_metadata_decoder_context)
 
         if self._metrics is not None:
             self._metrics.on_retry()
-        if consistency_level is not None:
-            # Never downgrade from serial to non-serial consistency, as that
-            # would break serial read (Paxos) guarantees.
-            original_cl = self.message.consistency_level
-            if ConsistencyLevel.is_serial(original_cl) and not ConsistencyLevel.is_serial(consistency_level):
-                log.debug(
-                    "Retry policy attempted to downgrade serial consistency %s to %s; "
-                    "keeping original consistency level.",
-                    ConsistencyLevel.value_to_name.get(original_cl, original_cl),
-                    ConsistencyLevel.value_to_name.get(consistency_level, consistency_level))
-            else:
-                self.message.consistency_level = consistency_level
+        if rejected_downgrade:
+            # Never downgrade serial reads: preserve Paxos guarantees.
+            log.debug(
+                "Retry policy attempted to downgrade serial consistency %s "
+                "to %s; keeping original consistency level.",
+                ConsistencyLevel.value_to_name.get(original_cl, original_cl),
+                ConsistencyLevel.value_to_name.get(
+                    consistency_level, consistency_level))
 
         # don't retry on the event loop thread
         self.session.cluster.scheduler.schedule_with_shutdown(
@@ -8766,16 +9152,18 @@ class ResponseFuture(object):
             # to retry the operation
             return
 
+        options = ({} if page_generation is None else
+                   {'page_generation': page_generation})
         if self._control_connection_query_attempted:
             self._control_connection_query_attempted = False
-            self.send_request()
+            self.send_request(**options)
             return
 
-        if reuse_connection and self._query(host) is not None:
+        if reuse_connection and self._query(host, **options) is not None:
             return
 
         # otherwise, move onto another host
-        self.send_request()
+        self.send_request(**options)
 
     def result(self):
         """

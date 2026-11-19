@@ -2889,7 +2889,7 @@ from threading import Thread
 from cassandra import ConsistencyLevel
 from cassandra.cluster import Cluster, ResponseFuture, _register_cluster_shutdown
 from cassandra.connection import ConnectionShutdown
-from cassandra.protocol import QueryMessage
+from cassandra.protocol import ProtocolHandler, QueryMessage
 from cassandra.query import SimpleStatement
 
 
@@ -2900,6 +2900,7 @@ session = SimpleNamespace(
     cluster=cluster,
     keyspace=None,
     row_factory=lambda columns, rows: rows,
+    client_protocol_handler=ProtocolHandler,
 )
 response_future = ResponseFuture(
     session,
