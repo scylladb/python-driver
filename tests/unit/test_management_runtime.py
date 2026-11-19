@@ -299,6 +299,54 @@ def test_native_completion_preserves_delivery_capacity(runtime):
     assert manager._credits == 0
 
 
+def test_coalesced_cancel_waiters_and_physical_work(runtime):
+    manager, dispatch = runtime
+    entered, release = Event(), Event()
+    attempts = []
+    with ThreadPoolExecutor(1) as executor:
+        def physical():
+            attempts.append(True)
+            entered.set()
+            assert release.wait(5)
+            return 42
+        first = manager.submit(
+            lambda r: manager.work(r, executor, physical), key='same')
+        assert entered.wait(5)
+        second = manager.submit(
+            lambda r: pytest.fail('duplicate handler'), key='same')
+        assert first is not second
+        assert first.cancel()
+        assert wait([first], timeout=1).not_done == set()
+        with pytest.raises(TimeoutError):
+            second.result(0)
+        release.set()
+        assert second.result(5) == 42
+        assert attempts == [True]
+
+
+def test_late_result_disposal_does_not_need_admission(runtime):
+    manager, dispatch = runtime
+    entered, release, disposed = Event(), Event(), Event()
+    resource = object()
+    with ThreadPoolExecutor(1) as executor:
+        def physical():
+            entered.set()
+            assert release.wait(5)
+            return resource
+        future = manager.submit(lambda r: manager.work(
+            r, executor, physical,
+            dispose=lambda value: disposed.set()
+            if value is resource else None))
+        assert entered.wait(5)
+        manager.close()
+        with pytest.raises(ManagementClosed):
+            future.result(5)
+        assert not manager.finalized.is_set()
+        release.set()
+        assert disposed.wait(5)
+    manager.join(5)
+
+
 def test_callback_lane_wait_does_not_block_native_or_reactor_completion(
         runtime):
     manager, dispatch = runtime
@@ -372,6 +420,69 @@ def test_owner_wait_fails_and_pool_handlers_are_serial(runtime):
     manager.submit(self_wait).result(5)
 
 
+def test_executor_rejection_releases_reservation(runtime):
+    manager, dispatch = runtime
+    class Rejected:
+        def submit(self, function):
+            raise RuntimeError('executor closed')
+    with pytest.raises(RuntimeError, match='executor closed'):
+        manager.submit(
+            lambda r: manager.work(r, Rejected(), lambda: None)).result(5)
+    with manager._condition:
+        assert manager._condition.wait_for(lambda: manager._credits == 0, 5)
+
+
+@pytest.mark.parametrize('already_running', [False, True])
+def test_executor_failure_after_queueing_preserves_physical_ownership(
+        runtime, already_running):
+    manager, dispatch = runtime
+    entered, release = Event(), Event()
+    calls, disposed, queued, errors = [], [], [], []
+    resource = object()
+    def physical():
+        calls.append(get_ident())
+        entered.set()
+        assert release.wait(5)
+        return resource
+    def run(function):
+        try:
+            function()
+        except BaseException as exc:
+            errors.append(exc)
+    class QueuedThenFailed:
+        def submit(self, function):
+            queued.append(Thread(target=run, args=(function,), daemon=True))
+            if already_running:
+                queued[0].start()
+                assert entered.wait(5)
+            raise RuntimeError('failed after queueing')
+    future = manager.submit(lambda record: manager.work(
+        record, QueuedThenFailed(), physical,
+        dispose=lambda value: disposed.append(value)))
+    try:
+        with pytest.raises(RuntimeError, match='after queueing'):
+            future.result(5)
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: future._record.physical == int(already_running), 5)
+        if already_running:
+            manager.close()
+            assert not manager.finalized.is_set()
+        else:
+            queued[0].start()
+    finally:
+        release.set()
+        for thread in queued:
+            if thread.ident is not None:
+                thread.join(5)
+                assert not thread.is_alive()
+    assert not errors
+    assert bool(calls) == already_running
+    assert disposed == ([resource] if already_running else [])
+    with manager._condition:
+        assert manager._condition.wait_for(lambda: not manager._records, 5)
+
+
 @pytest.mark.parametrize('notification', [False, True])
 def test_callback_rejects_saturated_ordinary_admission(notification):
     manager = ManagementRuntime(Dispatcher(), limit=1)
@@ -395,6 +506,216 @@ def test_callback_rejects_saturated_ordinary_admission(notification):
     finally:
         manager.close()
         manager.join(5)
+
+
+def test_callback_reserved_window_progresses_at_full_delivery_capacity(
+        runtime):
+    manager, dispatch = runtime
+    gate = Event()
+    entered, release, completed = Event(), Event(), Event()
+    def listener():
+        entered.set()
+        assert release.wait(5)
+        with manager.synchronous_reentry() as budget:
+            assert budget == 'reentry'
+            with ThreadPoolExecutor(1) as executor:
+                for _ in range(100):
+                    future = manager.submit(
+                        lambda r: manager.work(r, executor, lambda: 11),
+                        budget=budget, wait=True)
+                    assert future.result(5) == 11
+        completed.set()
+    notification = manager.notify(listener)
+    assert entered.wait(5)
+    futures = [manager.submit(lambda record: gate.wait(5)) for _ in range(3)]
+    for future in futures:
+        future.add_done_callback(lambda f: None)
+    gate.set()
+    for future in futures:
+        future.result(5)
+    assert manager._credits == 4
+    release.set()
+    assert completed.wait(5)
+    notification.result(5)
+    with manager._condition:
+        assert manager._condition.wait_for(
+            lambda: manager._reentry_credits == 0, 5)
+
+
+def test_superseded_physical_result_is_disposed(runtime):
+    from cassandra._management import ManagementSuperseded
+    manager, dispatch = runtime
+    entered, release, disposed = Event(), Event(), Event()
+    with ThreadPoolExecutor(1) as executor:
+        def physical():
+            entered.set()
+            assert release.wait(5)
+            return object()
+        future = manager.submit(
+            lambda r: manager.work(
+                r, executor, physical, dispose=lambda value: disposed.set()))
+        assert entered.wait(5)
+        manager.supersede(future)
+        with pytest.raises(ManagementSuperseded):
+            future.result(5)
+        release.set()
+        assert disposed.wait(5)
+
+
+@pytest.mark.parametrize('ending', ['close', 'supersede'])
+def test_result_adoption_is_atomic_with_terminal_settlement(runtime, ending):
+    manager, dispatch = runtime
+    accepting, finish_accept, ending_started = Event(), Event(), Event()
+    resource = object()
+    disposed, errors = [], []
+    def accept(value):
+        assert value is resource
+        # Acceptance publishes native state. Other terminal paths must take
+        # this same condition before they can claim the operation's outcome.
+        assert manager._condition._is_owned()
+        accepting.set()
+        assert finish_accept.wait(5)
+        return value
+    with ThreadPoolExecutor(1) as executor:
+        future = manager.submit(lambda record: manager.work(
+            record, executor, lambda: resource, accept=accept,
+            dispose=disposed.append))
+        def end():
+            ending_started.set()
+            try:
+                if ending == 'close':
+                    manager.close()
+                else:
+                    manager.supersede(future)
+            except BaseException as exc:
+                errors.append(exc)
+        ending_thread = Thread(target=end)
+        try:
+            assert accepting.wait(5)
+            ending_thread.start()
+            assert ending_started.wait(5)
+        finally:
+            finish_accept.set()
+            if ending_thread.ident is not None:
+                ending_thread.join(5)
+        assert not ending_thread.is_alive()
+        assert not errors
+        assert future.result(5) is resource
+    assert disposed == []
+
+
+def test_rejected_acceptance_retains_worker_until_disposal_finishes(runtime):
+    manager, dispatch = runtime
+    disposing, finish_dispose = Event(), Event()
+    resource = object()
+    physical_threads, disposal_threads = [], []
+    def physical():
+        physical_threads.append(get_ident())
+        return resource
+    def accept(value):
+        raise ValueError('cannot adopt resource')
+    def dispose(value):
+        assert value is resource
+        disposal_threads.append(get_ident())
+        disposing.set()
+        assert finish_dispose.wait(5)
+    with ThreadPoolExecutor(1) as executor:
+        future = manager.submit(lambda record: manager.work(
+            record, executor, physical, accept=accept, dispose=dispose))
+        try:
+            with pytest.raises(ValueError, match='cannot adopt resource'):
+                future.result(5)
+            assert disposing.wait(5)
+            following = manager.submit(lambda record: 23)
+            assert following.result(5) == 23
+            wait_for_retirement(manager, following)
+            manager.close()
+            assert not manager.finalized.is_set()
+            assert manager.counts()['ordinary'] == 1
+        finally:
+            finish_dispose.set()
+    assert disposal_threads == physical_threads
+    manager.join(5)
+    assert manager.counts()['ordinary'] == 0
+
+
+@pytest.mark.parametrize('cancelled', [False, True])
+def test_executor_returns_terminal_failure_without_owner_self_wait(
+        runtime, cancelled):
+    from concurrent.futures import CancelledError
+    manager, dispatch = runtime
+    physical = Future()
+    if cancelled:
+        physical.cancel()
+    else:
+        physical.set_exception(ValueError('executor failed before execution'))
+    class FailedExecutor:
+        def submit(self, function):
+            return physical
+    future = manager.submit(lambda record: manager.work(
+        record, FailedExecutor(), lambda: pytest.fail('physical work ran')))
+    with pytest.raises(CancelledError if cancelled else ValueError):
+        future.result(5)
+    assert manager.submit(lambda record: 24).result(5) == 24
+
+
+def test_completed_executor_future_does_not_dispose_on_registering_owner(
+        runtime):
+    manager, dispatch = runtime
+    resource = object()
+    disposal_threads = []
+    completed = Event()
+    with ThreadPoolExecutor(1) as executor:
+        class ClosingExecutor:
+            def submit(self, function):
+                manager.close()
+                physical = executor.submit(function)
+                # Completion precedes callback registration, so Future will
+                # invoke that callback on this owner. Cleanup must already
+                # have happened on the physical worker, exactly once.
+                assert physical.result(5) is resource
+                completed.set()
+                return physical
+        future = manager.submit(lambda record: manager.work(
+            record, ClosingExecutor(), lambda: resource,
+            dispose=lambda value: disposal_threads.append(current_thread())))
+        with pytest.raises(ManagementClosed):
+            future.result(5)
+        # Shutdown publishes the native Future before executor submission has
+        # returned on the owner. Keep the executor open through that handoff.
+        assert completed.wait(5)
+    manager.join(5)
+    assert len(disposal_threads) == 1
+    assert disposal_threads[0] not in manager._threads
+    assert manager.counts()['ordinary'] == 0
+
+
+@pytest.mark.parametrize('installed', [False, True])
+def test_interrupted_physical_callback_registration_releases_once(
+        runtime, installed):
+    manager, dispatch = runtime
+    physical = Future()
+    register = physical.add_done_callback
+    def interrupted(callback):
+        if installed:
+            register(callback)
+        raise KeyboardInterrupt('physical registration interrupted')
+    physical.add_done_callback = interrupted
+    class PendingExecutor:
+        def submit(self, function):
+            return physical
+    future = manager.submit(lambda record: manager.work(
+        record, PendingExecutor(), lambda: pytest.fail('cancelled work ran')))
+    with pytest.raises(KeyboardInterrupt, match='registration interrupted'):
+        future.result(5)
+    second = manager.submit(lambda record: 25)
+    assert second.result(5) == 25
+    assert physical.cancelled()
+    with manager._condition:
+        assert manager._condition.wait_for(
+            lambda: future._record.released and second._record.released, 5)
+        assert future._record.physical == 0
+        assert manager.counts()['ordinary'] == 0
 
 
 @pytest.mark.parametrize('failed_phase', [1, 2, 3, 4, 5])
@@ -766,6 +1087,68 @@ def test_concurrent_producers_have_one_fifo_owner(monkeypatch):
         manager.join(5)
 
 
+@pytest.mark.parametrize('pool', [None, 'logical-pool'])
+def test_result_reserved_before_close_is_still_disposed(runtime, pool):
+    manager, dispatch = runtime
+    worker = Future()
+    class ControlledExecutor:
+        def submit(self, function):
+            return worker
+    started, blocked, release, disposed = Event(), Event(), Event(), Event()
+    disposal_context = []
+    def dispose(value):
+        disposal_context.append((execution_context(), get_ident()))
+        disposed.set()
+    def initial(record):
+        started.set()
+        return manager.work(record, ControlledExecutor(), object,
+                            dispose=dispose)
+    manager.pool_limit = 3
+    future = manager.submit(initial, pool=pool)
+    completion = Thread(target=lambda: worker.set_result(object()),
+                        daemon=True)
+    try:
+        assert started.wait(5)
+        blocker = manager.submit(
+            lambda record: (blocked.set(), release.wait(5)), pool=pool)
+        assert blocked.wait(5)
+        queued = manager.submit(
+            lambda record: pytest.fail('closed ordinary work ran'),
+            pool=pool)
+        # The reserved result sits behind ordinary work.
+        completion.start()
+        with manager._condition:
+            def result_queued():
+                queue = (manager._cluster if pool is None
+                         else manager._pools[pool])
+                return any(item.retain_on_close for item in queue)
+            assert manager._condition.wait_for(result_queued, 5)
+        manager.close()
+        for pending in (future, blocker, queued):
+            with pytest.raises(ManagementClosed):
+                pending.result(5)
+        with manager._condition:
+            queue = manager._cluster if pool is None else manager._pools[pool]
+            assert len(queue) == 1 and queue[0].retain_on_close
+            if pool is not None:
+                assert pool in manager._active_pools
+        assert not disposed.is_set()
+    finally:
+        release.set()
+        if completion.ident is None:
+            manager.close()
+            completion.start()
+        completion.join(5)
+        if completion.is_alive():
+            manager.close()
+            completion.join(5)
+        assert not completion.is_alive()
+    assert disposed.wait(5)
+    assert disposal_context == [('worker', completion.ident)]
+    assert completion.ident not in {
+        thread.ident for thread in manager._threads}
+
+
 def test_synchronous_admission_waits_without_allocating_pending_records(
         runtime, monkeypatch):
     manager, dispatch = runtime
@@ -844,6 +1227,56 @@ def test_pool_mailboxes_share_two_runners_without_concurrent_handlers():
         manager.join(5)
 
 
+def test_worker_close_and_join_guard(runtime):
+    manager, dispatch = runtime
+    contexts, errors = [], []
+    with ThreadPoolExecutor(1) as executor:
+        def physical():
+            contexts.append(execution_context())
+            manager.close()
+            try:
+                manager.join(1)
+            except BaseException as exc:
+                errors.append(exc)
+            return object()
+        future = manager.submit(lambda r: manager.work(r, executor, physical))
+        with pytest.raises(ManagementClosed):
+            future.result(5)
+    manager.join(5)
+    assert contexts == ['worker']
+    assert len(errors) == 1 and isinstance(errors[0], ManagementContextError)
+
+
+def test_one_physical_result_per_current_admitted_record(runtime):
+    manager, dispatch = runtime
+    physical = Future()
+    submissions = []
+    disposed = Event()
+    class Executor:
+        def submit(self, function):
+            submissions.append(function)
+            return physical
+    def handler(record):
+        manager.work(record, Executor(), lambda: None,
+                     dispose=lambda value: disposed.set())
+        # A second work item would create an uncharged result queue node.
+        return manager.work(record, Executor(), lambda: None)
+    future = manager.submit(handler)
+    try:
+        with pytest.raises(ManagementContextError):
+            future.result(5)
+        assert len(submissions) == 1
+    finally:
+        complete_physical(manager, physical, object())
+    assert disposed.wait(5)
+    old = future._record
+    def reuse(record):
+        with pytest.raises(ManagementContextError):
+            manager.work(old, Executor(), lambda: None)
+    manager.submit(reuse).result(5)
+    assert len(submissions) == 1
+
+
 def test_inherited_future_rejects_before_parent_held_condition(runtime):
     import os
     import select
@@ -891,6 +1324,55 @@ def test_inherited_future_rejects_before_parent_held_condition(runtime):
         thread.join(5)
         os.close(read_fd)
         os.waitpid(pid, 0)
+
+
+def test_dispatch_rejection_closes_without_stranding_waiters_or_resources():
+    from cassandra._management import ManagementDeliveryFailed
+    attempts, calls = [], []
+    def reject(callback):
+        attempts.append(callback)
+        raise RuntimeError('reactor rejected callback')
+    (handler_entered, handler_release, worker_started, worker_release,
+     disposed) = [Event() for _ in range(5)]
+    with ThreadPoolExecutor(1) as executor:
+        manager = ManagementRuntime(reject, limit=2)
+        def physical():
+            worker_started.set()
+            assert worker_release.wait(5)
+            return object()
+        try:
+            late = manager.submit(lambda r: manager.work(
+                r, executor, physical, dispose=lambda value: disposed.set()))
+            assert worker_started.wait(5)
+            def handler(record):
+                handler_entered.set()
+                assert handler_release.wait(5)
+                return 4
+            future = manager.submit(handler)
+            assert handler_entered.wait(5)
+            future.add_done_callback(
+                lambda f: calls.append(execution_context()))
+            handler_release.set()
+            assert future.result(5) == 4
+            assert manager.closed.wait(5)
+            assert isinstance(
+                manager.completion_error, ManagementDeliveryFailed)
+            assert isinstance(future._delivery.error, ManagementDeliveryFailed)
+            with pytest.raises(ManagementDeliveryFailed):
+                future.add_done_callback(lambda f: calls.append('late'))
+            with pytest.raises(ManagementClosed):
+                late.result(5)
+            worker_release.set()
+            assert disposed.wait(5)
+        finally:
+            handler_release.set()
+            worker_release.set()
+            manager.close()
+            manager.join(5)
+    assert len(attempts) == 1
+    assert calls == []
+    assert manager._credits == 0
+    assert not manager._records
 
 
 def test_fatal_service_loss_abandons_queued_tickets_without_retaining_results(
@@ -1012,6 +1494,71 @@ def test_notification_admission_after_close_does_not_retain_callback(
     assert not manager._notifications
     with pytest.raises(ManagementClosed):
         future.result(5)
+
+
+@pytest.mark.parametrize('private_first', [False, True])
+@pytest.mark.parametrize('private_budget', ['reentry', 'aggregate'])
+@pytest.mark.parametrize('pool', [None, 'logical-pool'])
+def test_coalesced_waiters_keep_independent_budget_and_delivery_charges(
+        runtime, private_first, private_budget, pool):
+    from contextlib import nullcontext
+    manager, dispatch = runtime
+    physical = Future()
+    work_started, joined, allow_join = Event(), Event(), Event()
+    calls, private = [], []
+    class Executor:
+        def submit(self, function):
+            calls.append(function)
+            work_started.set()
+            return physical
+    def operation(record):
+        return manager.work(record, Executor(), lambda: 23)
+    def listener():
+        assert allow_join.wait(5)
+        scope = (manager.synchronous_reentry() if private_budget == 'reentry'
+                 else nullcontext('aggregate'))
+        with scope as budget:
+            future = manager.submit(operation, key='shared-budget',
+                                    budget=budget, pool=pool)
+            private.append(future)
+            with pytest.raises(ManagementContextError):
+                future.add_done_callback(lambda f: None)
+            joined.set()
+            assert future.result(5) == 23
+    try:
+        if not private_first:
+            ordinary = manager.submit(
+                operation, key='shared-budget', pool=pool)
+            assert work_started.wait(5)
+        notification = manager.notify(listener)
+        allow_join.set()
+        assert joined.wait(5)
+        if private_first:
+            assert work_started.wait(5)
+            ordinary = manager.submit(
+                operation, key='shared-budget', pool=pool)
+        assert private[0]._record is ordinary._record
+        ordinary.add_done_callback(lambda f: None)
+        complete_physical(manager, physical, 23)
+        assert ordinary.result(5) == 23
+        notification.result(5)
+        with manager._condition:
+            assert manager._condition.wait_for(
+                lambda: manager._credits == 1, 5)
+            assert manager._reentry_credits == 0
+        assert not manager._reentry_active
+        if pool is not None:
+            assert manager._pool_credits[pool] == 1
+        assert len(calls) == 1
+        assert len(dispatch.queue) == 1
+        dispatch.drain()
+        wait_for_retirement(manager, ordinary)
+        assert manager.counts()['ordinary'] == manager.counts()['reentry'] == 0
+        assert not manager._pool_credits
+    finally:
+        allow_join.set()
+        if not physical.done():
+            complete_physical(manager, physical, 23)
 
 
 def test_foreign_callback_uses_ordinary_admission(runtime):
