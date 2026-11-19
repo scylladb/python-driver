@@ -29,14 +29,11 @@ from collections import deque
 from concurrent.futures import Future, TimeoutError
 from contextlib import contextmanager
 from dataclasses import dataclass
-from functools import wraps
+from functools import partial, wraps
 from itertools import chain
 import logging
 import os
-from threading import (
-    Condition, Event, Lock, Thread, current_thread,
-    enumerate as active_threads,
-    local)
+from threading import Condition, Event, Lock, Thread, current_thread, local
 import time
 from typing import NamedTuple
 
@@ -398,6 +395,28 @@ class _DeliveryTicket:
             return True
 
 
+class _ThreadStart:
+    """Revoke an unentered target without guessing whether native launch ran."""
+
+    def __init__(self, callback):
+        self._lock = Lock()
+        self._callback = callback
+        self._entered = False
+
+    def __call__(self):
+        with self._lock:
+            callback, self._callback = self._callback, None
+            self._entered = callback is not None
+        if callback is not None:
+            callback()
+
+    def revoke(self):
+        """Return whether target entry already won the handoff."""
+        with self._lock:
+            self._callback = None
+            return self._entered
+
+
 class _Record:
     def __init__(self, runtime, envelope, handler, pool, key):
         self.runtime, self.envelope, self.handler = runtime, envelope, handler
@@ -645,15 +664,17 @@ class ManagementRuntime:
                        ('callback', self._run_notifications)]
             try:
                 for kind, target in targets:
-                    thread = Thread(target=self._run, args=(kind, target),
+                    entry = _ThreadStart(partial(self._run, kind, target))
+                    thread = Thread(target=entry,
                                     name='cassandra-management-' + kind,
                                     daemon=True)
                     try:
                         thread.start()
                     except BaseException:
-                        # A start interrupted after native launch still owns a
-                        # runner, even before bootstrap publishes its ident.
-                        if thread in active_threads():
+                        # Only an entered target owns runtime resources. A
+                        # late bootstrap sees the revoked entry and exits
+                        # without retaining or touching this runtime.
+                        if entry.revoke():
                             self._threads.append(thread)
                         raise
                     self._threads.append(thread)

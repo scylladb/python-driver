@@ -870,13 +870,18 @@ def test_delivery_failure_reentering_close_waits_for_lifetime_retirement():
 
 
 @pytest.mark.parametrize('bootstrap_pending', [False, True])
-def test_start_interruption_after_launch_tracks_the_runner(
+def test_start_interruption_retires_entered_or_revokes_unentered_runner(
         monkeypatch, bootstrap_pending):
     manager = ManagementRuntime(Dispatcher())
-    launched, release = Event(), Event()
+    launched, entered, release = Event(), Event(), Event()
     threads = []
     real_start = Thread.start
     real_bootstrap = Thread._bootstrap_inner
+    real_run = manager._run
+    def run(kind, target):
+        entered.set()
+        real_run(kind, target)
+    manager._run = run
     def bootstrap(thread):
         if bootstrap_pending:
             launched.set()
@@ -886,6 +891,7 @@ def test_start_interruption_after_launch_tracks_the_runner(
         threads.append(thread)
         if not bootstrap_pending:
             real_start(thread)
+            assert entered.wait(5)
             raise KeyboardInterrupt('interrupted after launch')
         original_wait = thread._started.wait
         def interrupted_wait(*args, **kwargs):
@@ -905,8 +911,14 @@ def test_start_interruption_after_launch_tracks_the_runner(
                 manager.start()
             manager.close()
             if bootstrap_pending:
-                assert not manager.finalized.is_set()
-            assert manager._threads == threads
+                # The native runner cannot touch the runtime after revocation,
+                # even if its bootstrap has not published an ident yet.
+                manager.join(5)
+                assert not manager._threads
+                assert manager.finalized.is_set()
+                assert not entered.is_set()
+            else:
+                assert manager._threads == threads
     finally:
         release.set()
         for thread in threads:
@@ -915,7 +927,54 @@ def test_start_interruption_after_launch_tracks_the_runner(
             assert not thread.is_alive()
         manager.close()
         manager.join(5)
-    assert manager._exited == len(threads) == 1
+    assert manager._exited == (0 if bootstrap_pending else 1)
+    assert entered.is_set() is (not bootstrap_pending)
+
+
+@pytest.mark.parametrize('failed_phase', [1, 2, 3, 4])
+def test_start_interruption_before_native_launch_retires_limbo_entry(
+        monkeypatch, failed_phase):
+    import threading
+
+    primitive = ('_start_joinable_thread'
+                 if hasattr(threading, '_start_joinable_thread')
+                 else '_start_new_thread')
+    if not hasattr(threading, primitive):
+        pytest.skip('threading native launch primitive is unavailable')
+    real_launch = getattr(threading, primitive)
+    attempts, abandoned = [], []
+    manager = ManagementRuntime(Dispatcher())
+    handle = manager.register_lifetime()
+    def launch(target, *args, **kwargs):
+        attempts.append(target)
+        if len(attempts) == failed_phase:
+            abandoned.append(target.__self__)
+            raise KeyboardInterrupt('interrupted before native launch')
+        return real_launch(target, *args, **kwargs)
+    try:
+        with monkeypatch.context() as patcher:
+            patcher.setattr(threading, primitive, launch)
+            with pytest.raises(KeyboardInterrupt):
+                manager.start()
+        assert len(abandoned) == 1
+        thread = abandoned[0]
+        assert thread.ident is None
+        manager.join(5)
+        assert manager.closed.is_set() and handle.closed.is_set()
+        assert manager.finalized.is_set()
+        assert thread not in manager._threads
+        assert thread._target._callback is None
+        # Running an abandoned target later cannot enter the retired runtime.
+        thread._target()
+        assert manager._exited == len(manager._threads)
+    finally:
+        # CPython can retain its own unlaunched Thread in _limbo after a
+        # BaseException. The driver must not wait for or retain that entry.
+        with threading._active_limbo_lock:
+            for thread in abandoned:
+                threading._limbo.pop(thread, None)
+        manager.close()
+        manager.join(5)
 
 
 def test_post_terminal_owner_callbacks_use_current_charged_batch(runtime):
