@@ -65,6 +65,13 @@ Bug Fixes
   is still delayed does not stop the send, and a callback that runs after
   admission but before the bytes are written times the request out while the
   request may still be sent (#603).
+* Completed requests no longer stay in a reference cycle with their canceled
+  timeout timer, which only Python's cyclic garbage collector could free.
+  Since 3.29.13, ``execute_concurrent()`` gives its requests such a timer
+  when a request timeout is set, as it is by default, so writing many rows
+  could leave millions of objects behind, and the full collection that freed
+  them could pause the whole process for many seconds and make requests in
+  flight fail with ``OperationTimedOut`` (#1296).
 
 3.29.13
 ========

@@ -13,6 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import gc
+import platform
+import weakref
 from unittest.mock import Mock
 
 import pytest
@@ -114,3 +117,67 @@ def test_timer_manager_expiration_and_order(monkeypatch, timeouts):
     assert completed == [0, 1, 2]
     manager.service_timeouts()
     assert completed == [0, 1, 2]
+
+
+@pytest.mark.skipif(
+    platform.python_implementation() != 'CPython',
+    reason='needs reference counting to free the owner when it is deleted')
+def test_canceled_timer_does_not_keep_its_owner_alive():
+    # A ResponseFuture's timeout timer calls back one of the future's own
+    # methods, and the future cancels the timer when the request completes.
+    # Check that the canceled timer doesn't leave the owner in a reference
+    # cycle: such cycles are freed only by the cyclic garbage collector, and
+    # a long run of requests piled up so many of them that a single full
+    # collection paused all the driver's threads for seconds.
+    class Owner:
+        def __init__(self):
+            self.timer = Timer(10, self.on_timeout)
+
+        def on_timeout(self):
+            pass
+
+    owner = Owner()
+    owner.timer.cancel()
+    ref = weakref.ref(owner)
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        del owner
+        # Check that reference counting alone freed the owner.
+        assert ref() is None
+    finally:
+        if gc_was_enabled:
+            gc.enable()
+
+
+def test_timer_canceled_while_finishing_does_not_fail():
+    # cancel() may run on another thread between finish()'s check of
+    # canceled and its call of the callback. Check that finish() then
+    # neither fails nor calls the callback.
+    callback = Mock()
+    timer = Timer(0, callback)
+    timer.callback = None
+    assert timer.finish(timer.end)
+    callback.assert_not_called()
+
+
+def test_timer_canceled_after_finish_read_callback_does_not_fail():
+    # cancel() may also clear the callback right after finish() read it.
+    # Check that finish() then calls the callback it read, instead of
+    # reading the attribute again and calling None.
+    class RacingTimer(Timer):
+        @property
+        def callback(self):
+            callback = self._callback
+            # Model a concurrent cancel() right after this read.
+            self._callback = None
+            return callback
+
+        @callback.setter
+        def callback(self, callback):
+            self._callback = callback
+
+    callback = Mock()
+    timer = RacingTimer(0, callback)
+    assert timer.finish(timer.end)
+    callback.assert_called_once_with()
