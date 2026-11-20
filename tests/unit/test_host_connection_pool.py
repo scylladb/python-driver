@@ -1176,6 +1176,96 @@ def test_ordinary_add_recovers_ignored_slot(
         cluster._lifecycle.submit = submit
 
 
+@pytest.mark.parametrize('cleanup_result',
+                         ('success', 'exception', 'cancelled'))
+@pytest.mark.parametrize(
+    'first_direct,next_direct,scheduling_gap,cancel_proxy',
+    ((False, False, False, False),
+     (False, False, True, False),
+     (False, False, False, True),
+     (True, False, False, False),
+     (False, True, False, False),
+     (True, True, True, False)))
+def test_ignored_add_waits_for_cleanup_across_intent_transfers(
+        ordinary_add_recovery, cleanup_result, first_direct, next_direct,
+        scheduling_gap, cancel_proxy):
+    (host, session, failed, healthy, scheduled, work, listener, peer,
+     peer_ready) = ordinary_add_recovery
+    cluster = session.cluster
+    peer.update_created_pools = Mock(return_value=set())
+    peer_ready.set_result(True)
+    cluster.on_add(host, refresh_nodes=False)
+    _finish_pool_recovery_work(work)
+    cluster.connection_factory.return_value.is_closed = False
+    scheduled.pop(0)[1]()
+    shutdown = session._shutdown_detached_pool
+    successors = []
+    detached = None
+
+    def reconcile(direct):
+        if direct:
+            session.add_or_renew_pool(host, False)
+        else:
+            session.update_created_pools(hosts=(host,))
+        return session._pool_intents[host].new_completion_waiter()
+
+    def repeat_noop():
+        for _ in range(3):
+            successors.append(reconcile(next_direct))
+
+    def schedule_with_noops(pool, **kwargs):
+        repeat_noop()
+        return shutdown(pool, **kwargs)
+
+    if scheduling_gap:
+        session._shutdown_detached_pool = schedule_with_noops
+    try:
+        with cluster._lifecycle.transaction(drain=False):
+            _finish_pool_recovery_work(work)
+            detached = session._pools[host]
+            session._profile_manager.distance.return_value = (
+                HostDistance.IGNORED)
+            first = reconcile(first_direct)
+            if cancel_proxy:
+                assert session._pool_intents[host].completion.cancel()
+        cluster._lifecycle.drain()
+        listener.on_add.assert_not_called()
+        if not scheduling_gap:
+            repeat_noop()
+        assert host not in session._pools
+        assert host._pending_host_addition
+        assert len(work) == 1
+        assert not first.done()
+        assert all(not future.done() for future in successors)
+        listener.on_add.assert_not_called()
+
+        if cleanup_result == 'success':
+            _finish_pool_recovery_work(work)
+            assert first.result(0) is True
+            assert all(future.result(0) is True for future in successors)
+            assert detached.is_shutdown
+            listener.on_add.assert_called_once_with(host)
+        elif cleanup_result == 'exception':
+            error = RuntimeError('detached pool cleanup failed')
+            work.pop(0)[3].set_exception(error)
+            assert first.exception(0) is error
+            assert all(future.exception(0) is error for future in successors)
+            listener.on_add.assert_not_called()
+        else:
+            assert work.pop(0)[3].cancel()
+            assert first.cancelled()
+            assert all(future.cancelled() for future in successors)
+            listener.on_add.assert_not_called()
+
+        # A later no-op must not inherit a completed cleanup failure.
+        later = reconcile(next_direct)
+        assert later.result(0) is True
+        assert not work
+        listener.on_add.assert_called_once_with(host)
+    finally:
+        session._shutdown_detached_pool = shutdown
+        if detached is not None:
+            detached.shutdown()
 
 
 @pytest.mark.parametrize('cleanup_result',
@@ -3369,6 +3459,46 @@ def test_failure_waiting_for_membership_does_not_hold_session(socket_pool):
         assert not worker.is_alive()
     assert not errors
     pool.shutdown()
+
+
+@pytest.mark.parametrize('outcome', ['exception', 'cancelled'])
+def test_ignored_cleanup_outcome_survives_delivery_gap(
+        fresh_pool_recovery, outcome):
+    host, session, failed, healthy, scheduled, work = fresh_pool_recovery
+    with session._lock, host.lock:
+        first = session._claim_pool_intent_locked(host)
+        first.distance = HostDistance.IGNORED
+        cleanup, owner = first.reserve_ignored_cleanup()
+    first.complete_result(True)
+    settle = type(cleanup)._settle
+    held = []
+    error = RuntimeError('cleanup failed before forwarding')
+    done = Future()
+    if outcome == 'exception':
+        done.set_exception(error)
+    else:
+        done.cancel()
+    with patch.object(type(cleanup), '_settle',
+                      side_effect=lambda *args: held.append(args)):
+        cleanup.complete_from_work(owner, done)
+    assert len(held) == 1
+    assert not first.completion.done()
+    with session._lock, host.lock:
+        successor = session._claim_pool_intent_locked(host)
+        successor.distance = HostDistance.IGNORED
+    successor.complete_result(True)
+    settle(*held.pop())
+    if outcome == 'exception':
+        assert first.completion.exception(0) is error
+        assert successor.completion.exception(0) is error
+    else:
+        assert first.completion.cancelled()
+        assert successor.completion.cancelled()
+    with session._lock, host.lock:
+        later = session._claim_pool_intent_locked(host)
+        later.distance = HostDistance.IGNORED
+    later.complete_result(True)
+    assert later.completion.result(0) is True
 
 
 def test_rejected_recovered_readiness_does_not_reset_conviction(

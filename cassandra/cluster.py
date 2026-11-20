@@ -186,6 +186,10 @@ class _PoolIntentCompletion(object):
         with self._lock:
             return not self._done and self._owner is owner
 
+    def is_pending(self):
+        with self._lock:
+            return not self._done
+
     def new_waiter(self):
         with self._lock:
             completion = Future()
@@ -280,13 +284,15 @@ class _PoolIntent(object):
     """
     __slots__ = ('host', 'pool_lifecycle_token', 'distance',
                  'completion', '_completion', '_completion_owner',
-                 '_creation_generation', '_creation_pool', 'on_pool_recovered')
+                 '_creation_generation', '_creation_pool', 'on_pool_recovered',
+                 '_ignored_cleanup')
 
     def __init__(self, host, pool_lifecycle_token, completion=None,
-                 on_pool_recovered=None):
+                 on_pool_recovered=None, ignored_cleanup=None):
         self.host = host
         self.pool_lifecycle_token = pool_lifecycle_token
         self.on_pool_recovered = on_pool_recovered
+        self._ignored_cleanup = ignored_cleanup
         self.distance = _NOT_SET
         self._creation_generation = _NOT_SET
         self._creation_pool = _NOT_SET
@@ -295,6 +301,9 @@ class _PoolIntent(object):
             completion = _PoolIntentCompletion()
         completion_future = completion.claim(self._completion_owner)
         if completion_future is None:
+            if (ignored_cleanup is not None and
+                    not ignored_cleanup.is_pending()):
+                self._ignored_cleanup = None
             completion = _PoolIntentCompletion()
             completion_future = completion.claim(self._completion_owner)
         self._completion = completion
@@ -319,8 +328,22 @@ class _PoolIntent(object):
                 self._completion.is_owner_pending(
                     self._completion_owner))
 
+    def reserve_ignored_cleanup(self):
+        # Reserve under Session/Host guards before submitting detached work.
+        # Its fixed owner survives transfers of the current intent completion.
+        cleanup = _PoolIntentCompletion()
+        owner = object()
+        cleanup.claim(owner)
+        self._ignored_cleanup = cleanup
+        return cleanup, owner
+
     def complete_result(self, result):
-        self._completion.complete_result(self._completion_owner, result)
+        if (result is True and self.distance == HostDistance.IGNORED and
+                self._ignored_cleanup is not None):
+            self._ignored_cleanup.new_waiter().add_done_callback(
+                self.complete_success_from_work)
+        else:
+            self._completion.complete_result(self._completion_owner, result)
 
     def complete_exception(self, exception):
         self._completion.complete_exception(
@@ -4420,9 +4443,12 @@ class Session(object):
         on_pool_recovered = (
             current_intent.on_pool_recovered
             if same_host and host._pending_host_addition else None)
+        ignored_cleanup = (
+            current_intent._ignored_cleanup if same_host else None)
         intent = _PoolIntent(
             host, pool_lifecycle_token, completion=completion,
-            on_pool_recovered=on_pool_recovered)
+            on_pool_recovered=on_pool_recovered,
+            ignored_cleanup=ignored_cleanup)
         pool_intents[host] = intent
         return intent
 
@@ -4585,6 +4611,9 @@ class Session(object):
                                     self._pool_generations.pop(host, None)
                                     pool_to_shutdown = \
                                         self._pools.pop(host, None)
+                                    if pool_to_shutdown is not None:
+                                        cleanup, cleanup_owner = \
+                                            intent.reserve_ignored_cleanup()
                                 terminal_result = True
                                 return_none = True
                             elif newer_pool_is_live:
@@ -4631,6 +4660,7 @@ class Session(object):
                 cleanup_failure = Future()
 
                 def complete_shutdown_error(exc):
+                    cleanup.complete_exception(cleanup_owner, exc)
                     intent.complete_exception(exc)
                     cleanup_failure.set_exception(exc)
                     return cleanup_failure
@@ -4640,10 +4670,19 @@ class Session(object):
                         pool_to_shutdown,
                         on_shutdown_error=complete_shutdown_error)
                 except Exception as exc:
+                    cleanup.complete_exception(cleanup_owner, exc)
                     intent.complete_exception(exc)
                     raise
                 if shutdown_future is cleanup_failure:
                     return shutdown_future
+                add_done_callback = getattr(
+                    shutdown_future, 'add_done_callback', None)
+                if callable(add_done_callback):
+                    add_done_callback(partial(
+                        cleanup.complete_from_work, cleanup_owner,
+                        successful_result=True))
+                else:
+                    cleanup.complete_result(cleanup_owner, True)
             if terminal_result is not _NOT_SET:
                 intent.complete_result(terminal_result)
             if return_live_success:
@@ -4859,7 +4898,7 @@ class Session(object):
         return attempt.intent.completion
 
     def _observe_pool_creation_for_add(self, host, intent):
-        """Complete the original ADD slot after its current owner publishes."""
+        """Complete the original ADD slot after its current work succeeds."""
         session_ref = weakref.ref(self)
         lifecycle = self.cluster._lifecycle
         pool_lifecycle_token = intent.pool_lifecycle_token
@@ -5247,6 +5286,9 @@ class Session(object):
                                 pool_to_shutdown = self._pools.pop(host, None)
                                 if pool_to_shutdown is None:
                                     terminal_result = True
+                                else:
+                                    cleanup, cleanup_owner = \
+                                        intent.reserve_ignored_cleanup()
                             elif pool is not None and not pool.is_shutdown:
                                 pool.host_distance = distance
                                 terminal_result = True
@@ -5260,6 +5302,9 @@ class Session(object):
 
             if terminal_result is not _NOT_SET:
                 intent.complete_result(terminal_result)
+                if (distance == HostDistance.IGNORED and
+                        intent._ignored_cleanup is not None):
+                    future = intent.completion
             if superseding_intent is not None:
                 superseding_completion = \
                     superseding_intent.new_completion_waiter()
@@ -5272,6 +5317,7 @@ class Session(object):
                     work_future = self._shutdown_detached_pool(
                         pool_to_shutdown)
                 except Exception as exc:
+                    cleanup.complete_exception(cleanup_owner, exc)
                     intent.complete_exception(exc)
                     log.exception(
                         "Error scheduling or running ignored-pool shutdown "
@@ -5280,18 +5326,17 @@ class Session(object):
                     cleanup_failure.set_exception(exc)
                     futures.add(cleanup_failure)
                     continue
-                if work_future is None:
-                    intent.complete_result(True)
-                    future = None
+                add_done_callback = getattr(
+                    work_future, 'add_done_callback', None)
+                if callable(add_done_callback):
+                    add_done_callback(partial(
+                        cleanup.complete_from_work, cleanup_owner,
+                        successful_result=True))
+                    future = intent.completion
                 else:
-                    add_done_callback = getattr(
-                        work_future, 'add_done_callback', None)
-                    if not callable(add_done_callback):
-                        intent.complete_result(True)
-                        future = work_future
-                    else:
-                        add_done_callback(intent.complete_success_from_work)
-                        future = intent.completion
+                    cleanup.complete_result(cleanup_owner, True)
+                    future = work_future
+                intent.complete_result(True)
             elif (distance != HostDistance.IGNORED and
                   expected_state is not None and
                   (expected_state[1] is None or
