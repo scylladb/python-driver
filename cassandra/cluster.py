@@ -81,7 +81,8 @@ from cassandra.protocol import (QueryMessage, ResultMessage,
 from cassandra.metadata import Metadata, Token, protect_name, murmur3, _NodeInfo
 from cassandra.policies import (TokenAwarePolicy, DCAwareRoundRobinPolicy, SimpleConvictionPolicy,
                                 ExponentialReconnectionPolicy, HostDistance,
-                                RetryPolicy, IdentityTranslator, NoSpeculativeExecutionPlan,
+                                RetryPolicy, FallthroughRetryPolicy, IdentityTranslator,
+                                NoSpeculativeExecutionPlan,
                                 NoSpeculativeExecutionPolicy)
 from cassandra.pool import (Host, _ReconnectionHandler, _HostReconnectionHandler,
                             HostConnection,
@@ -5547,6 +5548,7 @@ class ControlConnection(object):
         # shutdown) since implementing __del__ disables the cycle detector
         self._cluster = weakref.proxy(cluster)
         self._connection = None
+        self._schema_agreement_host = None
         self._pending_client_routes_refreshes = {}
         self._timeout = timeout
 
@@ -5658,6 +5660,7 @@ class ControlConnection(object):
                 else:
                     old, orphan = self._connection, None
                     self._connection = conn
+                    self._schema_agreement_host = self._get_host_for_connection(conn)
                     self._reconnection_exhausted_connection = None
                     self._connection_generation += 1
                     pending_routes = tuple(
@@ -6815,15 +6818,21 @@ class ControlConnection(object):
             if self._is_shutdown:
                 return
 
-            if not connection:
-                connection = self._connection
+            with self._lock:
+                if not connection:
+                    connection = self._connection
+                host = self._schema_agreement_host if connection is self._connection else None
+            if host is None:
+                host = self._get_host_for_connection(connection)
+            local_endpoint = connection.endpoint if connection is not None else (
+                host.endpoint if host is not None else None)
 
             if preloaded_results:
                 log.debug("[control connection] Attempting to use preloaded results for schema agreement")
 
                 peers_result = preloaded_results[0]
                 local_result = preloaded_results[1]
-                schema_mismatches = self._get_schema_mismatches(peers_result, local_result, connection.endpoint)
+                schema_mismatches = self._get_schema_mismatches(peers_result, local_result, local_endpoint)
                 if schema_mismatches is None:
                     return True
 
@@ -6832,7 +6841,8 @@ class ControlConnection(object):
             elapsed = 0
             cl = ConsistencyLevel.ONE
             schema_mismatches = None
-            select_peers_query = self._get_peers_query(self.PeersQueryType.PEERS_SCHEMA, connection)
+            select_peers_query = self._get_peers_query(
+                self.PeersQueryType.PEERS_SCHEMA, connection, host=host)
 
             while elapsed < total_timeout:
                 peers_query = QueryMessage(query=maybe_add_timeout_to_query(select_peers_query, self._metadata_request_timeout),
@@ -6842,21 +6852,33 @@ class ControlConnection(object):
                 try:
                     remaining = total_timeout - elapsed
                     timeout = min(self._timeout, remaining) if self._timeout is not None else remaining
-                    peers_result, local_result = connection.wait_for_responses(
-                        peers_query, local_query, timeout=timeout)
+                    results = None
+                    if connection is not None and not (connection.is_closed or connection.is_defunct):
+                        try:
+                            results = connection.wait_for_responses(
+                                peers_query, local_query, timeout=timeout)
+                        except (ConnectionException, ConnectionBusy):
+                            if self._is_shutdown:
+                                return None
+                    if results is None:
+                        results = self._schema_agreement_from_session(
+                            host, (peers_query, local_query), start + total_timeout)
+                    if results is None:
+                        if self._is_shutdown:
+                            return None
+                        log.warning("[control connection] No usable connection for schema agreement on %s",
+                                    local_endpoint)
+                        return False
+                    peers_result, local_result = results
+                    if self._is_shutdown:
+                        return None
                 except OperationTimedOut as timeout:
                     log.debug("[control connection] Timed out waiting for "
                               "response during schema agreement check: %s", timeout)
                     elapsed = self._time.time() - start
                     continue
-                except ConnectionShutdown:
-                    if self._is_shutdown:
-                        log.debug("[control connection] Aborting wait for schema match due to shutdown")
-                        return None
-                    else:
-                        raise
 
-                schema_mismatches = self._get_schema_mismatches(peers_result, local_result, connection.endpoint)
+                schema_mismatches = self._get_schema_mismatches(peers_result, local_result, local_endpoint)
                 if schema_mismatches is None:
                     return True
 
@@ -6865,8 +6887,51 @@ class ControlConnection(object):
                 elapsed = self._time.time() - start
 
             log.warning("Node %s is reporting a schema disagreement: %s",
-                        connection.endpoint, schema_mismatches)
+                        local_endpoint, schema_mismatches)
             return False
+
+    @staticmethod
+    def _schema_agreement_rows(column_names, rows):
+        # Retain the wire rows independently of the application's row factory.
+        result = ResultMessage(kind=RESULT_KIND_ROWS)
+        result.column_names = column_names
+        result.parsed_rows = rows
+        return [result]
+
+    def _schema_agreement_from_session(self, host, queries, deadline):
+        if (host is None or host.is_up is False or
+                self._cluster.metadata.get_host_by_host_id(host.host_id) is not host):
+            return None
+        for session in list(self._cluster.sessions):
+            pool = session._pools.get(host)
+            if session.is_shutdown or pool is None or pool.is_shutdown:
+                continue
+            results = []
+            for query in queries:
+                if self._is_shutdown:
+                    return None
+                remaining = deadline - self._time.time()
+                if remaining <= 0:
+                    return None
+                timeout = min(self._timeout, remaining) if self._timeout is not None else remaining
+                future = ResponseFuture(
+                    session, query, None, timeout, host=host,
+                    retry_policy=FallthroughRetryPolicy(),
+                    row_factory=self._schema_agreement_rows,
+                    borrow_timeout=timeout)
+                # Use the exact Host generation, rather than send_request(),
+                # which resolves a public host target to its newest route.
+                if future._query(host) is None:
+                    future._cancel_timer()
+                    break
+                try:
+                    results.append(future.result().one())
+                except (DriverException, ConnectionException, ConnectionBusy,
+                        NoConnectionsAvailable):
+                    break
+            if len(results) == len(queries):
+                return results
+        return None
 
     def _get_schema_mismatches(self, peers_result, local_result, local_address):
         peers_result = dict_factory(peers_result.column_names, peers_result.parsed_rows)
@@ -6950,7 +7015,7 @@ class ControlConnection(object):
             columns += ", tokens"
         return "SELECT {0} FROM system.local WHERE key='local'".format(columns)
 
-    def _get_peers_query(self, peers_query_type, connection=None):
+    def _get_peers_query(self, peers_query_type, connection=None, host=None):
         """
         Determine the peers query to use.
 
@@ -6980,7 +7045,7 @@ class ControlConnection(object):
                 query_template = (self._SELECT_SCHEMA_PEERS_TEMPLATE
                                   if peers_query_type == self.PeersQueryType.PEERS_SCHEMA
                                   else self._SELECT_PEERS_NO_TOKENS_TEMPLATE)
-                connection_host = self._get_host_for_connection(
+                connection_host = host if host is not None else self._get_host_for_connection(
                     connection)
                 host_release_version = None if connection_host is None else connection_host.release_version
                 host_dse_version = None if connection_host is None else connection_host.dse_version
@@ -7326,7 +7391,7 @@ class ResponseFuture(object):
     def __init__(self, session, message, query, timeout, metrics=None, prepared_statement=None,
                  retry_policy=RetryPolicy(), row_factory=None, load_balancer=None, start_time=None,
                  speculative_execution_plan=None, continuous_paging_state=None, host=None,
-                 bound_result_metadata=_NOT_SET, routing_token=None):
+                 bound_result_metadata=_NOT_SET, routing_token=None, borrow_timeout=None):
         self.session = session
         # TODO: normalize handling of retry policy and row factory
         self.row_factory = row_factory or session.row_factory
@@ -7335,6 +7400,7 @@ class ResponseFuture(object):
         self.query = query
         self.timeout = timeout
         self._retry_policy = retry_policy
+        self._borrow_timeout = borrow_timeout
         self._metrics = metrics
         self.prepared_statement = prepared_statement
         # Metadata snapshotted alongside the message's result_metadata_id at construction
@@ -8096,6 +8162,15 @@ class ResponseFuture(object):
         replace_failed_connection = False
         send_error = None
         try:
+            borrow_timeout = 2.0
+            if self._borrow_timeout is not None:
+                borrow_timeout = min(borrow_timeout, self._borrow_timeout)
+                remaining = self._time_remaining
+                if remaining is not None:
+                    if remaining <= 0:
+                        self._errors[host] = OperationTimedOut("Request expired before pool acquisition")
+                        return None
+                    borrow_timeout = min(borrow_timeout, remaining)
             # TODO get connectTimeout from cluster settings
             borrow_options = {'allow_keyspace_mismatch': True} \
                 if self._is_keyspace_change_query(message) else {}
@@ -8103,12 +8178,12 @@ class ResponseFuture(object):
                 # Pass the ring token computed once for this request so the pool
                 # can select the shard without re-hashing the routing key.
                 connection, request_id = pool.borrow_connection(
-                    timeout=2.0, routing_key=self.query.routing_key,
+                    timeout=borrow_timeout, routing_key=self.query.routing_key,
                     keyspace=self.query.keyspace, table=self.query.table,
                     routing_token=self._routing_token, **borrow_options)
             else:
                 connection, request_id = pool.borrow_connection(
-                    timeout=2.0, **borrow_options)
+                    timeout=borrow_timeout, **borrow_options)
             # Check the metadata owner at final admission under the host lock.
             # This prevents terminal retirement until send begins. Metadata
             # publication uses its own lock and may follow admission.
