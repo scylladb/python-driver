@@ -476,6 +476,139 @@ class DropTableMetadataTest(unittest.TestCase):
         assert self.metadata._tablets.table_has_tablets("unknown", "tb") is False
 
 
+class AddTableMetadataTest(unittest.TestCase):
+    """KeyspaceMetadata._add_table_metadata keeps tables, indexes and views consistent."""
+
+    def setUp(self):
+        self.ks = KeyspaceMetadata("ks", True, "NetworkTopologyStrategy", {"dc1": "1"})
+
+    @staticmethod
+    def _table(name, *index_names):
+        t = TableMetadata("ks", name)
+        for i in index_names:
+            t.indexes[i] = IndexMetadata("ks", name, i, "COMPOSITES", {})
+        return t
+
+    def test_first_add(self):
+        t = self._table("t", "i1", "i2")
+        self.ks._add_table_metadata(t)
+        assert self.ks.tables == {"t": t}
+        assert self.ks.indexes == t.indexes
+        assert t.views == {}
+
+    def test_first_add_without_indexes(self):
+        t = self._table("t")
+        self.ks._add_table_metadata(t)
+        assert self.ks.tables == {"t": t}
+        assert self.ks.indexes == {}
+
+    def test_replace_with_changed_indexes(self):
+        self.ks._add_table_metadata(self._table("t", "i1"))
+        new = self._table("t", "i1", "i2")
+        self.ks._add_table_metadata(new)
+        assert self.ks.tables["t"] is new
+        assert self.ks.indexes == new.indexes
+        assert self.ks.indexes["i1"] is new.indexes["i1"]
+
+    def test_replace_with_removed_indexes(self):
+        other = self._table("other", "o1")
+        self.ks._add_table_metadata(other)
+        self.ks._add_table_metadata(self._table("t", "i1", "i2"))
+        new = self._table("t", "i2")
+        self.ks._add_table_metadata(new)
+        assert set(self.ks.indexes) == {"o1", "i2"}
+        assert self.ks.indexes["i2"] is new.indexes["i2"]
+        assert self.ks.indexes["o1"] is other.indexes["o1"]
+
+    def test_replace_dropping_all_indexes(self):
+        self.ks._add_table_metadata(self._table("t", "i1"))
+        self.ks._add_table_metadata(self._table("t"))
+        assert self.ks.indexes == {}
+
+    def test_replace_carries_views_over(self):
+        old = self._table("t")
+        self.ks._add_table_metadata(old)
+        view = Mock(base_table_name="t")
+        view.name = "v"
+        self.ks._add_view_metadata(view)
+        new = self._table("t")
+        self.ks._add_table_metadata(new)
+        assert new.views == {"v": view}
+        assert self.ks.views == {"v": view}
+
+    def test_write_reaches_maps_swapped_in_by_keyspace_refresh(self):
+        # If the maps are reassigned mid-call, the table and index writes must
+        # land in the current maps, not stale ones.
+        ks = self.ks
+        live_tables, live_indexes = {}, {}
+
+        class SwappingTables(dict):
+            def get(self, *args):
+                ks.tables, ks.indexes = live_tables, live_indexes
+                return dict.get(self, *args)
+
+        ks.tables = SwappingTables()
+        t = self._table("t", "i1")
+        ks._add_table_metadata(t)
+        assert live_tables == {"t": t}
+        assert live_indexes == t.indexes
+
+    def test_stale_index_removal_reaches_swapped_maps(self):
+        ks = self.ks
+        old = self._table("t", "i1", "i2")
+        ks._add_table_metadata(old)
+        live_tables, live_indexes = {"t": old}, dict(ks.indexes)
+
+        class SwappingTables(dict):
+            def get(self, *args):
+                ks.tables, ks.indexes = live_tables, live_indexes
+                return dict.get(self, *args)
+
+        ks.tables = SwappingTables(ks.tables)
+        new = self._table("t", "i2")
+        ks._add_table_metadata(new)
+        assert live_tables == {"t": new}
+        assert live_indexes == new.indexes
+
+    def test_index_name_moved_to_another_table_survives_refresh(self):
+        # DROP INDEX i1; CREATE INDEX i1 ON b; b is refreshed before a.
+        self.ks._add_table_metadata(self._table("a", "i1"))
+        b = self._table("b", "i1")
+        self.ks._add_table_metadata(b)
+        self.ks._add_table_metadata(self._table("a"))
+        assert self.ks.indexes == b.indexes
+
+    def test_index_name_moved_to_another_table_survives_drop(self):
+        self.ks._add_table_metadata(self._table("a", "i1"))
+        b = self._table("b", "i1")
+        self.ks._add_table_metadata(b)
+        self.ks._drop_table_metadata("a")
+        assert self.ks.indexes == b.indexes
+
+    def test_overlapping_refreshes_of_one_table_drop_its_index(self):
+        # Two unsynchronized refreshes of "a" interleave; the later one dropped i1.
+        self.ks._add_table_metadata(self._table("a", "i1"))
+        self.ks.indexes.update(self._table("a", "i1").indexes)  # first refresh's add
+        self.ks._add_table_metadata(self._table("a"))
+        assert self.ks.indexes == {}
+
+    def test_update_keyspace_publishes_with_preserved_maps(self):
+        md = Metadata()
+        old = KeyspaceMetadata("ks", True, "SimpleStrategy", {"replication_factor": "1"})
+        old._add_table_metadata(self._table("t", "i1"))
+        md.keyspaces["ks"] = old
+        seen = []
+
+        class Recording(dict):
+            def __setitem__(self, k, v):
+                seen.append((v.tables, v.indexes))
+                dict.__setitem__(self, k, v)
+
+        md.keyspaces = Recording(md.keyspaces)
+        md._update_keyspace(KeyspaceMetadata("ks", True, "SimpleStrategy", {"replication_factor": "1"}))
+        assert seen == [(old.tables, old.indexes)]
+
+
 class Murmur3TokensTest(unittest.TestCase):
 
     def test_murmur3_init(self):
