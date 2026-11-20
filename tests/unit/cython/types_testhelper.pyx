@@ -106,3 +106,17 @@ def test_date_side_by_side():
         for ms in range(1000):
             verify_time(x - ms)
         x //= 2
+
+
+def test_decimal_empty_varint_raises():
+    # scale-only payload has an empty unscaled varint: must raise, not decode to 0
+    from cassandra.cqltypes import DecimalType
+    cdef Deserializer des = find_deserializer(DecimalType)
+    cdef BytesIOReader reader = BytesIOReader(b'\x00\x00\x00\x04\x00\x00\x00\x05')
+    cdef Buffer buf
+    get_buf(reader, &buf)
+    try:
+        from_binary(des, &buf, 0)
+    except ValueError:
+        return
+    raise AssertionError("expected ValueError")

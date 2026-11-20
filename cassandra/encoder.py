@@ -32,6 +32,11 @@ import ipaddress
 from cassandra.util import (OrderedDict, OrderedMap, OrderedMapSerializedKey,
                             sortedset, Time, Date, Point, LineString, Polygon)
 
+_EPOCH_NAIVE = datetime.datetime(1970, 1, 1)
+# Stdlib subtraction always yields a plain timedelta; subclasses (pendulum) may not.
+_datetime_sub = datetime.datetime.__sub__
+_timedelta = datetime.timedelta
+
 
 def cql_quote(term):
     if isinstance(term, str):
@@ -140,8 +145,18 @@ class Encoder(object):
         Converts a :class:`datetime.datetime` object to a (string) integer timestamp
         with millisecond precision.
         """
-        timestamp = calendar.timegm(val.utctimetuple())
-        return str(timestamp * 1000 + getattr(val, 'microsecond', 0) // 1000)
+        try:
+            utcoffset = val.utcoffset()
+            if utcoffset is not None:
+                # Strip tzinfo first: aware arithmetic (pandas, pendulum) may cross DST.
+                val = val.replace(tzinfo=None) - utcoffset
+            td = val - _EPOCH_NAIVE
+            if type(td) is not _timedelta:
+                td = _datetime_sub(val, _EPOCH_NAIVE)
+        except (AttributeError, TypeError):
+            # Duck types such as Arrow keep their zone through replace(); use timegm.
+            return str(calendar.timegm(val.utctimetuple()) * 1000 + getattr(val, 'microsecond', 0) // 1000)
+        return str((td.days * 86400 + td.seconds) * 1000 + td.microseconds // 1000)
 
     def cql_encode_date(self, val):
         """
