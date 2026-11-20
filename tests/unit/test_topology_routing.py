@@ -15,13 +15,13 @@
 """Routing must use the Hosts published by a real topology refresh."""
 
 from contextlib import nullcontext
-from threading import RLock
+from threading import Event, RLock
 from unittest.mock import Mock, patch
 from uuid import UUID
 
 import pytest
 
-from cassandra import ConsistencyLevel
+from cassandra import ConsistencyLevel, OperationTimedOut
 from cassandra.cluster import (
     Cluster, ControlConnection, ExecutionProfile, EXEC_PROFILE_DEFAULT,
 )
@@ -107,11 +107,9 @@ def assert_current_plan(cluster, plan):
         assert_current_host(cluster, host)
 
 
-@pytest.mark.parametrize('peer_location', [('dc2', 'rack1', 0)], indirect=True)
-@pytest.mark.parametrize('transition', ['promote', 'demote', 'swap'])
-def test_location_refresh_reconciles_session_pools(routing_cluster, transition):
-    cluster, connection, policy = routing_cluster
-    hosts = cluster.metadata.all_hosts()
+@pytest.fixture
+def routing_session(routing_cluster):
+    cluster, _, _ = routing_cluster
     session = new_session_with_pool_state()
     session.cluster = cluster
     session._profile_manager = cluster.profile_manager
@@ -128,10 +126,26 @@ def test_location_refresh_reconciles_session_pools(routing_cluster, transition):
         pool.shutdown.side_effect = lambda: setattr(pool, 'is_shutdown', True)
         return pool
 
-    for host in hosts:
+    for host in cluster.metadata.all_hosts():
         distance = cluster.profile_manager.distance(host)
         if distance != HostDistance.IGNORED:
             session._pools[host] = make_pool(host, distance, session)
+    return session, make_pool
+
+
+@pytest.mark.parametrize('peer_location,transition', [
+    (('dc2', 'rack1', 0), 'promote'),
+    (('dc2', 'rack1', 0), 'demote'),
+    (('dc2', 'rack1', 0), 'swap'),
+    (('dc1', 'rack2', 1), 'rack'),
+    (('dc2', 'rack1', 1), 'promote'),
+    (('dc2', 'rack1', 1), 'demote'),
+], indirect=['peer_location'])
+def test_location_refresh_reconciles_session_pools(routing_cluster,
+                                                 routing_session, transition):
+    cluster, connection, policy = routing_cluster
+    session, make_pool = routing_session
+    hosts = cluster.metadata.all_hosts()
     initial_pools = dict(session._pools)
     pending = []
     reconcile = session.update_created_pools
@@ -149,25 +163,96 @@ def test_location_refresh_reconciles_session_pools(routing_cluster, transition):
     if transition in ('demote', 'swap'):
         local[connection.local_results[0].index('data_center')] = 'dc2'
         peers[1][dc_index] = 'dc2'
+    if transition == 'rack':
+        peers[0][connection.peer_results[0].index('rack')] = 'rack1'
     connection.wait_for_responses.return_value = _node_meta_results(
         connection.local_results, connection.peer_results)
 
     with patch('cassandra.cluster.HostConnection', side_effect=make_pool), \
             patch.object(session, 'update_created_pools',
-                         side_effect=record_reconciliation):
+                         side_effect=record_reconciliation) as reconciliation:
         cluster.control_connection.refresh_node_list_and_token_map()
+        reconciliation.assert_called()
         for future in pending:
             assert future.result(timeout=5)
 
-    expected = {host for host in hosts
-                if cluster.profile_manager.distance(host) != HostDistance.IGNORED}
+    expected = {
+        host for host in hosts
+        if cluster.profile_manager.distance(host) != HostDistance.IGNORED
+    }
     assert set(session._pools) == expected
     assert set(policy.make_query_plan()) == expected
     for host, pool in initial_pools.items():
         assert pool.is_shutdown == (host not in expected)
+        if host in expected:
+            assert session._pools[host] is pool
     for host, pool in session._pools.items():
         assert pool.host_distance == cluster.profile_manager.distance(host)
         assert not pool.is_shutdown
+
+
+@pytest.mark.parametrize('peer_location', [('dc2', 'rack1', 0)], indirect=True)
+@pytest.mark.parametrize('routing_cluster', [
+    lambda: DCAwareRoundRobinPolicy('dc1'),
+    lambda: RackAwareRoundRobinPolicy('dc1', 'rack1'),
+], indirect=True, ids=['dc-aware', 'rack-aware'])
+@pytest.mark.parametrize('reverse_location', [False, True])
+def test_location_pool_timeout_recovers_without_host_conviction(
+        routing_cluster, routing_session, reverse_location):
+    cluster, connection, policy = routing_cluster
+    session, make_pool = routing_session
+    peer = cluster.metadata.get_host_by_host_id(UUID(int=2))
+    assert peer not in session._pools
+    scheduled = Event()
+    retried = Event()
+    pending = []
+    reconcile = session.update_created_pools
+
+    def record_reconciliation():
+        futures = reconcile()
+        pending.extend(futures)
+        if len(pending) == 2:
+            retried.set()
+        return futures
+
+    attempts = []
+
+    def create_pool(host, distance, session, **kwargs):
+        attempts.append(host)
+        if len(attempts) == 1:
+            raise OperationTimedOut('pool creation')
+        return make_pool(host, distance, session, **kwargs)
+
+    connection.peer_results[1][0][
+        connection.peer_results[0].index('data_center')] = 'dc1'
+    connection.wait_for_responses.return_value = _node_meta_results(
+        connection.local_results, connection.peer_results)
+    with patch('cassandra.cluster.HostConnection', side_effect=create_pool), \
+            patch.object(session, 'update_created_pools',
+                         side_effect=record_reconciliation), \
+            patch.object(
+                cluster.scheduler, 'schedule',
+                side_effect=lambda *args: scheduled.set()) as schedule:
+        cluster.control_connection.refresh_node_list_and_token_map()
+        assert pending[0].result(timeout=5) is False
+        assert scheduled.wait(5)
+        assert peer.is_up and peer._reconnection_handler is None
+        assert peer not in session._pools
+        assert peer in list(policy.make_query_plan())
+        _, callback, *args = schedule.call_args.args
+        if reverse_location:
+            with cluster._lifecycle.transaction():
+                assert cluster.control_connection._update_location_info(
+                    peer, 'dc3', 'rack1')
+                assert cluster.control_connection._update_location_info(
+                    peer, 'dc1', 'rack1')
+        callback(*args)
+        assert retried.wait(5)
+        assert len(pending) == 2
+        assert pending[1].result(timeout=5)
+        assert peer in session._pools
+        assert attempts == [peer, peer]
+        schedule.assert_called_once()
 
 
 @pytest.mark.parametrize('transition', ['move', 'rebirth'])

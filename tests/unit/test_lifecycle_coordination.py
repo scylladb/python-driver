@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 from concurrent.futures import CancelledError, Future
 from threading import Barrier, Event, Lock, Thread, get_ident
 from unittest.mock import Mock, patch
@@ -695,25 +696,230 @@ def test_location_transition_removes_old_policy_membership(topology, policy_kind
 
 @pytest.mark.parametrize('first_session_action', ['error', 'retire'])
 def test_location_reconciliation_checks_each_session(topology,
-                                                    first_session_action):
+                                                    first_session_action,
+                                                    caplog):
+    caplog.set_level(logging.DEBUG, logger='cassandra.cluster')
     cluster, _ = topology
     host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
-    sessions = [Mock(), Mock()]
+    sessions = [Mock(is_shutdown=False), Mock(is_shutdown=False)]
+    for session in sessions:
+        session.update_created_pools.return_value = set()
     if first_session_action == 'error':
-        sessions[0].update_created_pools.side_effect = RuntimeError('reconcile')
+        sessions[0].update_created_pools.side_effect = RuntimeError(
+            'reconcile')
     else:
-        sessions[0].update_created_pools.side_effect = lambda: cluster.remove_host(
-            host, refresh_nodes=False)
+        def retire():
+            cluster.remove_host(host, refresh_nodes=False)
+            return set()
 
-    with patch.object(cluster, 'sessions', sessions):
+        sessions[0].update_created_pools.side_effect = retire
+
+    with patch.object(cluster, 'sessions', sessions), \
+            patch.object(cluster.scheduler, 'schedule'):
         cluster.control_connection._update_location_info(host, 'dc2', 'rack2')
 
     sessions[0].update_created_pools.assert_called_once_with()
     if first_session_action == 'error':
         sessions[1].update_created_pools.assert_called_once_with()
+        assert 'Pool reconciliation failed; retrying' in caplog.text
     else:
         sessions[1].update_created_pools.assert_not_called()
     assert host._pending_location is None
+    assert 'Error delivering host lifecycle notification' not in caplog.text
+
+
+@pytest.mark.parametrize('retirement', ['publication', 'policy'])
+def test_location_reconciliation_stops_after_retirement(topology, retirement):
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    session = Mock(is_shutdown=False)
+    if retirement == 'policy':
+        cluster.profile_manager.on_up.side_effect = (
+            lambda h: cluster.remove_host(h, refresh_nodes=False))
+    update = cluster.metadata._update_host_location
+
+    def publish(*args):
+        changed = update(*args)
+        if retirement == 'publication':
+            cluster.remove_host(host, refresh_nodes=False)
+        return changed
+
+    with patch.object(cluster, 'sessions', [session]), \
+            patch.object(cluster.metadata, '_update_host_location',
+                         side_effect=publish):
+        cluster.control_connection._update_location_info(host, 'dc2', 'rack2')
+    session.update_created_pools.assert_not_called()
+    if retirement == 'publication':
+        cluster.profile_manager.on_up.assert_not_called()
+    assert host._pending_location is None
+
+
+@pytest.mark.parametrize(
+    'failure', ['raise', 'false', 'exception', 'cancelled'])
+@pytest.mark.parametrize('retry_succeeds', [False, True])
+def test_location_reconciliation_retries_once(
+        topology, failure, retry_succeeds, caplog):
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    first, second = Future(), Future()
+    session = Mock(is_shutdown=False)
+    session.update_created_pools.side_effect = [
+        RuntimeError('distance') if failure == 'raise' else {first},
+        {second}]
+    with patch.object(cluster, 'sessions', [session]), \
+            patch.object(cluster.scheduler, 'schedule') as schedule:
+        cluster.control_connection._update_location_info(host, 'dc2', 'rack2')
+        if failure != 'raise':
+            schedule.assert_not_called()
+            if failure == 'exception':
+                first.set_exception(RuntimeError('pool creation'))
+            elif failure == 'cancelled':
+                first.cancel()
+            else:
+                first.set_result(False)
+        schedule.assert_called_once()
+        delay, callback, *args = schedule.call_args.args
+        assert delay == 1
+        callback(*args)
+        assert session.update_created_pools.call_count == 2
+        second.set_result(retry_succeeds)
+        schedule.assert_called_once()
+    assert ('Pool reconciliation retry failed' in caplog.text) == (
+        not retry_succeeds)
+
+
+def test_location_retry_logs_each_pool_exception(topology, caplog):
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    first, second, third = Future(), Future(), Future()
+    session = Mock(is_shutdown=False)
+    session.update_created_pools.side_effect = [{first}, {second, third}]
+    errors = []
+    for index in range(2):
+        try:
+            raise RuntimeError('pool retry %s' % index)
+        except RuntimeError as error:
+            errors.append(error)
+
+    with patch.object(cluster, 'sessions', [session]), \
+            patch.object(cluster.scheduler, 'schedule') as schedule:
+        cluster.control_connection._update_location_info(host, 'dc2', 'rack2')
+        first.set_result(False)
+        _, callback, *args = schedule.call_args.args
+        callback(*args)
+        second.set_exception(errors[0])
+        third.set_exception(errors[1])
+        schedule.assert_called_once()
+
+    records = [
+        record for record in caplog.records
+        if record.message.startswith('Pool reconciliation retry failed')
+    ]
+    assert len(records) == 2
+    assert {record.exc_info[1] for record in records} == set(errors)
+    assert all(record.exc_info[2] is not None for record in records)
+    assert all(str(error) in caplog.text for error in errors)
+
+
+@pytest.mark.parametrize(
+    'interruption', ['remove', 'location', 'session', 'close'])
+def test_location_retry_rejects_stale_work(topology, interruption):
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    failed = Future()
+    session = Mock(is_shutdown=False)
+    session.update_created_pools.side_effect = [{failed}, set()]
+    with patch.object(cluster, 'sessions', [session]), \
+            patch.object(cluster.scheduler, 'schedule') as schedule:
+        cluster.control_connection._update_location_info(host, 'dc2', 'rack2')
+        failed.set_result(False)
+        schedule.assert_called_once()
+        _, callback, *args = schedule.call_args.args
+        if interruption == 'remove':
+            cluster.remove_host(host, refresh_nodes=False)
+        elif interruption == 'location':
+            cluster.control_connection._update_location_info(
+                host, 'dc1', 'rack1')
+        elif interruption == 'session':
+            session.is_shutdown = True
+        else:
+            cluster._lifecycle.close()
+        calls = session.update_created_pools.call_count
+        callback(*args)
+        assert session.update_created_pools.call_count == calls
+
+
+@pytest.mark.parametrize('failure', ['raise', 'false', 'exception'])
+def test_location_reconciliation_failure_log_levels(topology, failure, caplog):
+    caplog.set_level(logging.DEBUG, logger='cassandra.cluster')
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    session = Mock(is_shutdown=False)
+    pending = [Future(), Future()]
+    errors = [RuntimeError('first failure'), RuntimeError('retry failure')]
+    session.update_created_pools.side_effect = (
+        errors if failure == 'raise' else [{future} for future in pending])
+
+    def finish(index):
+        if failure == 'exception':
+            pending[index].set_exception(errors[index])
+        elif failure == 'false':
+            pending[index].set_result(False)
+
+    with patch.object(cluster, 'sessions', [session]), \
+            patch.object(cluster.scheduler, 'schedule') as schedule:
+        cluster.control_connection._update_location_info(host, 'dc2', 'rack2')
+        finish(0)
+        _, callback, *args = schedule.call_args.args
+        callback(*args)
+        finish(1)
+        schedule.assert_called_once()
+
+    records = [record for record in caplog.records
+               if record.message.startswith('Pool reconciliation')]
+    assert [record.levelno for record in records] == [logging.DEBUG,
+                                                     logging.WARNING]
+    assert all('scan of all hosts triggered by location change' in record.message
+               for record in records)
+    if failure != 'false':
+        assert [record.exc_info[1] for record in records] == errors
+    else:
+        assert all(record.exc_info is None for record in records)
+
+
+@pytest.mark.parametrize('attempt', ['initial', 'retry'])
+@pytest.mark.parametrize('interruption', ['remove', 'location', 'session', 'close'])
+def test_location_completion_rejects_stale_work(
+        topology, attempt, interruption, caplog):
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    first, late = Future(), Future()
+    session = Mock(is_shutdown=False)
+    session.update_created_pools.side_effect = [{first}, {late}, set()]
+    with patch.object(cluster, 'sessions', [session]), \
+            patch.object(cluster.scheduler, 'schedule') as schedule:
+        cluster.control_connection._update_location_info(host, 'dc2', 'rack2')
+        if attempt == 'retry':
+            first.set_result(False)
+            _, callback, *args = schedule.call_args.args
+            callback(*args)
+            schedule.reset_mock()
+        else:
+            late = first
+        if interruption == 'remove':
+            cluster.remove_host(host, refresh_nodes=False)
+        elif interruption == 'location':
+            cluster.control_connection._update_location_info(
+                host, 'dc1', 'rack1')
+        elif interruption == 'session':
+            session.is_shutdown = True
+        else:
+            cluster._lifecycle.close()
+        calls = session.update_created_pools.call_count
+        late.set_exception(RuntimeError('stale pool creation'))
+        schedule.assert_not_called()
+        assert session.update_created_pools.call_count == calls
+    assert 'Pool reconciliation retry failed' not in caplog.text
 
 
 @pytest.mark.parametrize('custom_callback', ['distance', 'reset'])
@@ -769,11 +975,43 @@ def test_newer_location_reversal_supersedes_queued_change(topology):
     host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
     host.set_location_info('dc1', 'rack1')
     control = cluster.control_connection
-    with cluster._lifecycle.transaction():
-        assert control._update_location_info(host, 'dc2', 'rack2')
-        assert control._update_location_info(host, 'dc1', 'rack1')
+    session = Mock(is_shutdown=False)
+    session.update_created_pools.return_value = set()
+    with patch.object(cluster, 'sessions', [session]):
+        with cluster._lifecycle.transaction():
+            assert control._update_location_info(host, 'dc2', 'rack2')
+            assert control._update_location_info(host, 'dc1', 'rack1')
+    session.update_created_pools.assert_called_once_with()
+    cluster.profile_manager.on_down.assert_not_called()
+    cluster.profile_manager.on_up.assert_not_called()
     assert (host.datacenter, host.rack) == ('dc1', 'rack1')
     assert host._pending_location is None
+
+
+def test_reentrant_location_reversal_preserves_reconciliation(topology):
+    cluster, _ = topology
+    host = cluster.metadata.get_host_by_host_id(HOST_ID_3)
+    host.set_location_info('dc1', 'rack1')
+    control = cluster.control_connection
+    session = Mock(is_shutdown=False)
+    session.update_created_pools.return_value = set()
+    reversed_location = []
+
+    def reverse(current):
+        if not reversed_location:
+            reversed_location.append(True)
+            assert control._update_location_info(current, 'dc3', 'rack1')
+            assert control._update_location_info(current, 'dc2', 'rack1')
+
+    cluster.profile_manager.on_up.side_effect = reverse
+    with patch.object(cluster, 'sessions', [session]):
+        control._update_location_info(host, 'dc2', 'rack1')
+
+    assert host.datacenter == 'dc2'
+    assert host._pending_location is None
+    cluster.profile_manager.on_down.assert_called_once_with(host)
+    cluster.profile_manager.on_up.assert_called_once_with(host)
+    session.update_created_pools.assert_called_once_with()
 
 
 def test_location_delivery_replaces_stale_replica_cache(topology):
@@ -804,7 +1042,7 @@ def test_repeated_location_destination_keeps_latest_reservation(topology):
     requested = []
 
     def on_up(current):
-        if current.datacenter == 'dc3' and not requested:
+        if current.datacenter == 'dc2' and not requested:
             requested.append(True)
             assert control._update_location_info(host, 'dc3', 'rack1')
 
