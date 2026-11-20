@@ -28,6 +28,7 @@ import weakref
 from weakref import WeakValueDictionary
 
 from cassandra import DriverException
+from cassandra.policies import HostDistance
 
 __all__ = ()
 
@@ -90,16 +91,29 @@ class PoolRecoveryReservation(PoolOwnershipReservation):
     """Keep a recovered ADD slot current through readiness publication."""
 
     def __init__(self, session, pool, generation, intent):
-        super().__init__(session, pool.host, pool.endpoint, generation, pool)
+        host = pool.host if pool is not None else intent.host
+        endpoint = pool.endpoint if pool is not None else host.endpoint
+        super().__init__(session, host, endpoint, generation, pool)
         self.pool = pool
         self.intent = intent
+        self.pool_lifecycle_token = intent.pool_lifecycle_token
 
     def owns_locked(self):
         session = self._session_ref()
-        return (session is not None and
-                self.pool._session_ref() is session and
+        intent = (session._pool_intents.get(self.host)
+                  if session is not None else None)
+        if (session is None or intent is None or
+                intent.pool_lifecycle_token is not self.pool_lifecycle_token):
+            return False
+        if self.pool is None:
+            return (not self.retired and
+                    not session.cluster.is_shutdown and
+                    intent.distance == HostDistance.IGNORED and
+                    intent._completion is self.intent._completion and
+                    session._owns_pool_generation_locked(
+                        self.host, self.generation, None, self.endpoint))
+        return (self.pool._session_ref() is session and
                 not self.pool._ownership.retired and
-                session._pool_intents.get(self.host) is self.intent and
                 super().owns_locked(self.pool))
 
 
@@ -617,7 +631,8 @@ class LifecycleCoordinator:
                 return False
             # Match pool publication: membership, Session, Host, metadata.
             # Take every lock of one kind before advancing to the next kind.
-            pools = {recovery.pool for recovery in pool_recoveries}
+            pools = {recovery.pool for recovery in pool_recoveries
+                     if recovery.pool is not None}
             for pool in sorted(pools, key=id):
                 guards.enter_context(pool._membership_lock)
             for session in sorted(set(sessions), key=id):
