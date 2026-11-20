@@ -32,6 +32,7 @@ from cassandra import WriteType as WT
 WriteType = WT
 
 from cassandra import ConsistencyLevel, OperationTimedOut
+from cassandra.tablets import _host_ids
 
 class HostDistance(object):
     """
@@ -600,15 +601,17 @@ class TokenAwarePolicy(LoadBalancingPolicy):
         tablet = self._cluster_metadata._tablets.get_tablet_for_key(keyspace, query.table, token)
 
         if tablet is not None:
+            replica_dict = tablet._replica_dict
             if keep_order:
                 # The child plan is round-robin rotated, so it cannot provide a stable order.
-                replicas = [host for host in (self._cluster_metadata.get_host_by_host_id(host_id)
-                                              for host_id, _ in tablet.replicas) if host is not None]
+                # Walk _replica_dict directly: tablet.replicas rebuilds a tuple on every access.
+                get_host = self._cluster_metadata.get_host_by_host_id
+                replicas = [host for host in (get_host(_host_ids[k]) for k in replica_dict) if host is not None]
             else:
-                replicas_mapped = set(map(lambda r: r[0], tablet.replicas))
                 child_plan = child.make_query_plan(keyspace, query)
 
-                replicas = [host for host in child_plan if host.host_id in replicas_mapped]
+                replicas = [host for host in child_plan
+                            if host.host_id is not None and host.host_id.int in replica_dict]
 
             # The leader concept only exists for strongly-consistent keyspaces,
             # which today means exactly the keyspaces whose consistency mode is
