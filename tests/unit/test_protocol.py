@@ -17,14 +17,15 @@ import struct
 import unittest
 
 from typing import ClassVar
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from cassandra import ConsistencyLevel, ProtocolVersion, UnsupportedOperation
 from cassandra.protocol import (
     PrepareMessage, QueryMessage, ExecuteMessage,
     BatchMessage, StartupMessage, OptionsMessage, RegisterMessage,
-    AuthResponseMessage, ProtocolHandler, _MessageType,
-    ResultMessage, RESULT_KIND_ROWS
+    AuthResponseMessage, ProtocolHandler, _ProtocolHandler, _MessageType,
+    ResultMessage, RESULT_KIND_ROWS, COMPRESSED_FLAG, ReadyMessage,
+    _CHECKSUMMING_MIN_VERSION, _CHECKSUMMING_MAX_VERSION_EXCLUSIVE,
 )
 from cassandra.protocol_features import ProtocolFeatures
 from cassandra.query import BatchType
@@ -555,3 +556,181 @@ class FrameByteIdentityTest(unittest.TestCase):
 
     def test_frames_with_default_features(self):
         self._assert_frames(ProtocolFeatures())
+
+
+class ChecksummingBoundaryTest(unittest.TestCase):
+    """
+    _CHECKSUMMING_MIN_VERSION / _CHECKSUMMING_MAX_VERSION_EXCLUSIVE in
+    cassandra/protocol.py are hand-inlined for performance, duplicating
+    ProtocolVersion.has_checksumming_support()'s ``V5 <= v < DSE_V1`` range
+    check (see cassandra/__init__.py). DSE_V1/DSE_V2 are private DSE
+    protocol extensions that do not carry the V5 native-protocol
+    checksumming feature, even though their numeric values (0x41/0x42) are
+    greater than V5/V6 -- so the upper bound is deliberately *exclusive* of
+    DSE_V1 itself. This mirrors the other V5-only feature gates on
+    ProtocolVersion (uses_prepare_flags, uses_prepared_metadata,
+    uses_keyspace_flag), which also explicitly carve out DSE_V1, and it is
+    the same boundary connection.py already relies on (unchanged by this
+    module) to decide whether to enable frame-level checksumming at all.
+
+    These tests guard against the two definitions drifting apart, and
+    directly exercise the encode_message/decode_message boundary at and
+    around DSE_V1 -- the exact case a naive ``< _CHECKSUMMING_MAX_VERSION``
+    read could get backwards.
+    """
+
+    # A representative span of versions straddling both boundaries.
+    ALL_VERSIONS = (
+        ProtocolVersion.V3, ProtocolVersion.V4,
+        ProtocolVersion.V5, ProtocolVersion.V6,
+        ProtocolVersion.DSE_V1, ProtocolVersion.DSE_V2,
+    )
+
+    def test_inline_constants_match_has_checksumming_support(self):
+        for version in self.ALL_VERSIONS:
+            inline_result = _CHECKSUMMING_MIN_VERSION <= version < _CHECKSUMMING_MAX_VERSION_EXCLUSIVE
+            canonical_result = ProtocolVersion.has_checksumming_support(version)
+            assert inline_result == canonical_result, (
+                "inline checksumming range check disagrees with "
+                "ProtocolVersion.has_checksumming_support for version %r" % (version,)
+            )
+
+    def test_dse_v1_itself_is_excluded(self):
+        # The crux of the boundary: DSE_V1 must NOT be treated as
+        # checksumming-capable, despite being the constant's value.
+        assert not (_CHECKSUMMING_MIN_VERSION <= ProtocolVersion.DSE_V1 < _CHECKSUMMING_MAX_VERSION_EXCLUSIVE)
+        assert not ProtocolVersion.has_checksumming_support(ProtocolVersion.DSE_V1)
+
+    def test_v5_and_v6_are_included(self):
+        for version in (ProtocolVersion.V5, ProtocolVersion.V6):
+            assert _CHECKSUMMING_MIN_VERSION <= version < _CHECKSUMMING_MAX_VERSION_EXCLUSIVE
+            assert ProtocolVersion.has_checksumming_support(version)
+
+    def _encode_with_spy_compressor(self, protocol_version):
+        calls = []
+
+        def spy_compressor(body):
+            calls.append(body)
+            return body
+
+        msg = RegisterMessage(["TOPOLOGY_CHANGE", "STATUS_CHANGE"])
+        frame = ProtocolHandler.encode_message(
+            msg, stream_id=0, protocol_version=protocol_version, compressor=spy_compressor,
+            allow_beta_protocol_version=False, protocol_features=ProtocolFeatures())
+        flags_byte = frame[1]
+        return calls, flags_byte
+
+    def test_encode_message_compresses_at_dse_v1(self):
+        """
+        DSE_V1 has no checksumming, so encode_message must fall back to
+        message-level compression: the compressor must run and
+        COMPRESSED_FLAG must be set.
+        """
+        calls, flags_byte = self._encode_with_spy_compressor(ProtocolVersion.DSE_V1)
+        assert len(calls) == 1, "compressor should have been invoked for DSE_V1"
+        assert flags_byte & COMPRESSED_FLAG
+
+    def test_encode_message_does_not_compress_at_v5(self):
+        """
+        V5 has checksumming support, so encode_message must NOT apply
+        message-level compression (that happens at the segment level
+        instead): the compressor must not run and COMPRESSED_FLAG must not
+        be set.
+        """
+        calls, flags_byte = self._encode_with_spy_compressor(ProtocolVersion.V5)
+        assert len(calls) == 0, "compressor should not have been invoked for V5"
+        assert not (flags_byte & COMPRESSED_FLAG)
+
+    def test_encode_message_compresses_at_v4(self):
+        # Sanity baseline below the checksumming range.
+        calls, flags_byte = self._encode_with_spy_compressor(ProtocolVersion.V4)
+        assert len(calls) == 1
+        assert flags_byte & COMPRESSED_FLAG
+
+    def _decode_with_spy_decompressor(self, protocol_version):
+        calls = []
+
+        def spy_decompressor(body):
+            calls.append(body)
+            return body
+
+        ProtocolHandler.decode_message(
+            protocol_version=protocol_version, protocol_features=ProtocolFeatures(),
+            user_type_map={}, stream_id=0, flags=COMPRESSED_FLAG, opcode=ReadyMessage.opcode,
+            body=b'ignored-by-readymessage', decompressor=spy_decompressor, result_metadata=None)
+        return calls
+
+    def test_decode_message_decompresses_at_dse_v1(self):
+        calls = self._decode_with_spy_decompressor(ProtocolVersion.DSE_V1)
+        assert len(calls) == 1, "decompressor should have been invoked for DSE_V1"
+
+    def test_decode_message_does_not_decompress_at_v5(self):
+        calls = self._decode_with_spy_decompressor(ProtocolVersion.V5)
+        assert len(calls) == 0, "decompressor should not have been invoked for V5"
+
+
+class HeaderConsistencyTest(unittest.TestCase):
+    """
+    encode_message has two branches: the compression branch (which avoids a
+    second BytesIO allocation by building the header directly as bytes) and
+    the non-compression branch (which writes into a BytesIO via
+    _write_header). Both must produce byte-identical headers for the same
+    (version, flags, stream_id, opcode, length) -- if the two ever diverged
+    (e.g. because _write_header grew version-specific behavior that the
+    compression branch's header-building didn't replicate), messages would
+    be silently corrupted for whichever protocol version triggered the
+    difference.
+    """
+
+    def test_both_branches_use_the_shared_header_packer(self):
+        """
+        The compression branch must not rebuild the header inline; it must
+        go through the same _pack_header single source of truth that
+        _write_header uses.
+        """
+        with patch.object(_ProtocolHandler, '_pack_header',
+                          wraps=_ProtocolHandler._pack_header) as spy:
+            msg = RegisterMessage(["TOPOLOGY_CHANGE"])
+
+            # Compression branch (checksumming not active at V4).
+            ProtocolHandler.encode_message(
+                msg, stream_id=1, protocol_version=ProtocolVersion.V4, compressor=lambda b: b,
+                allow_beta_protocol_version=False, protocol_features=ProtocolFeatures())
+            assert spy.call_count == 1, (
+                "compression branch must build its header via _pack_header, "
+                "not by duplicating v3_header_pack(...) + int32_pack(...) inline"
+            )
+
+            # Non-compression branch, via _write_header.
+            ProtocolHandler.encode_message(
+                msg, stream_id=1, protocol_version=ProtocolVersion.V4, compressor=None,
+                allow_beta_protocol_version=False, protocol_features=ProtocolFeatures())
+            assert spy.call_count == 2, "non-compression branch must also go through _pack_header"
+
+    def test_compressed_and_uncompressed_headers_are_identical_modulo_compressed_flag(self):
+        """
+        With an identity compressor (output same length as input), the
+        compression and non-compression branches encode the same message at
+        the same version with only the COMPRESSED_FLAG bit differing in the
+        header -- version, stream_id, opcode and length must match exactly.
+        """
+        msg = RegisterMessage(["TOPOLOGY_CHANGE", "STATUS_CHANGE"])
+
+        compressed_frame = ProtocolHandler.encode_message(
+            msg, stream_id=42, protocol_version=ProtocolVersion.V4, compressor=lambda b: b,
+            allow_beta_protocol_version=False, protocol_features=ProtocolFeatures())
+        plain_frame = ProtocolHandler.encode_message(
+            msg, stream_id=42, protocol_version=ProtocolVersion.V4, compressor=None,
+            allow_beta_protocol_version=False, protocol_features=ProtocolFeatures())
+
+        # 9-byte v3 frame header: version, flags, stream_id (2 bytes), opcode, length (4 bytes)
+        compressed_header = bytearray(compressed_frame[:9])
+        plain_header = bytearray(plain_frame[:9])
+
+        assert compressed_header[1] & COMPRESSED_FLAG
+        assert not (plain_header[1] & COMPRESSED_FLAG)
+
+        # Mask out the COMPRESSED_FLAG bit and compare the rest byte-for-byte.
+        compressed_header[1] &= ~COMPRESSED_FLAG
+        plain_header[1] &= ~COMPRESSED_FLAG
+        assert bytes(compressed_header) == bytes(plain_header)
