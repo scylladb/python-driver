@@ -4631,13 +4631,25 @@ class Session(object):
                                         renewing_retired_pool = (
                                             expected_pool is not None and
                                             expected_pool.is_shutdown)
-                                        if (renewing_retired_pool and
+                                        intents = self._pool_intents_locked()
+                                        current_intent = intents.get(host)
+                                        promotion_pending = (
+                                            new_pool._initially_disconnected
+                                            and current_intent is not None
+                                            and current_intent is not intent
+                                            and current_intent.distance in (
+                                                HostDistance.LOCAL,
+                                                HostDistance.LOCAL_RACK))
+                                        if promotion_pending:
+                                            # The newer local intent kept a
+                                            # live pool or queued its own
+                                            # creation.
+                                            stale_candidate = True
+                                        elif (renewing_retired_pool and
                                                 connection_required and
                                                 not connected):
                                             unusable_candidate = True
                                         elif new_pool._keyspace == keyspace:
-                                            current_intent = \
-                                                self._pool_intents_locked().get(host)
                                             previous = attempt.expected_pool
                                             if (current_intent is not attempt.intent and
                                                     previous is not None and
@@ -4790,7 +4802,12 @@ class Session(object):
             if futures:
                 # Reconciliation of this single host has one completion.
                 for future in futures:
-                    future.add_done_callback(partial(lifecycle.submit, retry))
+                    add_done_callback = getattr(
+                        future, 'add_done_callback', None)
+                    if callable(add_done_callback):
+                        add_done_callback(partial(lifecycle.submit, retry))
+                    else:
+                        retry()
             else:
                 retry()
 
@@ -4936,6 +4953,8 @@ class Session(object):
                 intent.complete_exception(exc)
                 raise
             pool_to_shutdown = None
+            pool_to_renew = None
+            owns_promotion_recovery = False
             expected_state = None
             future = None
             superseding_intent = None
@@ -4978,8 +4997,21 @@ class Session(object):
                                 if pool_to_shutdown is None:
                                     terminal_result = True
                             elif pool is not None and not pool.is_shutdown:
-                                pool.host_distance = distance
-                                terminal_result = True
+                                if (distance in (HostDistance.LOCAL,
+                                                 HostDistance.LOCAL_RACK) and
+                                        pool._initially_disconnected):
+                                    # Retire the remote placeholder.
+                                    # Renewal needs a usable socket
+                                    # and retains failure recovery.
+                                    pool_to_renew = pool
+                                    if not pool._promotion_recovery_claimed:
+                                        # Claim recovery once for
+                                        # this exact placeholder.
+                                        pool._promotion_recovery_claimed = True
+                                        owns_promotion_recovery = True
+                                else:
+                                    pool.host_distance = distance
+                                    terminal_result = True
                             elif host.is_up not in (True, None):
                                 self._pool_generations.pop(host, None)
                                 if current_intent is intent:
@@ -5024,11 +5056,26 @@ class Session(object):
                         future = intent.completion
             elif (distance != HostDistance.IGNORED and
                   expected_state is not None and
-                  (expected_state[1] is None or
-                   expected_state[1].is_shutdown)):
-                future = self.add_or_renew_pool(
-                    host, False, _expected_state=expected_state,
-                    _expected_intent=intent, _distance=distance)
+                  terminal_result is _NOT_SET):
+                try:
+                    if pool_to_renew is not None:
+                        # Shutdown can wait for pool work.
+                        # Avoid these locks and target only
+                        # the captured pool.
+                        pool_to_renew.shutdown()
+                    future = self.add_or_renew_pool(
+                        host, False, _expected_state=expected_state,
+                        _expected_intent=intent, _distance=distance)
+                finally:
+                    if owns_promotion_recovery:
+                        add_done_callback = getattr(
+                            future, 'add_done_callback', None)
+                        if not callable(add_done_callback):
+                            self._recover_pool(pool_to_renew)
+                        else:
+                            add_done_callback(
+                                lambda completed, pool=pool_to_renew:
+                                self._recover_pool(pool))
 
             if future:
                 futures.add(future)

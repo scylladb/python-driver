@@ -302,9 +302,11 @@ class ClusterTest(unittest.TestCase):
         first_session = make_session()
         second_session = make_session()
         first_pool = Mock(
-            host=host, is_shutdown=False, host_distance=HostDistance.LOCAL)
+            host=host, is_shutdown=False, host_distance=HostDistance.LOCAL,
+            _initially_disconnected=False, _promotion_recovery_claimed=False)
         second_pool = Mock(
-            host=host, is_shutdown=False, host_distance=HostDistance.LOCAL)
+            host=host, is_shutdown=False, host_distance=HostDistance.LOCAL,
+            _initially_disconnected=False, _promotion_recovery_claimed=False)
 
         first_future = Future()
         first_future.set_result(True)
@@ -3222,7 +3224,8 @@ class SessionPoolRaceTest(unittest.TestCase):
     def _pool(self, host, keyspace=None, distance=HostDistance.LOCAL):
         pool = Mock(
             host=host, host_distance=distance, is_shutdown=False,
-            _keyspace=keyspace, _membership_lock=RLock())
+            _keyspace=keyspace, _membership_lock=RLock(),
+            _initially_disconnected=False, _promotion_recovery_claimed=False)
         pool._lock_usable_connection.return_value = nullcontext(True)
         pool.shutdown.side_effect = lambda: setattr(
             pool, 'is_shutdown', True)
