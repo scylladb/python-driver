@@ -184,7 +184,7 @@ cdef class DesVarcharType(DesUTF8Type):
 cdef class _DesParameterizedType(Deserializer):
 
     cdef object subtypes
-    cdef Deserializer[::1] deserializers
+    cdef tuple deserializers
     cdef Py_ssize_t subtypes_len
 
     def __init__(self, cqltype):
@@ -299,7 +299,6 @@ cdef _deserialize_map(Buffer *buf, int protocol_version,
 
     cdef int32_t numelements
     cdef int offset
-    cdef list result = []
 
     _unpack_len(buf, 0, &numelements)
     offset = sizeof(int32_t)
@@ -334,7 +333,6 @@ cdef class DesTupleType(_DesParameterizedType):
         protocol_version = max(3, protocol_version)
 
         p = 0
-        values = []
         for i in range(self.subtypes_len):
             item = None
             if p < buf.size:
@@ -445,9 +443,8 @@ cdef class GenericDeserializer(Deserializer):
 # Helper utilities
 
 def make_deserializers(cqltypes):
-    """Create an array of Deserializers for each given cqltype in cqltypes"""
-    cdef Deserializer[::1] deserializers
-    return obj_array([find_deserializer(ct) for ct in cqltypes])
+    """Return a new tuple with a Deserializer for each cqltype in cqltypes"""
+    return tuple([find_deserializer(ct) for ct in cqltypes])
 
 
 cdef dict classes = globals()
@@ -485,7 +482,10 @@ cpdef Deserializer find_deserializer(cqltype):
 
 
 def obj_array(list objs):
-    """Create a (Cython) array of objects given a list of objects"""
+    """Create a (Cython) array of objects given a list of objects
+
+    Not used by make_deserializers(), which returns a tuple; kept for
+    existing direct callers."""
     cdef object[:] arr
     cdef Py_ssize_t i
     arr = cython_array(shape=(len(objs),), itemsize=sizeof(void *), format="O")
