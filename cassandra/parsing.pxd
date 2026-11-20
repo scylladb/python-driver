@@ -20,7 +20,7 @@ cdef class ParseDesc:
     cdef public object coltypes
     cdef public object column_encryption_policy
     cdef public list coldescs
-    cdef Deserializer[::1] deserializers
+    cdef tuple deserializers
     cdef public int protocol_version
     cdef Py_ssize_t rowsize
 
@@ -29,4 +29,6 @@ cdef class ColumnParser:
 
 cdef class RowParser:
     cpdef unpack_row(self, BytesIOReader reader, ParseDesc desc)
+    cpdef unpack_plain_row(self, BytesIOReader reader, ParseDesc desc)
+    cpdef unpack_col_encrypted_row(self, BytesIOReader reader, ParseDesc desc)
 
