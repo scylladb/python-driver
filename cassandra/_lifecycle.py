@@ -315,6 +315,7 @@ class LifecycleCoordinator:
                 return False
             host._currently_handling_node_up = True
             host._addition_token = None
+            host._ready_addition_token = None
             # UP owns recovery now; old scheduled ADD work must not replay
             # callbacks while UP is pending or after it completes.
             host._endpoint_add_retry_pending = False
@@ -561,6 +562,7 @@ class LifecycleCoordinator:
         with host.lock:
             token = object()
             host._addition_token = token
+            host._ready_addition_token = None
             return token
 
     def addition_is_current(self, host, token):
@@ -665,6 +667,7 @@ class LifecycleCoordinator:
                 if advance_health:
                     host._health_generation += 1
             host._addition_token = None
+            host._ready_addition_token = addition_token
             host._endpoint_add_retry_pending = False
             host._lifecycle_pending = False
             host._pending_host_addition = False

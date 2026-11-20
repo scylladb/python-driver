@@ -3461,6 +3461,93 @@ def test_failure_waiting_for_membership_does_not_hold_session(socket_pool):
     pool.shutdown()
 
 
+def test_pending_add_retains_retry_after_policy_error(
+        ordinary_add_recovery):
+    (host, session, failed, healthy, scheduled, work,
+     listener, peer, peer_ready) = ordinary_add_recovery
+    cluster = session.cluster
+    peer_ready.set_result(True)
+    cluster.on_add(host, refresh_nodes=False)
+    _finish_pool_recovery_work(work)
+    old_retry = scheduled.pop(0)[1]
+    error = RuntimeError('policy temporarily unavailable')
+    session._profile_manager.distance.side_effect = error
+    with pytest.raises(RuntimeError, match='policy temporarily unavailable'):
+        session.update_created_pools(hosts=(host,))
+    old_retry()
+    assert not work
+    assert len(scheduled) == 1
+    session._profile_manager.distance.side_effect = None
+    cluster.connection_factory.return_value.is_closed = False
+    scheduled.pop(0)[1]()
+    _finish_pool_recovery_work(work)
+    assert session._pools[host].open_count == 1
+    listener.on_add.assert_called_once_with(host)
+    assert not healthy.is_shutdown
+
+
+@pytest.mark.parametrize('supersession', [None, 'down', 'up', 'add'])
+@pytest.mark.parametrize('during_creation', [False, True])
+def test_pending_down_add_recovers_retired_recovered_pool(
+        ordinary_add_recovery, supersession, during_creation):
+    (host, session, failed, healthy, scheduled, work,
+     listener, peer, peer_ready) = ordinary_add_recovery
+    cluster = session.cluster
+    host.set_down()
+    cluster.on_add(host, refresh_nodes=False)
+    _finish_pool_recovery_work(work)
+    cluster.connection_factory.return_value.is_closed = False
+    scheduled.pop(0)[1]()
+    _finish_pool_recovery_work(work)
+    pool = session._pools[host]
+    assert host.is_up is False
+    listener.on_add.assert_not_called()
+    pool.shutdown()
+    session._recover_pool(pool)
+    callback, *args = cluster.executor.submit.call_args.args
+    callback(*args)
+    assert len(scheduled) == 1
+    retry = scheduled.pop(0)[1]
+
+    def supersede():
+        if supersession == 'down':
+            cluster._lifecycle.begin_down(
+                host, host._health_generation, expect_down=True)
+        elif supersession == 'up':
+            assert cluster._lifecycle.begin_up(host)
+        elif supersession == 'add':
+            cluster._prepare_host = Mock()
+            cluster.on_add(host, refresh_nodes=False)
+
+    if during_creation:
+        candidate = cluster.connection_factory.return_value
+
+        def create(*args, **kwargs):
+            supersede()
+            return candidate
+
+        cluster.connection_factory.reset_mock()
+        cluster.connection_factory.side_effect = create
+    else:
+        supersede()
+    retry()
+    if work:
+        _finish_pool_recovery_work(work)
+    if during_creation:
+        cluster.connection_factory.assert_called_once()
+    if supersession is not None:
+        assert session._pools[host] is pool
+        assert not scheduled
+        listener.on_add.assert_not_called()
+        assert not healthy.is_shutdown
+        return
+    assert session._pools[host] is not pool
+    peer_ready.set_result(True)
+    assert host.is_up
+    listener.on_add.assert_called_once_with(host)
+    assert not healthy.is_shutdown
+
+
 @pytest.mark.parametrize('outcome', ['exception', 'cancelled'])
 def test_ignored_cleanup_outcome_survives_delivery_gap(
         fresh_pool_recovery, outcome):
@@ -3499,33 +3586,6 @@ def test_ignored_cleanup_outcome_survives_delivery_gap(
         later.distance = HostDistance.IGNORED
     later.complete_result(True)
     assert later.completion.result(0) is True
-
-
-
-def test_pending_add_retains_retry_after_policy_error(
-        ordinary_add_recovery):
-    (host, session, failed, healthy, scheduled, work,
-     listener, peer, peer_ready) = ordinary_add_recovery
-    cluster = session.cluster
-    peer_ready.set_result(True)
-    cluster.on_add(host, refresh_nodes=False)
-    _finish_pool_recovery_work(work)
-    old_retry = scheduled.pop(0)[1]
-    error = RuntimeError('policy temporarily unavailable')
-    session._profile_manager.distance.side_effect = error
-    with pytest.raises(RuntimeError, match='policy temporarily unavailable'):
-        session.update_created_pools(hosts=(host,))
-    old_retry()
-    assert not work
-    assert len(scheduled) == 1
-    session._profile_manager.distance.side_effect = None
-    cluster.connection_factory.return_value.is_closed = False
-    scheduled.pop(0)[1]()
-    _finish_pool_recovery_work(work)
-    assert session._pools[host].open_count == 1
-    listener.on_add.assert_called_once_with(host)
-    assert not healthy.is_shutdown
-
 
 
 def test_policy_error_recovery_waits_for_actual_creation_cleanup(
@@ -3570,6 +3630,95 @@ def test_policy_error_recovery_waits_for_actual_creation_cleanup(
     scheduled.pop(0)[1]()
     _finish_pool_recovery_work(work)
     listener.on_add.assert_called_once_with(host)
+    assert not healthy.is_shutdown
+
+
+@pytest.mark.parametrize('finalizer_failure', ['policy', 'creation'])
+@pytest.mark.parametrize('newer_add', [False, True])
+def test_retired_initial_success_retries_after_its_add_completes(
+        ordinary_add_recovery, finalizer_failure, newer_add):
+    (host, session, failed, healthy, scheduled, work,
+     listener, peer, peer_ready) = ordinary_add_recovery
+    cluster = session.cluster
+    candidate = cluster.connection_factory.return_value
+    candidate.is_closed = False
+    cluster.on_add(host, refresh_nodes=False)
+    _finish_pool_recovery_work(work)
+    pool = session._pools[host]
+    assert host._pending_host_addition
+    pool.shutdown()
+    session._recover_pool(pool)
+    callback, *args = cluster.executor.submit.call_args.args
+    callback(*args)
+    assert len(scheduled) == 1
+    if finalizer_failure == 'policy':
+        cluster.profile_manager.distance.side_effect = RuntimeError('policy')
+    else:
+        candidate.is_closed = True
+    peer_ready.set_result(True)
+    if finalizer_failure == 'creation':
+        _finish_pool_recovery_work(work)
+    assert not host._pending_host_addition
+    assert host.is_up
+    assert not work
+    listener.on_add.assert_called_once_with(host)
+    cluster.profile_manager.distance.side_effect = None
+    candidate.is_closed = False
+    scheduled.pop(0)[1]()
+    assert len(work) == 1
+    if newer_add:
+        def create(*args, **kwargs):
+            cluster._prepare_host = Mock()
+            cluster.on_add(host, refresh_nodes=False)
+            return candidate
+
+        cluster.connection_factory.reset_mock()
+        cluster.connection_factory.side_effect = create
+    _finish_pool_recovery_work(work)
+    if newer_add:
+        cluster.connection_factory.assert_called_once()
+        assert session._pools[host] is pool
+    else:
+        assert session._pools[host] is not pool
+    listener.on_add.assert_called_once_with(host)
+    assert not healthy.is_shutdown
+
+
+@pytest.mark.parametrize('host_state,supersession',
+                         [(False, 'add'), (True, 'add'),
+                          (False, 'down'), (False, 'up')])
+def test_fresh_retry_rechecks_add_authority_before_publication(
+        ordinary_add_recovery, host_state, supersession):
+    (host, session, failed, healthy, scheduled, work,
+     listener, peer, peer_ready) = ordinary_add_recovery
+    cluster = session.cluster
+    host.is_up = host_state
+    peer_ready.set_result(True)
+    cluster.on_add(host, refresh_nodes=False)
+    _finish_pool_recovery_work(work)
+    cluster.connection_factory.return_value.is_closed = False
+    scheduled.pop(0)[1]()
+    assert len(work) == 1
+    candidate = cluster.connection_factory.return_value
+
+    def create(*args, **kwargs):
+        if supersession == 'add':
+            cluster._prepare_host = Mock()
+            cluster.on_add(host, refresh_nodes=False)
+        elif supersession == 'down':
+            cluster._lifecycle.begin_down(
+                host, host._health_generation, expect_down=True)
+        else:
+            assert cluster._lifecycle.begin_up(host)
+        return candidate
+
+    cluster.connection_factory.reset_mock()
+    cluster.connection_factory.side_effect = create
+    _finish_pool_recovery_work(work)
+    cluster.connection_factory.assert_called_once()
+    assert host not in session._pools
+    assert not scheduled
+    listener.on_add.assert_not_called()
     assert not healthy.is_shutdown
 
 
@@ -3905,3 +4054,93 @@ def test_stale_policy_error_observer_waits_for_current_ignored_cleanup(
     finally:
         cluster.profile_manager.distance.side_effect = None
         pool.shutdown()
+
+
+@pytest.mark.parametrize('retry_failure', ['creation', 'policy'])
+@pytest.mark.parametrize('supersession',
+                         ['none', 'add', 'up', 'down', 'exhausted'])
+@pytest.mark.parametrize('finalizer_session', ['peer', 'failed'])
+def test_fresh_initial_success_retry_survives_its_add_completion(
+        ordinary_add_recovery, retry_failure, supersession, finalizer_session):
+    (host, session, failed, healthy, scheduled, work,
+     listener, peer, peer_ready) = ordinary_add_recovery
+    cluster = session.cluster
+    candidate = cluster.connection_factory.return_value
+    candidate.is_closed = False
+    cluster.on_add(host, refresh_nodes=False)
+    _finish_pool_recovery_work(work)
+    cluster.profile_manager.distance.return_value = HostDistance.IGNORED
+    session.add_or_renew_pool(host, False)
+    _finish_pool_recovery_work(work)
+    cluster.profile_manager.distance.return_value = HostDistance.LOCAL
+    candidate.is_closed = True
+    session.add_or_renew_pool(host, False)
+    _finish_pool_recovery_work(work)
+    assert len(scheduled) == 1
+    assert host not in session._pools
+
+    cluster.sessions = ((peer, session) if finalizer_session == 'peer'
+                        else (session, peer))
+    cluster.profile_manager.distance.side_effect = RuntimeError('final policy')
+    peer_ready.set_result(True)
+    cluster.profile_manager.distance.side_effect = None
+    assert not host._pending_host_addition
+    listener.on_add.assert_called_once_with(host)
+    if finalizer_session == 'failed':
+        scheduled.pop(0)[1]()  # The older exact-intent retry is now stale.
+        assert not work
+    assert len(scheduled) == 1
+    if retry_failure == 'policy':
+        cluster.profile_manager.distance.side_effect = RuntimeError(
+            'retry policy')
+    scheduled.pop(0)[1]()
+    if retry_failure == 'creation':
+        assert len(work) == 1
+        _finish_pool_recovery_work(work)
+    else:
+        assert not work
+    cluster.profile_manager.distance.side_effect = None
+    assert [delay for delay, _ in scheduled] == [2]
+    if supersession == 'exhausted':
+        for delay in (2, 4):
+            assert scheduled[0][0] == delay
+            scheduled.pop(0)[1]()
+            assert len(work) == 1
+            _finish_pool_recovery_work(work)
+        assert not scheduled
+        cluster.profile_manager.distance.side_effect = RuntimeError(
+            'later policy')
+        try:
+            with pytest.raises(RuntimeError, match='later policy'):
+                session.add_or_renew_pool(host, False)
+        finally:
+            cluster.profile_manager.distance.side_effect = None
+        assert session._pool_intents[host].on_pool_recovered is None
+        assert not scheduled
+        assert not work
+        listener.on_add.assert_called_once_with(host)
+        assert not healthy.is_shutdown
+        return
+    candidate.is_closed = False
+    if supersession == 'add':
+        cluster._prepare_host = Mock()
+        cluster.on_add(host, refresh_nodes=False)
+    elif supersession == 'up':
+        host.is_up = False
+        assert cluster._lifecycle.begin_up(host)
+        assert cluster._lifecycle.mark_ready(host)
+        cluster._lifecycle.finish_up(host)
+    elif supersession == 'down':
+        cluster._lifecycle.begin_down(
+            host, host._health_generation, expect_down=True)
+    scheduled.pop(0)[1]()
+    if supersession == 'none':
+        assert len(work) == 1
+        _finish_pool_recovery_work(work)
+        assert session._pools[host].open_count == 1
+    else:
+        assert not work
+        assert host not in session._pools
+    assert not scheduled
+    listener.on_add.assert_called_once_with(host)
+    assert not healthy.is_shutdown
