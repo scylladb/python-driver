@@ -537,8 +537,8 @@ class AddTableMetadataTest(unittest.TestCase):
         assert self.ks.views == {"v": view}
 
     def test_write_reaches_maps_swapped_in_by_keyspace_refresh(self):
-        # Metadata._update_keyspace() may restore preserved maps mid-call; the
-        # table and index writes must land in the live maps, not stale ones.
+        # If the maps are reassigned mid-call, the table and index writes must
+        # land in the current maps, not stale ones.
         ks = self.ks
         live_tables, live_indexes = {}, {}
 
@@ -569,6 +569,44 @@ class AddTableMetadataTest(unittest.TestCase):
         ks._add_table_metadata(new)
         assert live_tables == {"t": new}
         assert live_indexes == new.indexes
+
+    def test_index_name_moved_to_another_table_survives_refresh(self):
+        # DROP INDEX i1; CREATE INDEX i1 ON b; b is refreshed before a.
+        self.ks._add_table_metadata(self._table("a", "i1"))
+        b = self._table("b", "i1")
+        self.ks._add_table_metadata(b)
+        self.ks._add_table_metadata(self._table("a"))
+        assert self.ks.indexes == b.indexes
+
+    def test_index_name_moved_to_another_table_survives_drop(self):
+        self.ks._add_table_metadata(self._table("a", "i1"))
+        b = self._table("b", "i1")
+        self.ks._add_table_metadata(b)
+        self.ks._drop_table_metadata("a")
+        assert self.ks.indexes == b.indexes
+
+    def test_overlapping_refreshes_of_one_table_drop_its_index(self):
+        # Two unsynchronized refreshes of "a" interleave; the later one dropped i1.
+        self.ks._add_table_metadata(self._table("a", "i1"))
+        self.ks.indexes.update(self._table("a", "i1").indexes)  # first refresh's add
+        self.ks._add_table_metadata(self._table("a"))
+        assert self.ks.indexes == {}
+
+    def test_update_keyspace_publishes_with_preserved_maps(self):
+        md = Metadata()
+        old = KeyspaceMetadata("ks", True, "SimpleStrategy", {"replication_factor": "1"})
+        old._add_table_metadata(self._table("t", "i1"))
+        md.keyspaces["ks"] = old
+        seen = []
+
+        class Recording(dict):
+            def __setitem__(self, k, v):
+                seen.append((v.tables, v.indexes))
+                dict.__setitem__(self, k, v)
+
+        md.keyspaces = Recording(md.keyspaces)
+        md._update_keyspace(KeyspaceMetadata("ks", True, "SimpleStrategy", {"replication_factor": "1"}))
+        assert seen == [(old.tables, old.indexes)]
 
 
 class Murmur3TokensTest(unittest.TestCase):

@@ -196,7 +196,6 @@ class Metadata(object):
     def _update_keyspace(self, keyspace_meta, new_user_types=None):
         ks_name = keyspace_meta.name
         old_keyspace_meta = self.keyspaces.get(ks_name, None)
-        self.keyspaces[ks_name] = keyspace_meta
         if old_keyspace_meta:
             keyspace_meta.tables = old_keyspace_meta.tables
             keyspace_meta.user_types = new_user_types if new_user_types is not None else old_keyspace_meta.user_types
@@ -204,6 +203,9 @@ class Metadata(object):
             keyspace_meta.functions = old_keyspace_meta.functions
             keyspace_meta.aggregates = old_keyspace_meta.aggregates
             keyspace_meta.views = old_keyspace_meta.views
+        # Publish only once the preserved maps are attached, so no one sees empty ones.
+        self.keyspaces[ks_name] = keyspace_meta
+        if old_keyspace_meta:
             if (keyspace_meta.replication_strategy != old_keyspace_meta.replication_strategy or
                     keyspace_meta._consistency_mode != old_keyspace_meta._consistency_mode):
                 self._keyspace_updated(ks_name)
@@ -1041,8 +1043,8 @@ class KeyspaceMetadata(object):
         user_type_strings.append(user_type.export_as_string())
 
     def _add_table_metadata(self, table_metadata):
-        # Don't cache self.tables/self.indexes in locals: a concurrent keyspace
-        # refresh may swap in its preserved maps, and every write must reach those.
+        # Resolve self.tables/self.indexes at each write rather than caching them,
+        # so writes always reach the maps this keyspace holds at that moment.
         name = table_metadata.name
         indexes = table_metadata.indexes
         old_meta = self.tables.get(name)
@@ -1060,15 +1062,21 @@ class KeyspaceMetadata(object):
             if old_indexes:
                 for index_name in old_indexes:
                     if index_name not in indexes:
-                        self.indexes.pop(index_name, None)
+                        self._drop_index_of(index_name, name)
 
         self.tables[name] = table_metadata
+
+    def _drop_index_of(self, index_name, table_name):
+        # Index names are per keyspace: the name may since belong to another table's index.
+        index = self.indexes.get(index_name)
+        if index is not None and index.table_name == table_name:
+            self.indexes.pop(index_name, None)
 
     def _drop_table_metadata(self, table_name):
         table_meta = self.tables.pop(table_name, None)
         if table_meta:
             for index_name in table_meta.indexes:
-                self.indexes.pop(index_name, None)
+                self._drop_index_of(index_name, table_name)
             for view_name in table_meta.views:
                 self.views.pop(view_name, None)
             return
