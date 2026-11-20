@@ -40,18 +40,7 @@ export CASS_DRIVER_NO_CYTHON=1
 # this setup fails, there's no point running any tests, so bail out
 # immediately -- failure tolerance below is scoped to test/report commands
 # only.
-uv run python -c "
-import importlib.machinery, pathlib
-package = pathlib.Path('cassandra')
-candidates = {'cluster', 'concurrent', 'connection', 'cqltypes', 'metadata',
-              'pool', 'protocol', 'query', 'util', 'shard_info'}
-candidates.update(path.stem for path in package.glob('*.pyx'))
-for name in candidates:
-    for suffix in importlib.machinery.EXTENSION_SUFFIXES:
-        path = package / (name + suffix)
-        if path.exists():
-            path.unlink()
-" || exit 1
+uv run python scripts/clean_cython_extensions.py || exit 1
 uv sync --reinstall-package scylla-driver || exit 1
 
 status=0
