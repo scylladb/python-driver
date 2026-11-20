@@ -555,3 +555,35 @@ class FrameByteIdentityTest(unittest.TestCase):
 
     def test_frames_with_default_features(self):
         self._assert_frames(ProtocolFeatures())
+
+
+class PurePythonRowDecodeTest(unittest.TestCase):
+
+    def test_decode_error_not_swallowed_when_retry_succeeds(self):
+        from cassandra.protocol import write_int, write_short, write_string, write_value
+        f = io.BytesIO()
+        write_int(f, ResultMessage._FLAGS_GLOBAL_TABLES_SPEC)
+        write_int(f, 1)
+        write_string(f, 'ks')
+        write_string(f, 'tbl')
+        write_string(f, 'k')
+        write_short(f, 0x0009)  # int
+        write_int(f, 1)
+        write_value(f, b'\x00\x00\x00\x01')
+        f.seek(0)
+
+        calls = []
+
+        def decrypt(col_desc, val):
+            # Fails only on the first decode, so the per-column retry succeeds.
+            calls.append(val)
+            if len(calls) == 1:
+                raise RuntimeError('boom')
+            return val
+
+        policy = Mock(decrypt=decrypt)
+        policy.contains_column.return_value = True
+        from cassandra.cqltypes import Int32Type
+        policy.column_type.return_value = Int32Type
+        with self.assertRaisesRegex(RuntimeError, 'boom'):
+            ResultMessage(RESULT_KIND_ROWS).recv_results_rows(f, 4, {}, None, policy)
