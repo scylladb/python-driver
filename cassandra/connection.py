@@ -2481,13 +2481,23 @@ class Timer(object):
 
     def cancel(self):
         self.canceled = True
+        # The callback is often a bound method of the object that holds this
+        # timer (e.g., ResponseFuture._on_timeout), so keeping it after the
+        # timer is canceled leaves that object in a reference cycle, which
+        # only Python's cyclic garbage collector can free. Drop it, so a
+        # finished request is freed as soon as it is no longer used.
+        self.callback = None
 
     def finish(self, time_now):
         if self.canceled:
             return True
 
         if time_now >= self.end:
-            self.callback()
+            # cancel() may run concurrently on another thread and clear
+            # self.callback after we checked self.canceled above.
+            callback = self.callback
+            if callback is not None:
+                callback()
             return True
 
         return False
