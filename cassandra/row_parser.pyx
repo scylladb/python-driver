@@ -48,6 +48,8 @@ def make_recv_results_rows(ColumnParser colparser):
             rowcount = read_int(reader)
             for i in range(rowcount):
                 rowparser.unpack_row(reader, desc)
+            # The fallback only adds column context; never return without rows.
+            raise
         finally:
             # f.read() used to leave f at EOF, also on errors; keep that contract
             f.seek(0, 2)

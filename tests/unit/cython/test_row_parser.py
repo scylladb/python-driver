@@ -95,3 +95,19 @@ class RowParserTest(unittest.TestCase):
                 else:
                     msg_cls(RESULT_KIND_ROWS).recv_results_rows(f, 4, {}, None, None)
                 self.assertEqual(f.tell(), len(body))
+
+    @cythontest
+    def test_parser_error_not_swallowed_when_fallback_succeeds(self):
+        from cassandra.obj_parser import ListParser
+        from cassandra.row_parser import make_recv_results_rows
+
+        class FailingParser(ListParser):
+            def parse_rows(self, reader, desc):
+                raise RuntimeError('boom')
+
+        recv = make_recv_results_rows(FailingParser())
+        f = io.BytesIO(rows_body([(b'\x00\x00\x00\x01', b'one')]))
+        f.seek(4)
+        msg_cls = ProtocolHandler.message_types_by_opcode[ResultMessage.opcode]
+        with self.assertRaisesRegex(RuntimeError, 'boom'):
+            recv(msg_cls(RESULT_KIND_ROWS), f, 4, {}, None, None)
