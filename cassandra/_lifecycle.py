@@ -20,7 +20,7 @@ explicitly for internal use; no names are exported by wildcard imports.
 
 from collections import deque
 from concurrent.futures import Future
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from functools import partial, wraps
 import logging
 from threading import local, RLock
@@ -28,6 +28,7 @@ import weakref
 from weakref import WeakValueDictionary
 
 from cassandra import DriverException
+from cassandra.policies import HostDistance
 
 __all__ = ()
 
@@ -84,6 +85,36 @@ class PoolOwnershipReservation:
             return True
         return session._owns_pool_generation_locked(
             self.host, self.generation, self.expected_pool, self.endpoint)
+
+
+class PoolRecoveryReservation(PoolOwnershipReservation):
+    """Keep a recovered ADD slot current through readiness publication."""
+
+    def __init__(self, session, pool, generation, intent):
+        host = pool.host if pool is not None else intent.host
+        endpoint = pool.endpoint if pool is not None else host.endpoint
+        super().__init__(session, host, endpoint, generation, pool)
+        self.pool = pool
+        self.intent = intent
+        self.pool_lifecycle_token = intent.pool_lifecycle_token
+
+    def owns_locked(self):
+        session = self._session_ref()
+        intent = (session._pool_intents.get(self.host)
+                  if session is not None else None)
+        if (session is None or intent is None or
+                intent.pool_lifecycle_token is not self.pool_lifecycle_token):
+            return False
+        if self.pool is None:
+            return (not self.retired and
+                    not session.cluster.is_shutdown and
+                    intent.distance == HostDistance.IGNORED and
+                    intent._completion is self.intent._completion and
+                    session._owns_pool_generation_locked(
+                        self.host, self.generation, None, self.endpoint))
+        return (self.pool._session_ref() is session and
+                not self.pool._ownership.retired and
+                super().owns_locked(self.pool))
 
 
 class PoolFailureReservation:
@@ -284,6 +315,7 @@ class LifecycleCoordinator:
                 return False
             host._currently_handling_node_up = True
             host._addition_token = None
+            host._ready_addition_token = None
             # UP owns recovery now; old scheduled ADD work must not replay
             # callbacks while UP is pending or after it completes.
             host._endpoint_add_retry_pending = False
@@ -530,6 +562,7 @@ class LifecycleCoordinator:
         with host.lock:
             token = object()
             host._addition_token = token
+            host._ready_addition_token = None
             return token
 
     def addition_is_current(self, host, token):
@@ -582,23 +615,59 @@ class LifecycleCoordinator:
             return True
 
     def mark_ready(self, host, set_up=True, readiness_generation=None,
-                   addition_token=None, advance_health=True):
+                   addition_token=None, advance_health=True,
+                   pool_recoveries=()):
         if (not self.readiness_is_current(host, readiness_generation) or
                 (addition_token is not None and
                  not self.addition_is_current(host, addition_token))):
             return False
-        if set_up:
-            host.conviction_policy.reset()
-        with host.lock:
+
+        def guard_readiness(guards):
+            sessions = [recovery._session_ref()
+                        for recovery in pool_recoveries]
+            if any(session is None for session in sessions):
+                return False
+            if any(recovery.host is not host or
+                   session.cluster._lifecycle is not self
+                   for recovery, session in zip(pool_recoveries, sessions)):
+                return False
+            # Match pool publication: membership, Session, Host, metadata.
+            # Take every lock of one kind before advancing to the next kind.
+            pools = {recovery.pool for recovery in pool_recoveries
+                     if recovery.pool is not None}
+            for pool in sorted(pools, key=id):
+                guards.enter_context(pool._membership_lock)
+            for session in sorted(set(sessions), key=id):
+                guards.enter_context(session._lock)
+            guards.enter_context(host.lock)
+            if pool_recoveries:
+                owns_host = guards.enter_context(
+                    self._cluster.metadata._host_ownership_guard(host))
+                if not owns_host:
+                    return False
             if (not self.readiness_is_current(host, readiness_generation) or
                     (addition_token is not None and
-                     not self.addition_is_current(host, addition_token))):
+                     not self.addition_is_current(host, addition_token)) or
+                    not all(recovery.owns_locked()
+                            for recovery in pool_recoveries)):
+                return False
+            return True
+
+        if set_up and pool_recoveries:
+            with ExitStack() as guards:
+                if not guard_readiness(guards):
+                    return False
+        if set_up:
+            host.conviction_policy.reset()
+        with ExitStack() as guards:
+            if not guard_readiness(guards):
                 return False
             if set_up:
                 host.is_up = True
                 if advance_health:
                     host._health_generation += 1
             host._addition_token = None
+            host._ready_addition_token = addition_token
             host._endpoint_add_retry_pending = False
             host._lifecycle_pending = False
             host._pending_host_addition = False
