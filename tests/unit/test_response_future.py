@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import gc
 import time
 import unittest
 import uuid
+import weakref
 
 from collections import deque
 from io import BytesIO
@@ -27,17 +29,18 @@ from cassandra._lifecycle import LifecycleCoordinator
 from cassandra.metadata import Metadata
 from cassandra.cqltypes import Int32Type, ListType
 from cassandra.cluster import (Cluster, Session, ResponseFuture, NoHostAvailable, ProtocolVersion,
-                               ControlConnection, ControlConnectionQueryFallback, _NOT_SET)
+                               ControlConnection, ControlConnectionQueryFallback, _NOT_SET,
+                               _SessionKeyspaceChange)
 from cassandra.connection import (Connection, ConnectionBusy, ConnectionException,
                                   ConnectionSendError, ConnectionShutdown,
-                                  DefaultEndPoint)
+                                  DefaultEndPoint, _Frame)
 from cassandra.protocol import (ReadTimeoutErrorMessage, WriteTimeoutErrorMessage,
                                 UnavailableErrorMessage, ResultMessage, QueryMessage,
                                 ExecuteMessage, BatchMessage, ColumnMetadata,
                                 OverloadedErrorMessage, IsBootstrappingErrorMessage,
                                 PreparedQueryNotFound, PrepareMessage, ServerError,
                                 InvalidRequestException,
-                                RESULT_KIND_ROWS, RESULT_KIND_SET_KEYSPACE,
+                                RESULT_KIND_ROWS, RESULT_KIND_SET_KEYSPACE, RESULT_KIND_VOID,
                                 RESULT_KIND_SCHEMA_CHANGE, RESULT_KIND_PREPARED,
                                 ProtocolHandler)
 from cassandra.policies import (RetryPolicy, ExponentialBackoffRetryPolicy,
@@ -409,7 +412,7 @@ class ResponseFutureTests(unittest.TestCase):
             connection, stream_was_orphaned=True)
         assert connection.orphaned_request_ids == {1}
 
-    def make_timeout_before_send_future(self):
+    def make_timeout_claimed_future(self):
         host = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
         session = self.make_owned_pool_session(host)
         pool, connection = self.make_owned_pool(host)
@@ -425,11 +428,11 @@ class ResponseFutureTests(unittest.TestCase):
         with pytest.raises(OperationTimedOut):
             rf.result()
 
-    def test_timeout_before_send_stops_the_send(self):
+    def test_timeout_claimed_stops_the_send(self):
         # Without the GIL the timer of a tiny timeout can fire before
         # _query() sets _connection. The request must then time out instead
         # of being sent and succeeding after its deadline.
-        rf, pool, connection = self.make_timeout_before_send_future()
+        rf, pool, connection = self.make_timeout_claimed_future()
         create_timer = rf.session.cluster.connection_class.create_timer
         create_timer.reset_mock()
 
@@ -449,7 +452,7 @@ class ResponseFutureTests(unittest.TestCase):
         self.assert_timed_out(rf)
 
     def test_rescheduled_timeout_without_connection_times_out(self):
-        rf, _pool, connection = self.make_timeout_before_send_future()
+        rf, _pool, connection = self.make_timeout_claimed_future()
         create_timer = rf.session.cluster.connection_class.create_timer
         create_timer.reset_mock()
 
@@ -467,10 +470,10 @@ class ResponseFutureTests(unittest.TestCase):
         # flag set and finds a connection, it orphans the request. With
         # _send_admission_lock a pooled send cannot set _connection after the
         # flag, so the state is built by hand: send first, then set the flag.
-        rf, pool, connection = self.make_timeout_before_send_future()
+        rf, pool, connection = self.make_timeout_claimed_future()
         host = next(iter(rf.session._pools))
         assert rf._query(host) == 1
-        rf._timeout_before_send = True
+        rf._timeout_claimed = True
         rf._on_timeout(_attempts=1)
         assert connection.orphaned_request_ids == {1}
         pool.return_connection.assert_called_once_with(
@@ -485,7 +488,7 @@ class ResponseFutureTests(unittest.TestCase):
         # admission ends, so it sees the connection and orphans the request
         # instead of setting the flag. If the timer side skipped the lock,
         # it would never reach AdmissionLock and the wait below would fail.
-        rf, pool, connection = self.make_timeout_before_send_future()
+        rf, pool, connection = self.make_timeout_claimed_future()
         host = next(iter(rf.session._pools))
         timer_entering = Event()
         timeout_done = Event()
@@ -523,18 +526,18 @@ class ResponseFutureTests(unittest.TestCase):
         assert request_id == 1
         assert timeout_done.wait(1)
         timeout_threads[0].join(1)
-        assert rf._timeout_before_send is False
+        assert rf._timeout_claimed is False
         connection.send_msg.assert_called_once()
         assert connection.orphaned_request_ids == {1}
         pool.return_connection.assert_called_once_with(
             connection, stream_was_orphaned=True)
         self.assert_timed_out(rf)
 
-    def test_timeout_before_send_with_exhausted_plan(self):
+    def test_timeout_claimed_with_exhausted_plan(self):
         # An empty (or exhausted) query plan must still report the timeout,
         # not NoHostAvailable, and must not fall back to the control
         # connection after the deadline.
-        rf, pool, _connection = self.make_timeout_before_send_future()
+        rf, pool, _connection = self.make_timeout_claimed_future()
         rf.query_plan = iter([])
         rf._on_timeout()
         with patch.object(rf, '_fallback_to_control_connection') as fallback:
@@ -556,12 +559,9 @@ class ResponseFutureTests(unittest.TestCase):
     def assert_fallback_not_sent(self, rf, control_connection, connection):
         connection.send_msg.assert_not_called()
         connection.defunct.assert_not_called()
-        # The borrowed stream went back and the session was not bound.
+        # The borrowed stream went back without sending a request.
         assert connection.in_flight == 0
         assert list(connection.request_ids) == [7]
-        assert control_connection._application_requests_in_flight == 0
-        assert not control_connection._application_sessions
-        assert not control_connection._application_internal_keyspace_changes
         assert rf._connection is None
         self.assert_timed_out(rf)
 
@@ -576,7 +576,7 @@ class ResponseFutureTests(unittest.TestCase):
 
         def timer_fires_then_fallback():
             rf._on_timeout()
-            assert rf._timeout_before_send
+            assert rf._timeout_claimed
             return fallback()
 
         with patch.object(rf, '_fallback_to_control_connection',
@@ -625,9 +625,8 @@ class ResponseFutureTests(unittest.TestCase):
         self.assert_fallback_not_sent(rf, control_connection, connection)
 
     def test_timeout_during_fallback_use_before_admission(self):
-        # The user's own USE goes through the keyspace-change branch of the
-        # fallback. A timer that fires after the stream is borrowed must stop
-        # the send, end the keyspace change and keep the connection.
+        # Application USE is opaque. A timer that fires after its stream is
+        # borrowed must stop the send and keep the connection.
         session = self._make_fallback_session()
         connection = self.make_control_connection()
         control_connection = session.cluster.control_connection
@@ -650,7 +649,6 @@ class ResponseFutureTests(unittest.TestCase):
         with patch.object(rf, '_borrow_control_connection',
                           side_effect=borrow_then_timer_fires):
             assert rf.send_request() is True
-        assert control_connection._application_keyspace_change is None
         assert session.keyspace is None
         self.assert_fallback_not_sent(rf, control_connection, connection)
 
@@ -658,7 +656,7 @@ class ResponseFutureTests(unittest.TestCase):
         # Fallback disabled: the timer fires after the post-loop flag check,
         # while send_request() decides not to fall back. The request must
         # still time out instead of failing with NoHostAvailable.
-        rf, pool, _connection = self.make_timeout_before_send_future()
+        rf, pool, _connection = self.make_timeout_claimed_future()
         rf.query_plan = iter([])
         assert rf.session.cluster.allow_control_connection_query_fallback is \
             ControlConnectionQueryFallback.Disabled
@@ -666,7 +664,7 @@ class ResponseFutureTests(unittest.TestCase):
 
         def timer_fires_then_decline():
             rf._on_timeout()
-            assert rf._timeout_before_send
+            assert rf._timeout_claimed
             return fallback()
 
         with patch.object(rf, '_fallback_to_control_connection',
@@ -676,12 +674,12 @@ class ResponseFutureTests(unittest.TestCase):
         pool.borrow_connection.assert_not_called()
         self.assert_timed_out(rf)
 
-    def test_next_page_clears_timeout_before_send(self):
-        rf, _pool, connection = self.make_timeout_before_send_future()
-        rf._timeout_before_send = True
+    def test_next_page_clears_timeout_claimed(self):
+        rf, _pool, connection = self.make_timeout_claimed_future()
+        rf._timeout_claimed = True
         rf._paging_state = b'next'
         rf.start_fetching_next_page()
-        assert rf._timeout_before_send is False
+        assert rf._timeout_claimed is False
         connection.send_msg.assert_called_once()
 
     def make_basic_session(self):
@@ -722,6 +720,7 @@ class ResponseFutureTests(unittest.TestCase):
         connection.request_ids = deque()
         connection._requests = {}
         connection.orphaned_request_ids = set()
+        connection._sender_released_request_ids = set()
         connection.orphaned_threshold = 75
         connection.orphaned_threshold_reached = False
         connection.is_control_connection = True
@@ -1890,7 +1889,7 @@ class ResponseFutureTests(unittest.TestCase):
         with pytest.raises(NoHostAvailable):
             rf.result()
 
-    def test_control_connection_fallback_does_not_bind_without_connection(self):
+    def test_control_connection_fallback_without_connection(self):
         session = self.make_basic_session()
         session.cluster.allow_control_connection_query_fallback = \
             ControlConnectionQueryFallback.Fallback
@@ -1902,120 +1901,95 @@ class ResponseFutureTests(unittest.TestCase):
         rf = self.make_response_future(session)
         assert not rf.send_request()
 
-        assert not control_connection._application_sessions
-        assert control_connection._get_application_keyspace() is _NOT_SET
         with pytest.raises(NoHostAvailable):
             rf.result()
 
-    def test_control_connection_fallback_allows_sole_session_use(self):
-        for query_string in (
-                "USE newks",
-                "-- select another keyspace\nUSE newks",
-                "-- select another keyspace\rUSE newks",
-                "// select another keyspace\nUSE newks",
-                "/* select another keyspace */ USE newks",
-                b"USE newks",
-                b"-- select another keyspace\rUSE newks"):
+    def test_control_connection_fallback_keyspace_response_is_query_opaque(self):
+        for query_string in ('USE newks', '-- comment\rUSE newks',
+                             '/* comment */ USE newks', b'USE newks',
+                             'opaque application statement'):
             with self.subTest(query_string=query_string):
-                session = self.make_basic_session()
-                session.cluster.allow_control_connection_query_fallback = \
-                    ControlConnectionQueryFallback.Fallback
-                policy = session.cluster._default_load_balancing_policy
-                policy.make_query_plan.return_value = [self.host1]
-                session._pools = {}
-
+                session = self._make_fallback_session()
                 connection = self.make_control_connection()
                 session.cluster.control_connection._connection = connection
-                session._set_keyspace_for_all_pools.side_effect = \
-                    lambda keyspace, callback: callback({})
 
+                def set_keyspace(keyspace, callback, **kwargs):
+                    session.keyspace = keyspace
+                    callback({})
+
+                session._set_keyspace_for_all_pools.side_effect = set_keyspace
                 query = SimpleStatement(query_string)
-                rf = ResponseFuture(
-                    session,
-                    QueryMessage(query=query.query_string, consistency_level=ConsistencyLevel.ONE),
-                    query, 1)
+                rf = ResponseFuture(session, QueryMessage(query=query_string,
+                                    consistency_level=ConsistencyLevel.ONE), query, 1)
                 assert rf.send_request()
-                control_connection = session.cluster.control_connection
                 assert connection.send_msg.call_count == 1
-                assert control_connection._application_keyspace_change is not None
                 connection.send_msg.call_args.kwargs['cb'](
                     Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
                          new_keyspace='newks'))
                 assert session.keyspace == 'newks'
                 assert connection.keyspace == 'newks'
-                assert control_connection._get_application_keyspace() == 'newks'
-                assert control_connection._application_keyspace_change is None
+                assert rf._event.wait(1), "future was not completed"
                 assert rf.result() is not None
 
-    def test_control_connection_fallback_use_rejects_other_session(self):
+    def test_control_connection_fallback_use_allows_other_session(self):
         session = self._make_fallback_session(keyspace='ks1')
-        control_connection = session.cluster.control_connection
         connection = self.make_control_connection()
-        control_connection._connection = connection
-        assert control_connection._attach_application_session('ks1', session) is None
-
+        connection.keyspace = 'ks1'
+        session.cluster.control_connection._connection = connection
         other = self._make_fallback_session(cluster=session.cluster, keyspace='ks1')
         query = SimpleStatement('USE ks2')
         rf = ResponseFuture(other, QueryMessage(query='USE ks2',
                             consistency_level=ConsistencyLevel.ONE), query, 1)
         assert rf.send_request()
-        with pytest.raises(InvalidRequest, match='another Session'):
-            rf.result()
-        connection.send_msg.assert_not_called()
+        assert connection.send_msg.call_args.args[0] is rf.message
 
-    def test_control_connection_fallback_use_blocks_second_use(self):
+        def set_keyspace(keyspace, callback, **kwargs):
+            other.keyspace = keyspace
+            callback({})
+
+        other._set_keyspace_for_all_pools.side_effect = set_keyspace
+        connection.send_msg.call_args.kwargs['cb'](
+            Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                 new_keyspace='ks2'))
+        assert rf._event.wait(1)
+        assert rf.result() is not None
+        assert other.keyspace == 'ks2'
+        assert session.keyspace == 'ks1'
+
+    def test_control_connection_fallback_allows_overlapping_use(self):
         session = self._make_fallback_session()
         connection = self.make_control_connection()
+        connection.get_request_id.side_effect = [7, 8]
         session.cluster.control_connection._connection = connection
-        query = SimpleStatement('USE ks1')
-        first = ResponseFuture(session, QueryMessage(query='USE ks1',
-                               consistency_level=ConsistencyLevel.ONE), query, 1)
-        second = ResponseFuture(session, QueryMessage(query='USE ks2',
+        futures = []
+        for query_string in ('USE ks1', 'USE ks2'):
+            query = SimpleStatement(query_string)
+            rf = ResponseFuture(session, QueryMessage(query=query_string,
                                 consistency_level=ConsistencyLevel.ONE), query, 1)
-        assert first.send_request()
-        assert second.send_request()
-        with pytest.raises(InvalidRequest, match='already in progress'):
-            second.result()
-        assert connection.send_msg.call_count == 1
+            assert rf.send_request()
+            assert rf._final_exception is None
+            futures.append(rf)
+        assert [call.args[0] for call in connection.send_msg.call_args_list] == \
+            [rf.message for rf in futures]
 
-    def test_control_connection_fallback_use_waits_for_initial_keyspace_setup(self):
+    def test_control_connection_fallback_setups_do_not_serialize_requests(self):
         session = self._make_fallback_session(keyspace='ks1')
-        def submit(callback, *args):
-            callback(*args)
-            return object()
-
-        session.submit.side_effect = submit
         connection = self.make_control_connection()
-        connection.get_request_id.side_effect = [7, 8, 9, 10, 11]
+        connection.get_request_id.side_effect = [7, 8, 9]
         session.cluster.control_connection._connection = connection
         first = self.make_response_future(session)
         assert first.send_request()
-        assert connection.send_msg.call_args.args[0].query == 'USE ks1'
-
         query = SimpleStatement('USE ks2')
         changing = ResponseFuture(session, QueryMessage(query='USE ks2',
                                   consistency_level=ConsistencyLevel.ONE), query, 1)
         assert changing.send_request()
-        assert changing._final_exception is None
-        assert connection.send_msg.call_count == 1
-
-        # Another ordinary request still performs its own keyspace setup;
-        # it must not run unqualified before the first USE completes.
-        next_request = self.make_response_future(session)
-        assert next_request.send_request()
-        assert connection.send_msg.call_args_list[1].args[0].query == 'USE ks1'
-        first_use_callback = connection.send_msg.call_args_list[0].kwargs['cb']
-        second_use_callback = connection.send_msg.call_args_list[1].kwargs['cb']
-        first_use_callback(Mock(spec=ResultMessage,
-                                kind=RESULT_KIND_SET_KEYSPACE,
-                                new_keyspace='ks1'))
-        assert not any(call.args[0].query == 'USE ks2'
-                       for call in connection.send_msg.call_args_list)
-        second_use_callback(Mock(spec=ResultMessage,
-                                 kind=RESULT_KIND_SET_KEYSPACE,
-                                 new_keyspace='ks1'))
-        assert any(call.args[0].query == 'USE ks2'
-                   for call in connection.send_msg.call_args_list)
+        assert [call.args[0].query for call in connection.send_msg.call_args_list] == \
+            ['USE ks1', 'USE ks1']
+        connection.send_msg.call_args_list[1].kwargs['cb'](
+            Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                 new_keyspace='ks1'))
+        assert connection.send_msg.call_args_list[2].args[0] is changing.message
+        assert first._final_exception is None
 
     def test_same_keyspace_sessions_share_pending_initial_setup(self):
         session1 = self._make_fallback_session(keyspace='ks1')
@@ -2039,8 +2013,12 @@ class ResponseFutureTests(unittest.TestCase):
         connection.keyspace = 'ks1'
         connection.get_request_id.side_effect = [7, 8]
         session.cluster.control_connection._connection = connection
-        session._set_keyspace_for_all_pools.side_effect = \
-            lambda keyspace, callback: callback({})
+
+        def set_keyspace(keyspace, callback, **kwargs):
+            session.keyspace = keyspace
+            callback({})
+
+        session._set_keyspace_for_all_pools.side_effect = set_keyspace
 
         query = SimpleStatement('USE ks2')
         first = ResponseFuture(session, QueryMessage(query='USE ks2',
@@ -2064,35 +2042,31 @@ class ResponseFutureTests(unittest.TestCase):
         assert next_futures[0]._final_exception is None
         assert connection.send_msg.call_count == 2
 
-    def test_control_connection_fallback_use_blocks_new_session(self):
+    def test_control_connection_fallback_pending_use_allows_queries(self):
         session = self._make_fallback_session(keyspace='ks1')
         connection = self.make_control_connection()
         connection.keyspace = 'ks1'
-        connection.get_request_id.side_effect = [7, 8]
+        connection.get_request_id.side_effect = [7, 8, 9]
         session.cluster.control_connection._connection = connection
         query = SimpleStatement('USE ks2')
         changing = ResponseFuture(session, QueryMessage(query='USE ks2',
                                   consistency_level=ConsistencyLevel.ONE), query, 1)
-        assert changing.send_request()
-
-        same_session_query = self.make_response_future(session)
-        assert same_session_query.send_request()
-        assert connection.send_msg.call_args_list[1].args[0] is same_session_query.message
-
         other = self._make_fallback_session(cluster=session.cluster, keyspace='ks1')
-        other_query = self.make_response_future(other)
-        assert other_query.send_request()
-        with pytest.raises(InvalidRequest, match='in progress'):
-            other_query.result()
-        assert connection.send_msg.call_count == 2
+        futures = [changing, self.make_response_future(session),
+                   self.make_response_future(other)]
+        for rf in futures:
+            assert rf.send_request()
+            assert rf._final_exception is None
+        assert [call.args[0] for call in connection.send_msg.call_args_list] == \
+            [rf.message for rf in futures]
 
-    def test_control_connection_fallback_rejected_use_keeps_old_binding(self):
+    def test_control_connection_fallback_rejected_use_keeps_old_keyspace(self):
         session = self._make_fallback_session(keyspace='ks1')
         control_connection = session.cluster.control_connection
         connection = self.make_control_connection()
         connection.keyspace = 'ks1'
+        connection.get_request_id.side_effect = [7, 8]
         control_connection._connection = connection
-        assert control_connection._attach_application_session('ks1', session) is None
         query = SimpleStatement('USE missing_ks')
         rf = ResponseFuture(session, QueryMessage(query='USE missing_ks',
                             consistency_level=ConsistencyLevel.ONE), query, 1)
@@ -2103,33 +2077,30 @@ class ResponseFutureTests(unittest.TestCase):
             rf.result()
         assert session.keyspace == 'ks1'
         assert connection.keyspace == 'ks1'
-        assert control_connection._get_application_keyspace() == 'ks1'
-        assert control_connection._application_keyspace_change is None
+        next_query = self.make_response_future(session)
+        assert next_query.send_request()
+        assert connection.send_msg.call_args.args[0] is next_query.message
 
-    def test_control_connection_fallback_unexpected_use_result_retires_connection(self):
-        session = self._make_fallback_session(keyspace='ks1')
-        control_connection = session.cluster.control_connection
+    def test_control_connection_fallback_accepts_server_result_for_opaque_use(self):
+        session = self._make_fallback_session()
         connection = self.make_control_connection()
-        connection.keyspace = 'ks1'
-        control_connection._connection = connection
-        assert control_connection._attach_application_session('ks1', session) is None
+        session.cluster.control_connection._connection = connection
         query = SimpleStatement('USE ks2')
         rf = ResponseFuture(session, QueryMessage(query='USE ks2',
                             consistency_level=ConsistencyLevel.ONE), query, 1)
         assert rf.send_request()
-        connection.send_msg.call_args.kwargs['cb'](ResultMessage(RESULT_KIND_ROWS))
-        with pytest.raises(ConnectionException, match='Unexpected result'):
-            rf.result()
-        connection.defunct.assert_called_once()
-        assert control_connection._get_application_keyspace() == 'ks1'
+        connection.send_msg.call_args.kwargs['cb'](
+            self.make_mock_response(['value'], [('one',)]))
+        assert rf._event.wait(1)
+        assert rf.result().one() == (['value'], [('one',)])
+        connection.defunct.assert_not_called()
 
-    def test_control_connection_fallback_timed_out_use_retires_connection(self):
+    def test_control_connection_fallback_timed_out_use_allows_next_query(self):
         session = self._make_fallback_session(keyspace='ks1')
-        control_connection = session.cluster.control_connection
         connection = self.make_control_connection()
         connection.keyspace = 'ks1'
-        control_connection._connection = connection
-        assert control_connection._attach_application_session('ks1', session) is None
+        connection.get_request_id.side_effect = [7, 8]
+        session.cluster.control_connection._connection = connection
 
         def send_msg(message, request_id, cb, **kwargs):
             connection._requests[request_id] = \
@@ -2144,9 +2115,16 @@ class ResponseFutureTests(unittest.TestCase):
         rf._on_timeout()
         with pytest.raises(OperationTimedOut):
             rf.result()
-        connection.defunct.assert_called_once()
-        assert control_connection._application_keyspace_change is None
-        assert control_connection._get_application_keyspace() == 'ks1'
+        connection.defunct.assert_not_called()
+        next_query = self.make_response_future(session)
+        assert next_query.send_request()
+        assert connection.send_msg.call_args.args[0] is next_query.message
+        late_cb, _, _ = connection._requests.pop(7)
+        late_cb(Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                     new_keyspace='ks2'))
+        assert connection.keyspace == 'ks2'
+        assert session.keyspace == 'ks1'
+        assert not rf._control_connection_requests
 
     def test_control_connection_fallback_busy_use_send_keeps_connection(self):
         session = self._make_fallback_session(keyspace='ks1')
@@ -2155,7 +2133,6 @@ class ResponseFutureTests(unittest.TestCase):
         connection.keyspace = 'ks1'
         connection.send_msg.side_effect = ConnectionBusy('busy')
         control_connection._connection = connection
-        assert control_connection._attach_application_session('ks1', session) is None
 
         query = SimpleStatement('USE ks2')
         rf = ResponseFuture(session, QueryMessage(query='USE ks2',
@@ -2164,17 +2141,15 @@ class ResponseFutureTests(unittest.TestCase):
         with pytest.raises(NoHostAvailable):
             rf.result()
         connection.defunct.assert_not_called()
-        assert control_connection._application_keyspace_change is None
-        assert control_connection._get_application_keyspace() == 'ks1'
 
     def test_control_connection_fallback_unknown_use_send_retires_connection(self):
         session = self._make_fallback_session(keyspace='ks1')
         control_connection = session.cluster.control_connection
         connection = self.make_control_connection()
         connection.keyspace = 'ks1'
-        connection.send_msg.side_effect = RuntimeError('unknown write state')
+        connection.send_msg.side_effect = ConnectionSendError(
+            'unknown write state', connection.endpoint)
         control_connection._connection = connection
-        assert control_connection._attach_application_session('ks1', session) is None
 
         query = SimpleStatement('USE ks2')
         rf = ResponseFuture(session, QueryMessage(query='USE ks2',
@@ -2183,15 +2158,13 @@ class ResponseFutureTests(unittest.TestCase):
         with pytest.raises(NoHostAvailable):
             rf.result()
         connection.defunct.assert_called_once()
-        assert control_connection._application_keyspace_change is None
 
-    def test_late_use_reply_releases_keyspace_change_after_timeout(self):
+    def test_late_use_reply_after_timeout_updates_only_connection(self):
         session = self._make_fallback_session(keyspace='ks1')
         control_connection = session.cluster.control_connection
         connection = self.make_control_connection()
         connection.keyspace = 'ks1'
         control_connection._connection = connection
-        assert control_connection._attach_application_session('ks1', session) is None
 
         query = SimpleStatement('USE ks2')
         rf = ResponseFuture(session, QueryMessage(query='USE ks2',
@@ -2202,10 +2175,68 @@ class ResponseFutureTests(unittest.TestCase):
         rf._on_timeout()
         with pytest.raises(OperationTimedOut):
             rf.result()
+        session.keyspace = 'newer_ks'
         connection.send_msg.call_args.kwargs['cb'](
             Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
                  new_keyspace='ks2'))
-        assert control_connection._application_keyspace_change is None
+        assert connection.keyspace == 'ks2'
+        assert session.keyspace == 'newer_ks'
+        session._set_keyspace_for_all_pools.assert_not_called()
+        assert connection.in_flight == 0
+
+    def test_timeout_after_response_admission_preserves_newer_default(self):
+        session = self._make_fallback_session(keyspace='ks1')
+        session._lock = RLock()
+        session._set_keyspace_for_all_pools.side_effect = (
+            lambda *args, **kwargs: Session._set_keyspace_for_all_pools(
+                session, *args, **kwargs))
+        connection = self.make_control_connection()
+        connection.keyspace = 'ks1'
+        connection.get_request_id.side_effect = [7, 8]
+        session.cluster.control_connection._connection = connection
+        query = SimpleStatement('USE ks2')
+        rf = ResponseFuture(session, QueryMessage(
+            query=query.query_string, consistency_level=ConsistencyLevel.ONE), query, 1)
+        assert rf.send_request()
+        callback = connection.send_msg.call_args.kwargs['cb']
+        admission_lock = rf._send_admission_lock
+        newer_changes = []
+
+        class ResponseAdmissionLock:
+            response_admitted = False
+
+            def __enter__(self):
+                admission_lock.acquire()
+
+            def __exit__(self, *args):
+                admission_lock.release()
+                if not self.response_admitted:
+                    self.response_admitted = True
+                    # Timeout wins after the first response check. Complete a
+                    # newer change before the old response starts propagation.
+                    rf._on_timeout()
+                    query = _SessionKeyspaceChange('USE newer_ks')
+                    newer = ResponseFuture(session, QueryMessage(
+                        query=query.query_string,
+                        consistency_level=ConsistencyLevel.ONE), query, 1)
+                    newer_changes.append(newer)
+                    newer.send_request()
+                    connection.send_msg.call_args.kwargs['cb'](Mock(
+                        spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                        new_keyspace='newer_ks'))
+
+        rf._send_admission_lock = ResponseAdmissionLock()
+        callback(Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                      new_keyspace='ks2'))
+        assert len(newer_changes) == 1
+        newer = newer_changes[0]
+        assert newer._event.wait(1), "newer change did not complete"
+        newer.result()
+        assert rf._event.wait(1), "old future did not time out"
+        assert session.keyspace == 'newer_ks'
+        assert connection.keyspace == 'newer_ks'
+        with pytest.raises(OperationTimedOut):
+            rf.result()
 
     def test_control_connection_fallback_accepts_stream_id_zero(self):
         session = self.make_basic_session()
@@ -2225,7 +2256,7 @@ class ResponseFutureTests(unittest.TestCase):
         assert rf._final_exception is None
         assert connection.send_msg.call_args[0][0].query == 'USE ks'
 
-    def test_control_connection_fallback_binds_first_session_keyspace(self):
+    def test_control_connection_fallback_initializes_session_keyspace(self):
         session1 = self.make_basic_session()
         session1.cluster.allow_control_connection_query_fallback = ControlConnectionQueryFallback.SkipPoolCreation
         session1.cluster._default_load_balancing_policy.make_query_plan.return_value = []
@@ -2266,7 +2297,6 @@ class ResponseFutureTests(unittest.TestCase):
         assert rf1.result().one() == (['value'], [('one',)])
         assert rf2.result().one() == (['value'], [('two',)])
         assert connection.keyspace == 'ks1'
-        assert session1.cluster.control_connection._get_application_keyspace() == 'ks1'
 
     def test_control_connection_fallback_empty_keyspace_behaves_as_unset(self):
         session1 = self._make_fallback_session(keyspace='')
@@ -2286,87 +2316,46 @@ class ResponseFutureTests(unittest.TestCase):
         assert connection.send_msg.call_args_list[0][0][0] is rf1.message
         assert connection.send_msg.call_args_list[1][0][0] is rf2.message
         assert connection.keyspace is None
-        assert session1.cluster.control_connection._get_application_keyspace() is None
 
-    def test_control_connection_fallback_rejects_different_session_keyspace(self):
+    def test_control_connection_fallback_allows_different_session_defaults(self):
         for first_keyspace, second_keyspace in (
                 ('ks1', 'ks2'), ('ks1', None), (None, 'ks1')):
             with self.subTest(first_keyspace=first_keyspace,
                               second_keyspace=second_keyspace):
-                session1 = self.make_basic_session()
-                session1.cluster.allow_control_connection_query_fallback = \
-                    ControlConnectionQueryFallback.SkipPoolCreation
-                session1.cluster._default_load_balancing_policy.make_query_plan.return_value = []
-                session1._pools = {}
-                session1.keyspace = first_keyspace
-
-                session2 = self.make_basic_session()
-                session2.cluster = session1.cluster
-                session2._pools = {}
-                session2.keyspace = second_keyspace
-
+                first = self._make_fallback_session(keyspace=first_keyspace)
+                second = self._make_fallback_session(
+                    cluster=first.cluster, keyspace=second_keyspace)
                 connection = self.make_control_connection()
-                session1.cluster.control_connection._connection = connection
-                assert session1.cluster.control_connection._attach_application_session(
-                    first_keyspace, session1) is None
+                connection.keyspace = first_keyspace
+                connection.get_request_id.side_effect = [7, 8]
+                first.cluster.control_connection._connection = connection
+                first_rf = self.make_response_future(first)
+                second_rf = self.make_response_future(second)
+                assert first_rf.send_request()
+                assert second_rf.send_request()
+                assert first_rf._final_exception is None
+                assert second_rf._final_exception is None
+                assert connection.send_msg.call_count == 2
+                expected = 'USE ' + second_keyspace if second_keyspace else None
+                if expected:
+                    assert connection.send_msg.call_args.args[0].query == expected
+                else:
+                    assert connection.send_msg.call_args.args[0] is second_rf.message
 
-                rf2 = self.make_response_future(session2)
-                assert rf2.send_request()
-
-                connection.send_msg.assert_not_called()
-                assert rf2._req_id is None
-                with pytest.raises(InvalidRequest, match='already attached'):
-                    rf2.result()
-
-    def test_control_connection_fallback_rebinds_same_session_new_keyspace(self):
-        session1 = self.make_basic_session()
-        control_connection = session1.cluster.control_connection
-        connection = self.make_control_connection()
-        control_connection._connection = connection
-
-        assert control_connection._attach_application_session('ks1', session1) is None
-        connection.keyspace = 'ks1'
-
-        # the session holding the binding is not in conflict with itself: it
-        # may rebind to the keyspace it switched to
-        assert control_connection._attach_application_session('ks2', session1) is None
-        assert control_connection._get_application_keyspace() == 'ks2'
-
-        session2 = self.make_basic_session()
-        session2.cluster = session1.cluster
-        conflict = control_connection._attach_application_session('ks1', session2)
-        assert conflict is not None and 'already attached' in conflict
-
-    def test_control_connection_fallback_blocks_self_rebind_while_request_active(self):
+    def test_control_connection_fallback_changed_default_allows_active_request(self):
         session = self._make_fallback_session(keyspace='ks1')
-        control_connection = session.cluster.control_connection
         connection = self.make_control_connection()
         connection.keyspace = 'ks1'
         connection.get_request_id.side_effect = [7, 8]
-        control_connection._connection = connection
-        session.cluster.get_control_connection_host.return_value = \
-            self.make_host(connection.endpoint)
-
-        rf1 = self.make_response_future(session)
-        assert rf1.send_request()
-        assert control_connection._application_requests_in_flight == 1
-
-        # Simulate set_keyspace() succeeding through a recovered node pool
-        # while the old-keyspace fallback query is still outstanding.
+        session.cluster.control_connection._connection = connection
+        first = self.make_response_future(session)
+        assert first.send_request()
         session.keyspace = 'ks2'
-        rf2 = self.make_response_future(session)
-        assert rf2.send_request()
-        with pytest.raises(InvalidRequest, match='already attached'):
-            rf2.result()
-        assert connection.send_msg.call_count == 1
-
-        connection.send_msg.call_args_list[0][1]['cb'](
-            self.make_mock_response(['value'], [('one',)]))
-
-        # Once the old request drains, the sole owner may safely rebind.
-        rf3 = self.make_response_future(session)
-        assert rf3.send_request()
-        assert connection.send_msg.call_args_list[1][0][0].query == 'USE ks2'
+        second = self.make_response_future(session)
+        assert second.send_request()
+        assert connection.send_msg.call_args.args[0].query == 'USE ks2'
+        assert first._final_exception is None
+        assert second._final_exception is None
 
     def test_control_connection_fallback_req_id_tracks_real_message(self):
         session = self._make_fallback_session(keyspace='ks1')
@@ -2377,7 +2366,7 @@ class ResponseFutureTests(unittest.TestCase):
             self.make_host(connection.endpoint))
 
         def send_msg(message, request_id, cb=None, **kwargs):
-            lock = session.cluster.control_connection._application_query_lock
+            lock = connection.lock
             lock_available = []
 
             def probe_lock():
@@ -2425,9 +2414,6 @@ class ResponseFutureTests(unittest.TestCase):
         # a request that never went out must not leave its id behind for
         # _on_timeout() to orphan
         assert rf._req_id == 42
-        assert not session.cluster.control_connection._application_sessions
-        assert session.cluster.control_connection._get_application_keyspace() is _NOT_SET
-        assert session.cluster.control_connection._application_requests_in_flight == 0
 
     def test_control_connection_fallback_retires_connection_on_push_failure(self):
         session = self._make_fallback_session(keyspace=None)
@@ -2467,7 +2453,7 @@ class ResponseFutureTests(unittest.TestCase):
         assert not rf.send_request()
         control_connection.reconnect.assert_not_called()
 
-    def test_control_connection_fallback_concurrent_send_preserves_session(self):
+    def test_control_connection_fallback_concurrent_send_preserves_other_stream(self):
         session = self._make_fallback_session(keyspace='ks1')
         session.cluster.allow_control_connection_query_fallback = \
             ControlConnectionQueryFallback.Fallback
@@ -2508,37 +2494,25 @@ class ResponseFutureTests(unittest.TestCase):
         second_thread.start()
         assert second_send_started.wait(5)
 
-        # Even before the second send returns successfully, its pending claim
-        # prevents the first failure from discarding their shared Session.
+        # A failed send must release only its own stream, even while another
+        # send is still returning from the transport.
         release_first_send.set()
         first_thread.join(5)
         assert not first_thread.is_alive()
         assert first_result == [False]
-        assert session in control_connection._application_sessions
 
         release_second_send.set()
         second_thread.join(5)
         assert not second_thread.is_alive()
         assert second_result == [True]
 
-        # The successful concurrent request claimed the provisional binding.
-        # Finishing the failed first send must not release its live Session.
+        assert not rf1._control_connection_requests
+        assert (connection, 8) in rf2._control_connection_requests
         connection.send_msg.call_args_list[1][1]['cb'](
             self.make_mock_response(['value'], [('two',)]))
-        assert control_connection._application_requests_in_flight == 0
-        assert session in control_connection._application_sessions
-        assert control_connection._get_application_keyspace() == 'ks1'
 
-        other_session = self._make_fallback_session(
-            cluster=session.cluster, keyspace='ks2')
-        other_rf = self.make_response_future(other_session)
-        assert other_rf.send_request()
-        with pytest.raises(InvalidRequest, match='already attached'):
-            other_rf.result()
-
-        rf3 = self.make_response_future(session)
-        assert rf3.send_request()
-        assert connection.send_msg.call_args_list[2][0][0] is rf3.message
+        assert not rf2._control_connection_requests
+        assert connection.in_flight == 0
 
     def test_speculative_execute_honours_expired_deadline_without_attempts(self):
         session = self.make_basic_session()
@@ -2633,7 +2607,7 @@ class ResponseFutureTests(unittest.TestCase):
         session.keyspace = keyspace
         return session
 
-    def test_control_connection_fallback_rebinds_after_owner_shutdown(self):
+    def test_control_connection_fallback_new_session_after_shutdown(self):
         session1 = self._make_fallback_session(keyspace='ks1')
         connection = self.make_control_connection()
         connection.get_request_id.side_effect = [7, 8, 9]
@@ -2648,8 +2622,7 @@ class ResponseFutureTests(unittest.TestCase):
         connection.send_msg.call_args_list[1][1]['cb'](
             self.make_mock_response(['value'], [('one',)]))
 
-        # the binding is released once its only owner is gone and its request
-        # has drained
+        # Another Session can use the same physical connection after shutdown.
         session1.is_shutdown = True
 
         session2 = self._make_fallback_session(cluster=session1.cluster, keyspace='ks2')
@@ -2658,144 +2631,116 @@ class ResponseFutureTests(unittest.TestCase):
 
         assert rf2._final_exception is None
         assert connection.send_msg.call_args_list[-1][0][0].query == 'USE ks2'
-        assert session1.cluster.control_connection._get_application_keyspace() == 'ks2'
 
-    def test_control_connection_fallback_reclaim_ignores_other_control_requests(self):
-        session1 = self._make_fallback_session(keyspace='ks1')
-        control_connection = session1.cluster.control_connection
+    def test_control_connection_fallback_shutdown_during_setup_does_not_send_query(self):
+        session = self._make_fallback_session(keyspace='ks1')
         connection = self.make_control_connection()
-        control_connection._connection = connection
+        session.cluster.control_connection._connection = connection
+        rf = self.make_response_future(session)
+        assert rf.send_request()
+        session.is_shutdown = True
+        connection.send_msg.call_args.kwargs['cb'](
+            Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                 new_keyspace='ks1'))
+        assert connection.send_msg.call_count == 1
+        assert connection.keyspace == 'ks1'
+        assert rf._event.wait(1), "future was not completed"
+        with pytest.raises(NoHostAvailable):
+            rf.result()
 
-        assert control_connection._attach_application_session('ks1', session1) is None
-        session1.is_shutdown = True
-        # Heartbeats and metadata refreshes also contribute to this connection-
-        # wide counter; they must not keep a fallback binding alive.
-        connection.in_flight = 1
-
-        session2 = self._make_fallback_session(cluster=session1.cluster, keyspace='ks2')
-        assert control_connection._attach_application_session('ks2', session2) is None
-        assert control_connection._get_application_keyspace() == 'ks2'
-
-    def test_control_connection_fallback_keeps_shutdown_owner_until_requests_drain(self):
-        session1 = self._make_fallback_session(keyspace='ks1')
+    def test_control_connection_set_keyspace_replaces_dropped_default(self):
+        session = self._make_fallback_session(keyspace='dropped_ks')
         connection = self.make_control_connection()
-        connection.get_request_id.side_effect = [7, 8, 9]
-        session1.cluster.control_connection._connection = connection
-        session1.cluster.get_control_connection_host.return_value = (
-            self.make_host(connection.endpoint))
+        session.cluster.control_connection._connection = connection
+        raw_query = SimpleStatement('USE new_ks')
+        raw_future = ResponseFuture(
+            session, QueryMessage(raw_query.query_string, ConsistencyLevel.ONE),
+            raw_query, 1)
+        assert raw_future.send_request()
+        assert connection.send_msg.call_args.args[0].query == 'USE dropped_ks'
+        connection.send_msg.call_args.kwargs['cb'](
+            InvalidRequestException(0x2200, 'Keyspace missing', None))
+        assert raw_future._event.wait(1), "future was not completed"
+        with pytest.raises(InvalidRequest, match='Keyspace missing'):
+            raw_future.result()
 
-        rf1 = self.make_response_future(session1)
-        assert rf1.send_request()
-        assert connection.send_msg.call_args_list[0][0][0].query == 'USE ks1'
-        session1.is_shutdown = True
+        Session.set_keyspace(session, 'new_ks')
+        query = session.execute.call_args.args[0]
+        message = QueryMessage(query.query_string, ConsistencyLevel.ONE)
+        rf = ResponseFuture(session, message, query, 1)
 
-        # The driver's USE is still in flight, so shutdown cannot release the
-        # binding to a Session using another keyspace.
-        session2 = self._make_fallback_session(cluster=session1.cluster, keyspace='ks2')
-        rf2 = self.make_response_future(session2)
-        assert rf2.send_request()
-        with pytest.raises(InvalidRequest, match='already attached'):
-            rf2.result()
+        def set_keyspace(keyspace, callback, **kwargs):
+            session.keyspace = keyspace
+            callback({})
 
-        connection.send_msg.call_args_list[0][1]['cb'](
-            Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE, new_keyspace='ks1'))
-        assert connection.send_msg.call_args_list[1][0][0] is rf1.message
+        session._set_keyspace_for_all_pools.side_effect = set_keyspace
+        assert rf.send_request()
+        assert connection.send_msg.call_args.args[0].query == 'USE new_ks'
+        connection.send_msg.call_args.kwargs['cb'](
+            Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                 new_keyspace='new_ks'))
+        assert rf._event.wait(1), "future was not completed"
+        rf.result()
+        assert session.keyspace == 'new_ks'
+        assert connection.keyspace == 'new_ks'
+        assert connection.send_msg.call_count == 2
 
-        # USE drained, but application query remains in flight and keeps the
-        # shutdown owner bound.
-        session3 = self._make_fallback_session(cluster=session1.cluster, keyspace='ks2')
-        rf3 = self.make_response_future(session3)
-        assert rf3.send_request()
-        with pytest.raises(InvalidRequest, match='already attached'):
-            rf3.result()
+    def test_control_connection_setup_encoding_failure_keeps_connection(self):
+        session = self._make_fallback_session(keyspace='ks')
+        connection = Connection(DefaultEndPoint('127.0.0.1'))
+        connection.is_control_connection = True
+        connection.defunct = Mock()
+        connection.push = Mock()
+        session.cluster.control_connection._connection = connection
+        rf = self.make_response_future(session)
+        rf._protocol_handler = Mock()
+        rf._protocol_handler.encode_message.side_effect = ValueError('encoding failed')
+        initial_request_ids = set(connection.request_ids)
 
-        connection.send_msg.call_args_list[1][1]['cb'](
-            self.make_mock_response(['value'], [('one',)]))
+        assert not rf.send_request()
+        assert rf._event.wait(1), "future was not completed"
+        with pytest.raises(NoHostAvailable):
+            rf.result()
+        connection.push.assert_not_called()
+        connection.defunct.assert_not_called()
+        assert not connection._requests
+        assert not rf._control_connection_requests
+        assert connection.in_flight == 0
+        assert set(connection.request_ids) == initial_request_ids
 
-        # Once both physical requests drain, another keyspace can take over.
-        session4 = self._make_fallback_session(cluster=session1.cluster, keyspace='ks2')
-        rf4 = self.make_response_future(session4)
-        assert rf4.send_request()
-        assert rf4._final_exception is None
-        assert connection.send_msg.call_args_list[2][0][0].query == 'USE ks2'
-        assert session1.cluster.control_connection._get_application_keyspace() == 'ks2'
-
-    def test_control_connection_fallback_reclaim_without_keyspace_rejected(self):
-        session1 = self._make_fallback_session(keyspace='ks1')
+    def test_control_connection_fallback_unset_default_uses_physical_keyspace(self):
+        session = self._make_fallback_session()
         connection = self.make_control_connection()
-        session1.cluster.control_connection._connection = connection
-        assert session1.cluster.control_connection._attach_application_session(
-            'ks1', session1) is None
-        connection.keyspace = 'ks1'
-        session1.is_shutdown = True
+        connection.keyspace = 'existing_ks'
+        session.cluster.control_connection._connection = connection
+        rf = self.make_response_future(session)
+        assert rf.send_request()
+        assert connection.send_msg.call_args.args[0] is rf.message
+        assert session.keyspace is None
 
-        # the shared connection is still in 'ks1' and CQL cannot unset it
-        session2 = self._make_fallback_session(cluster=session1.cluster, keyspace=None)
-        rf2 = self.make_response_future(session2)
-        assert rf2.send_request()
-
-        connection.send_msg.assert_not_called()
-        with pytest.raises(InvalidRequest, match='cannot be reset to no keyspace'):
-            rf2.result()
-
-    def test_control_connection_fallback_reports_connection_leftover_keyspace(self):
-        session1 = self._make_fallback_session(keyspace='ks2')
-        control_connection = session1.cluster.control_connection
-        connection = self.make_control_connection()
-        control_connection._connection = connection
-        assert control_connection._attach_application_session('ks2', session1) is None
-        # The desired binding can move ahead of the USE that changes the
-        # physical connection. Report the connection's actual state.
-        connection.keyspace = 'ks1'
-        session1.is_shutdown = True
-
-        session2 = self._make_fallback_session(cluster=session1.cluster, keyspace=None)
-        rf2 = self.make_response_future(session2)
-        assert rf2.send_request()
-
-        with pytest.raises(InvalidRequest, match="keyspace 'ks1'"):
-            rf2.result()
-
-    def test_control_connection_fallback_send_failure_preserves_physical_keyspace(self):
-        session1 = self._make_fallback_session(keyspace='ks1')
-        control_connection = session1.cluster.control_connection
+    def test_control_connection_fallback_setup_send_failure_keeps_physical_keyspace(self):
+        session = self._make_fallback_session(keyspace='ks2')
         connection = self.make_control_connection()
         connection.keyspace = 'ks1'
         connection.send_msg.side_effect = ConnectionBusy('no streams')
-        control_connection._connection = connection
-        assert control_connection._attach_application_session(
-            'ks1', session1) is None
-        session1.is_shutdown = True
-
-        # The new owner is provisionally attached, but its USE ks2 cannot be
-        # sent and the logical attachment is discarded.
-        session2 = self._make_fallback_session(
-            cluster=session1.cluster, keyspace='ks2')
-        rf2 = self.make_response_future(session2)
-        assert not rf2.send_request()
-        assert control_connection._get_application_keyspace() is _NOT_SET
+        session.cluster.control_connection._connection = connection
+        failed = self.make_response_future(session)
+        assert not failed.send_request()
         assert connection.keyspace == 'ks1'
+        connection.send_msg.side_effect = None
+        other = self._make_fallback_session(cluster=session.cluster)
+        rf = self.make_response_future(other)
+        assert rf.send_request()
+        assert connection.send_msg.call_args.args[0] is rf.message
 
-        # The discarded logical binding must not hide the physical ks1 state.
-        session3 = self._make_fallback_session(
-            cluster=session1.cluster, keyspace=None)
-        rf3 = self.make_response_future(session3)
-        assert rf3.send_request()
-        with pytest.raises(InvalidRequest, match="keyspace 'ks1'"):
-            rf3.result()
-        assert connection.send_msg.call_count == 1
-
-    def test_control_connection_fallback_reclaim_without_keyspace_after_reconnect(self):
+    def test_control_connection_fallback_unset_default_after_reconnect(self):
         session1 = self._make_fallback_session(keyspace='ks1')
         connection = self.make_control_connection()
         session1.cluster.control_connection._connection = connection
-        assert session1.cluster.control_connection._attach_application_session(
-            'ks1', session1) is None
         connection.keyspace = 'ks1'
         session1.is_shutdown = True
 
-        # a reconnect leaves a fresh connection with no keyspace, so the
-        # leftover USE state is gone and the binding is freely reclaimable
+        # A reconnect leaves a fresh physical connection with no keyspace.
         reconnected = self.make_control_connection()
         session1.cluster.control_connection._connection = reconnected
         session1.cluster.get_control_connection_host.return_value = \
@@ -2807,7 +2752,6 @@ class ResponseFutureTests(unittest.TestCase):
 
         assert rf2._final_exception is None
         assert reconnected.send_msg.call_args_list[0][0][0] is rf2.message
-        assert session1.cluster.control_connection._get_application_keyspace() is None
 
     def test_control_connection_fallback_when_no_usable_pools(self):
         session = self.make_basic_session()
@@ -2986,27 +2930,16 @@ class ResponseFutureTests(unittest.TestCase):
 
         rf.send_request.assert_called_once_with()
 
-    def test_control_connection_fallback_rejects_indented_use(self):
-        session = self.make_basic_session()
-        session.cluster.allow_control_connection_query_fallback = \
-            ControlConnectionQueryFallback.Fallback
-        session.cluster._default_load_balancing_policy.make_query_plan.return_value = []
-        session._pools = {}
-
-        indent = '\n' + ' ' * 26
-        rf = self.make_response_future(session)
-
-        # A deeply indented statement must be classified without the leading
-        # whitespace sending the matcher into exponential backtracking.
-        indented_use = QueryMessage(query=indent + 'USE newks',
-                                    consistency_level=ConsistencyLevel.ONE)
-        indented_select = QueryMessage(query=indent + 'SELECT * FROM foo',
-                                       consistency_level=ConsistencyLevel.ONE)
-
-        start = time.time()
-        assert rf._is_keyspace_change_query(indented_use)
-        assert not rf._is_keyspace_change_query(indented_select)
-        assert time.time() - start < 2
+    def test_control_connection_fallback_sends_indented_query_unchanged(self):
+        session = self._make_fallback_session()
+        connection = self.make_control_connection()
+        session.cluster.control_connection._connection = connection
+        query = SimpleStatement('\n' + ' ' * 10000 + 'USE newks')
+        rf = ResponseFuture(session, QueryMessage(query=query.query_string,
+                            consistency_level=ConsistencyLevel.ONE), query, 1)
+        assert rf.send_request()
+        assert connection.send_msg.call_args.args[0] is rf.message
+        assert rf.message.query == query.query_string
 
     def test_control_connection_fallback_use_failure_reports_error_once(self):
         session = self.make_basic_session()
@@ -3029,11 +2962,259 @@ class ResponseFutureTests(unittest.TestCase):
         # the USE message could not be sent; the failure is reported exactly once
         assert errback.call_count == 1
         assert connection.in_flight == 0
-        assert not session.cluster.control_connection._application_sessions
-        assert session.cluster.control_connection._get_application_keyspace() is _NOT_SET
-        assert session.cluster.control_connection._application_requests_in_flight == 0
         with pytest.raises(NoHostAvailable):
             rf.result()
+
+    def test_control_connection_fallback_setup_failure_honors_rethrow(self):
+        session = self._make_fallback_session(keyspace='ks')
+        connection = self.make_control_connection()
+        session.cluster.control_connection._connection = connection
+        rf = self.make_response_future(session)
+        rf._retry_policy = FallthroughRetryPolicy()
+        assert rf.send_request()
+        connection.send_msg.call_args.kwargs['cb'](
+            ConnectionException('setup failed', connection.endpoint))
+        assert connection.send_msg.call_count == 1
+        session.submit.assert_not_called()
+        assert not rf._control_connection_requests
+        assert connection.in_flight == 0
+        assert rf._event.wait(1), "future was not completed"
+        with pytest.raises(ConnectionException, match='setup failed'):
+            rf.result()
+        connection.defunct.assert_called_once()
+        session.cluster.scheduler.schedule_with_shutdown.assert_not_called()
+
+    def test_control_connection_setup_transport_failure_honors_retry(self):
+        session = self._make_fallback_session(keyspace='ks')
+        connection = self.make_control_connection()
+        session.cluster.control_connection._connection = connection
+        host = self.make_host(connection.endpoint)
+        session.cluster.get_control_connection_host.return_value = host
+        rf = self.make_response_future(session)
+        rf._retry_policy = Mock(spec=RetryPolicy)
+        rf._retry_policy.on_request_error.return_value = (
+            RetryPolicy.RETRY_NEXT_HOST, None)
+        assert rf.send_request()
+        failure = ConnectionShutdown('old socket closed', connection.endpoint)
+        replacement = self.make_control_connection()
+        replacement.get_request_id.side_effect = [8, 9]
+        control = session.cluster.control_connection
+        connection.is_closed = True
+        control.reconnect = Mock(side_effect=(
+            lambda: setattr(control, '_connection', replacement)))
+        connection.send_msg.call_args.kwargs['cb'](failure)
+        control.reconnect.assert_called_once_with()
+
+        rf._retry_policy.on_request_error.assert_called_once_with(
+            rf.query, ConsistencyLevel.ONE, error=failure, retry_num=0)
+        session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
+            0, ANY, rf._retry_task, False, host, 0)
+        replacement.send_msg.assert_not_called()
+        rf._retry_task(False, host, 0)
+        assert replacement.send_msg.call_args.args[0].query == 'USE ks'
+        replacement.send_msg.call_args.kwargs['cb'](
+            Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                 new_keyspace='ks'))
+        assert replacement.send_msg.call_args.args[0] is rf.message
+        replacement.send_msg.call_args.kwargs['cb'](
+            self.make_mock_response(['value'], [(42,)]))
+        assert rf._event.wait(1), "future was not completed"
+        assert rf.result().one() == (['value'], [(42,)])
+        assert connection.in_flight == 0
+        assert replacement.in_flight == 0
+        assert connection.send_msg.call_count == 1
+
+    def test_control_connection_setup_send_failure_honors_retry(self):
+        for failure_type in (ConnectionSendError, ConnectionShutdown,
+                             ConnectionException):
+            for decision in (RetryPolicy.RETRY, RetryPolicy.RETRY_NEXT_HOST):
+                for immediate in (False, True):
+                    with self.subTest(failure=failure_type, decision=decision,
+                                      immediate=immediate):
+                        session = self._make_fallback_session(keyspace='ks')
+                        control = session.cluster.control_connection
+                        connection = self.make_control_connection()
+                        replacement = self.make_control_connection()
+                        replacement.get_request_id.side_effect = [8, 9]
+                        control._connection = connection
+                        control.return_connection = Mock(side_effect=(
+                            lambda conn: setattr(control, '_connection', replacement)))
+                        host = self.make_host(connection.endpoint)
+                        session.cluster.get_control_connection_host.return_value = host
+                        failure = failure_type('setup send failed', connection.endpoint)
+                        connection.send_msg.side_effect = failure
+                        rf = self.make_response_future(session)
+                        start_time = rf._start_time
+                        rf._retry_policy = Mock(spec=RetryPolicy)
+                        delay = 0 if immediate else 0.25
+
+                        def choose_retry(*args, **kwargs):
+                            assert connection.in_flight == 0
+                            assert not rf._control_connection_requests
+                            assert not connection._requests
+                            return decision, ConsistencyLevel.QUORUM, delay
+
+                        rf._retry_policy.on_request_error.side_effect = choose_retry
+                        if immediate:
+                            session.cluster.scheduler.schedule_with_shutdown.side_effect = (
+                                lambda delay, shutdown, callback, *args: callback(*args))
+                        assert rf.send_request()
+                        if failure_type is ConnectionSendError:
+                            # The reactor may have extracted this callback before
+                            # the failed push relinquished the setup attempt.
+                            connection.send_msg.call_args.kwargs['cb'](Mock(
+                                spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                                new_keyspace='ks'))
+                            assert connection.send_msg.call_count == 1
+                            assert connection.in_flight == 0
+                        rf._retry_policy.on_request_error.assert_called_once_with(
+                            rf.query, ConsistencyLevel.ONE, error=failure, retry_num=0)
+                        session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
+                            delay, ANY, rf._retry_task,
+                            decision == RetryPolicy.RETRY, host, 0)
+                        if not immediate:
+                            replacement.send_msg.assert_not_called()
+                            rf._retry_task(decision == RetryPolicy.RETRY, host, 0)
+                        assert rf._req_id == 8
+                        assert replacement.send_msg.call_args.args[0].query == 'USE ks'
+                        replacement.send_msg.call_args.kwargs['cb'](Mock(
+                            spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                            new_keyspace='ks'))
+                        assert rf._req_id == 9
+                        assert replacement.send_msg.call_args.args[0] is rf.message
+                        assert rf.message.consistency_level == ConsistencyLevel.QUORUM
+                        replacement.send_msg.call_args.kwargs['cb'](
+                            self.make_mock_response(['value'], [(42,)]))
+                        assert rf._event.wait(1), "retry did not complete"
+                        assert rf.result().one() == (['value'], [(42,)])
+                        assert rf._start_time == start_time
+                        assert connection.in_flight == replacement.in_flight == 0
+                        assert not rf._control_connection_requests
+                        assert not rf._control_connection_keyspace_requests
+                        control.return_connection.assert_called_once_with(connection)
+
+    def test_setup_response_before_send_error_keeps_application_error_owner(self):
+        session = self._make_fallback_session(keyspace='ks')
+        connection = self.make_control_connection()
+        connection.get_request_id.side_effect = [7, 8]
+        control = session.cluster.control_connection
+        control._connection = connection
+        control.return_connection = Mock()
+        rf = self.make_response_future(session)
+        rf._retry_policy = Mock(spec=RetryPolicy)
+        rf._retry_policy.on_request_error.return_value = (
+            RetryPolicy.RETRY_NEXT_HOST, None)
+        setup_error = ConnectionSendError('setup push failed', connection.endpoint)
+        application_error = ConnectionShutdown('socket closed', connection.endpoint)
+
+        def send_msg(message, request_id, cb, **kwargs):
+            connection._requests[request_id] = (cb, None, None)
+            if message is not rf.message:
+                connection._requests.pop(request_id)
+                cb(Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                        new_keyspace='ks'))
+                raise setup_error
+            return 128
+
+        def defunct(exc):
+            callbacks = tuple(connection._requests.values())
+            connection._requests.clear()
+            for callback, _, _ in callbacks:
+                callback(application_error)
+
+        connection.send_msg.side_effect = send_msg
+        connection.defunct.side_effect = defunct
+        assert rf.send_request()
+        rf._retry_policy.on_request_error.assert_called_once_with(
+            rf.query, ConsistencyLevel.ONE, error=application_error, retry_num=0)
+        assert rf._query_retries == 1
+        assert connection.send_msg.call_count == 2
+        assert connection.in_flight == 0
+        assert not rf._control_connection_requests
+        assert not rf._control_connection_keyspace_requests
+        assert not rf._event.is_set()
+        session.cluster.scheduler.schedule_with_shutdown.assert_called_once()
+
+    def test_control_connection_setup_send_failure_reports_policy_error(self):
+        for failure_type in (ConnectionSendError, ConnectionShutdown,
+                             ConnectionException):
+            for decision in ((RetryPolicy.RETHROW, None),
+                             (RetryPolicy.IGNORE, None),
+                             (RetryPolicy.IGNORE, None, 0.1)):
+                with self.subTest(failure=failure_type, decision=decision):
+                    session = self._make_fallback_session(keyspace='ks')
+                    connection = self.make_control_connection()
+                    control = session.cluster.control_connection
+                    control._connection = connection
+                    control.return_connection = Mock()
+                    failure = failure_type('setup send failed', connection.endpoint)
+                    connection.send_msg.side_effect = failure
+                    rf = self.make_response_future(session)
+                    rf._retry_policy = Mock(spec=RetryPolicy)
+                    rf._retry_policy.on_request_error.return_value = decision
+                    assert rf.send_request()
+                    assert rf._event.wait(1), "setup failure did not complete"
+                    with pytest.raises(failure_type, match='setup send failed'):
+                        rf.result()
+                    assert rf._final_exception is failure
+                    rf._retry_policy.on_request_error.assert_called_once_with(
+                        rf.query, ConsistencyLevel.ONE, error=failure, retry_num=0)
+                    assert connection.in_flight == 0
+                    assert not rf._control_connection_requests
+                    assert not rf._control_connection_keyspace_requests
+                    control.return_connection.assert_called_once_with(connection)
+                    session.cluster.scheduler.schedule_with_shutdown.assert_not_called()
+
+    def test_control_connection_setup_failure_cannot_be_ignored(self):
+        for decision in ((RetryPolicy.IGNORE, None),
+                         (RetryPolicy.IGNORE, None, 0.1)):
+            with self.subTest(decision=decision):
+                session = self._make_fallback_session(keyspace='ks')
+                connection = self.make_control_connection()
+                session.cluster.control_connection._connection = connection
+                rf = self.make_response_future(session)
+                rf._retry_policy = Mock(spec=RetryPolicy)
+                rf._retry_policy.on_request_error.return_value = decision
+                assert rf.send_request()
+                failure = ConnectionException('setup failed', connection.endpoint)
+                connection.send_msg.call_args.kwargs['cb'](failure)
+
+                rf._retry_policy.on_request_error.assert_called_once_with(
+                    rf.query, ConsistencyLevel.ONE, error=failure, retry_num=0)
+                assert rf._event.wait(1), "future was not completed"
+                with pytest.raises(ConnectionException, match='setup failed'):
+                    rf.result()
+                assert rf._final_exception is failure
+                assert connection.send_msg.call_count == 1
+                assert connection.in_flight == 0
+                assert not rf._control_connection_requests
+                session.cluster.scheduler.schedule_with_shutdown.assert_not_called()
+
+    def test_control_connection_unexpected_setup_reply_retires_connection(self):
+        void_response = ResultMessage.recv_body(
+            BytesIO(RESULT_KIND_VOID.to_bytes(4, 'big')),
+            ProtocolVersion.V4, None, {}, None, None)
+        for response in (object(), void_response, self.make_mock_response([], [])):
+            with self.subTest(response=response):
+                session = self._make_fallback_session(keyspace='ks')
+                connection = self.make_control_connection()
+                session.cluster.control_connection._connection = connection
+                control_connection = session.cluster.control_connection
+                control_connection.return_connection = Mock(
+                    wraps=control_connection.return_connection)
+                rf = self.make_response_future(session)
+                assert rf.send_request()
+                connection.send_msg.call_args.kwargs['cb'](response)
+
+                assert rf._event.wait(1), "future was not completed"
+                with pytest.raises(ConnectionException):
+                    rf.result()
+                connection.defunct.assert_called_once()
+                control_connection.return_connection.assert_called_once_with(
+                    connection)
+                assert connection.send_msg.call_count == 1
+                assert connection.in_flight == 0
+                assert not rf._control_connection_requests
 
     def test_control_connection_fallback_reprepare_sets_keyspace_first(self):
         session = self.make_basic_session()
@@ -3116,12 +3297,411 @@ class ResponseFutureTests(unittest.TestCase):
 
         assert 7 in connection.orphaned_request_ids
         assert connection.in_flight == 1
-        assert session.cluster.control_connection._application_requests_in_flight == 0
-        assert (connection, 7) in \
-            session.cluster.control_connection._application_orphaned_requests
         data_pool.return_connection.assert_not_called()
         with pytest.raises(OperationTimedOut):
             rf.result()
+
+    def test_control_connection_timeout_before_callback_installation(self):
+        session = self._make_fallback_session()
+        connection = self.make_control_connection()
+        session.cluster.control_connection._connection = connection
+        rf = self.make_response_future(session)
+
+        def send_msg(message, request_id, cb, **kwargs):
+            # Admission published the stream, but send_msg has not installed
+            # its callback yet. Post-send cleanup must detach the late install.
+            rf._on_timeout()
+            connection._requests[request_id] = \
+                (cb, kwargs.get('decoder'), kwargs.get('result_metadata'))
+            return 128
+
+        connection.send_msg.side_effect = send_msg
+        assert rf.send_request()
+        assert rf._event.wait(1)
+        with pytest.raises(OperationTimedOut):
+            rf.result()
+        assert connection.orphaned_request_ids == {7}
+        assert connection.in_flight == 1
+        late_cb, _, _ = connection._requests.pop(7)
+        late_cb(Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                     new_keyspace='late_ks'))
+        assert connection.in_flight == 0
+        assert not connection.orphaned_request_ids
+        assert not rf._control_connection_requests
+        assert connection.keyspace == 'late_ks'
+        assert session.keyspace is None
+        session._set_keyspace_for_all_pools.assert_not_called()
+        connection.defunct.assert_not_called()
+
+    def test_control_connection_post_send_does_not_reorphan_released_stream(self):
+        session = self._make_fallback_session()
+        connection = self.make_control_connection()
+        session.cluster.control_connection._connection = connection
+        rf = self.make_response_future(session)
+
+        def send_msg(message, request_id, cb, **kwargs):
+            connection._requests[request_id] = \
+                (cb, kwargs.get('decoder'), kwargs.get('result_metadata'))
+            rf._on_timeout()
+            assert connection.orphaned_request_ids == {request_id}
+            # process_msg releases the orphan before popping its callback.
+            # The sending thread then returns and runs post-send cleanup.
+            with connection.lock:
+                connection.in_flight -= 1
+                connection.orphaned_request_ids.remove(request_id)
+            return 128
+
+        connection.send_msg.side_effect = send_msg
+        assert rf.send_request()
+        assert connection.in_flight == 0
+        assert not connection.orphaned_request_ids
+        assert not rf._orphan_control_connection_request(connection, 7)
+        late_cb, _, _ = connection._requests.pop(7)
+        late_cb(Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                     new_keyspace='late_ks'))
+        # process_msg returns the ID after its callback finishes.
+        connection.request_ids.append(7)
+        assert connection.in_flight == 0
+        assert list(connection.request_ids) == [7]
+        assert not connection.orphaned_request_ids
+        assert not rf._control_connection_requests
+        assert connection.keyspace == 'late_ks'
+        assert session.keyspace is None
+        assert rf._event.wait(1)
+        with pytest.raises(OperationTimedOut):
+            rf.result()
+
+    def test_control_connection_response_pop_cannot_race_orphan_replacement(self):
+        session = self._make_fallback_session()
+        connection = self.make_control_connection()
+        session.cluster.control_connection._connection = connection
+        rf = self.make_response_future(session)
+        assert rf.send_request()
+        callback = connection.send_msg.call_args.kwargs['cb']
+        orphan_check_finished = Event()
+        callback_read = Event()
+        callback_popped = Event()
+        errors = []
+        lock = RLock()
+
+        class RacingLock:
+            released = False
+
+            def __enter__(self):
+                lock.acquire()
+
+            def __exit__(self, *args):
+                lock.release()
+                if current_thread() is reactor and not self.released:
+                    self.released = True
+                    # Pause after the reactor's orphan check. Timeout may now
+                    # read a callback only if the reactor has not removed it.
+                    orphan_check_finished.set()
+                    assert callback_read.wait(1), "orphan check did not run"
+
+        class RacingRequests(dict):
+            def get(self, key, default=None):
+                value = super().get(key, default)
+                callback_read.set()
+                assert callback_popped.wait(1), "reactor did not remove callback"
+                return value
+
+            def pop(self, key, *args):
+                value = super().pop(key, *args)
+                callback_popped.set()
+                return value
+
+        response = self.make_mock_response([], [])
+        connection.lock = RacingLock()
+        connection._requests = RacingRequests({7: (callback, lambda *args: response, None)})
+        connection._continuous_paging_sessions = {}
+        connection._on_orphaned_stream_released = None
+
+        def receive():
+            try:
+                Connection.process_msg(connection, _Frame(
+                    version=4, flags=0, stream=7, opcode=ResultMessage.opcode,
+                    body_offset=9, end_pos=9), b'')
+            except BaseException as exc:
+                errors.append(exc)
+
+        reactor = Thread(target=receive, daemon=True)
+        reactor.start()
+        try:
+            assert orphan_check_finished.wait(1), "reactor did not check orphan state"
+            rf._orphan_control_connection_request(connection, 7)
+        finally:
+            callback_read.set()
+            callback_popped.set()
+            reactor.join(2)
+        assert not reactor.is_alive(), "reactor did not finish"
+        assert not errors
+        connection.defunct.assert_not_called()
+        assert rf._event.wait(1), "response did not complete"
+        assert connection.in_flight == 0
+        assert list(connection.request_ids) == [7]
+        assert not connection.orphaned_request_ids
+        assert not connection._requests
+        assert not rf._control_connection_requests
+
+    def test_control_connection_timeout_fences_callback_before_finalization(self):
+        for keyspace in (None, 'ks'):
+            with self.subTest(keyspace=keyspace):
+                session = self._make_fallback_session(keyspace=keyspace)
+                connection = self.make_control_connection()
+                session.cluster.control_connection._connection = connection
+                rf = self.make_response_future(session)
+                set_final_exception = rf._set_final_exception
+                rf._set_final_exception = Mock()
+
+                def send_msg(message, request_id, cb, **kwargs):
+                    rf._on_timeout()
+                    assert not rf._is_final()
+                    assert not connection.orphaned_request_ids
+                    connection._requests[request_id] = (cb, None, None)
+                    return 128
+
+                connection.send_msg.side_effect = send_msg
+                assert rf.send_request()
+                assert connection.orphaned_request_ids == {7}
+                assert rf._control_connection_requests[(connection, 7)] is None
+                assert connection.defunct.call_count == (keyspace is not None)
+                timeout_error = rf._set_final_exception.call_args.args[0]
+                set_final_exception(timeout_error)
+                assert rf._event.wait(1), "future was not completed"
+                with pytest.raises(OperationTimedOut):
+                    rf.result()
+
+    def test_control_connection_timeout_claim_blocks_keyspace_continuations(self):
+        for setup in (False, True):
+            with self.subTest(setup=setup):
+                session = self._make_fallback_session(keyspace='ks1')
+                connection = self.make_control_connection()
+                connection.keyspace = None if setup else 'ks1'
+                session.cluster.control_connection._connection = connection
+                query = SimpleStatement('USE ks2')
+                rf = ResponseFuture(
+                    session, QueryMessage(query.query_string, ConsistencyLevel.ONE),
+                    query, 1)
+                set_final_exception = rf._set_final_exception
+                rf._set_final_exception = Mock()
+                reported_keyspace = 'ks1' if setup else 'ks2'
+
+                def set_keyspace(keyspace, callback, **kwargs):
+                    session.keyspace = keyspace
+                    callback({})
+
+                session._set_keyspace_for_all_pools.side_effect = set_keyspace
+
+                def send_msg(message, request_id, cb, **kwargs):
+                    rf._on_timeout()
+                    assert rf._timeout_claimed
+                    assert not rf._is_final()
+                    # The timeout missed the uninstalled callback. A reply
+                    # then arrives before timeout finalization.
+                    connection._requests[request_id] = (cb, None, None)
+                    response_cb, _, _ = connection._requests.pop(request_id)
+                    response_cb(Mock(spec=ResultMessage,
+                                     kind=RESULT_KIND_SET_KEYSPACE,
+                                     new_keyspace=reported_keyspace))
+                    return 128
+
+                connection.send_msg.side_effect = send_msg
+                assert rf.send_request()
+                assert connection.keyspace == reported_keyspace
+                assert session.keyspace == 'ks1'
+                session._set_keyspace_for_all_pools.assert_not_called()
+                rf._set_final_exception.assert_called_once()
+                assert not rf._event.is_set()
+                assert connection.send_msg.call_count == 1
+                assert connection.in_flight == 0
+                assert not rf._control_connection_requests
+                set_final_exception(rf._set_final_exception.call_args.args[0])
+                self.assert_timed_out(rf)
+                connection.defunct.assert_not_called()
+
+    def test_control_connection_timeout_before_setup_continuation_admission(self):
+        session = self._make_fallback_session(keyspace='ks')
+        connection = self.make_control_connection()
+        session.cluster.control_connection._connection = connection
+        rf = self.make_response_future(session)
+        assert rf.send_request()
+        set_final_exception = rf._set_final_exception
+        rf._set_final_exception = Mock()
+        send_message = rf._send_control_connection_message
+
+        def timeout_then_send(**kwargs):
+            rf._on_timeout()
+            return send_message(**kwargs)
+
+        rf._send_control_connection_message = timeout_then_send
+        connection.send_msg.call_args.kwargs['cb'](
+            Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                 new_keyspace='ks'))
+
+        assert connection.send_msg.call_count == 1
+        assert connection.in_flight == 0
+        rf._set_final_exception.assert_called_once()
+        set_final_exception(rf._set_final_exception.call_args.args[0])
+        self.assert_timed_out(rf)
+
+    def test_control_connection_post_send_preserves_next_page_on_reused_stream(self):
+        session = self._make_fallback_session()
+        connection = self.make_control_connection()
+        session.cluster.control_connection._connection = connection
+        rf = self.make_response_future(session)
+
+        def send_msg(message, request_id, cb, **kwargs):
+            connection._requests[request_id] = (cb, None, None)
+            if connection.send_msg.call_count == 1:
+                response = self.make_mock_response(['col'], [(1,)])
+                response.paging_state = b'next-page'
+                connection._requests.pop(request_id)
+                cb(response)
+                # Page one has completed, but its send has not returned.
+                rf.start_fetching_next_page()
+            return 128
+
+        connection.send_msg.side_effect = send_msg
+        assert rf.send_request()
+        assert connection.send_msg.call_count == 2
+        assert not connection.orphaned_request_ids
+        assert connection.in_flight == 1
+        cb, _, _ = connection._requests.pop(7)
+        cb(self.make_mock_response(['col'], [(2,)]))
+        assert rf._event.wait(1), "future was not completed"
+        assert rf.result().current_rows == [(['col'], [(2,)])]
+        assert connection.in_flight == 0
+
+    def test_old_control_send_failure_preserves_the_next_page(self):
+        session = self._make_fallback_session()
+        connection = self.make_control_connection()
+        connection.is_defunct = connection.is_closed = False
+        session.cluster.control_connection._connection = connection
+        rf = self.make_response_future(session)
+
+        def send_msg(message, request_id, cb, **kwargs):
+            connection._requests[request_id] = (cb, None, None)
+            if connection.send_msg.call_count == 1:
+                response = self.make_mock_response(['col'], [(1,)])
+                response.paging_state = b'next-page'
+                connection._requests.pop(request_id)
+                cb(response)
+                rf.start_fetching_next_page()
+                raise ConnectionSendError('old wake-up failed', connection.endpoint)
+            return 128
+
+        connection.send_msg.side_effect = send_msg
+        assert rf.send_request()
+        assert connection.send_msg.call_count == 2
+        assert not rf._is_final()
+        callback, _, _ = connection._requests.pop(7)
+        callback(self.make_mock_response(['col'], [(2,)]))
+        assert rf._event.wait(1)
+        assert rf.result().current_rows == [(['col'], [(2,)])]
+        assert connection.in_flight == 0
+
+    def test_control_connection_orphan_does_not_retain_future_or_payload(self):
+        class Payload(bytearray):
+            pass
+
+        session = self._make_fallback_session()
+        connection = self.make_control_connection()
+        session.cluster.control_connection._connection = connection
+
+        def send_msg(message, request_id, cb, **kwargs):
+            connection._requests[request_id] = \
+                (cb, kwargs.get('decoder'), kwargs.get('result_metadata'))
+            return 128
+
+        # A Mock would retain the original callback and message in its call
+        # history, independently of the connection's replacement callback.
+        connection.send_msg = send_msg
+        payload = Payload(b'write parameter')
+        message = ExecuteMessage(b'query-id', [payload], ConsistencyLevel.ONE)
+        rf = ResponseFuture(session, message, SimpleStatement('opaque query'), None)
+        assert rf.send_request()
+        rf._on_timeout()
+        assert rf._event.is_set()
+        connection.defunct.assert_not_called()
+        assert connection.orphaned_request_ids == {7}
+        future_ref = weakref.ref(rf)
+        payload_ref = weakref.ref(payload)
+        del rf, message, payload
+        gc.collect()
+
+        assert future_ref() is None
+        assert payload_ref() is None
+        # Physical cleanup still works after the completed future is gone.
+        late_cb, _, _ = connection._requests.pop(7)
+        late_cb(Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                     new_keyspace='late_ks'))
+        assert connection.keyspace == 'late_ks'
+        assert connection.in_flight == 0
+        assert not connection.orphaned_request_ids
+        assert session.keyspace is None
+
+    def test_control_connection_failed_encoding_after_timeout_releases_once(self):
+        session = self._make_fallback_session()
+        connection = self.make_control_connection()
+        session.cluster.control_connection._connection = connection
+        rf = self.make_response_future(session)
+
+        def send_msg(message, request_id, cb, **kwargs):
+            connection._requests[request_id] = \
+                (cb, kwargs.get('decoder'), kwargs.get('result_metadata'))
+            rf._on_timeout()
+            assert connection.orphaned_request_ids == {request_id}
+            raise ConnectionException('encoding failed', connection.endpoint)
+
+        connection.send_msg.side_effect = send_msg
+        rf.send_request()
+        assert rf._event.wait(1)
+        with pytest.raises(OperationTimedOut):
+            rf.result()
+        assert connection.in_flight == 0
+        assert list(connection.request_ids) == [7]
+        assert not connection._requests
+        assert not connection.orphaned_request_ids
+        assert not rf._control_connection_requests
+        rf._release_control_connection_request(connection, 7)
+        assert connection.in_flight == 0
+        assert list(connection.request_ids) == [7]
+
+    def test_control_connection_failed_send_after_reactor_releases_orphan(self):
+        session = self._make_fallback_session()
+        connection = self.make_control_connection()
+        session.cluster.control_connection._connection = connection
+        rf = self.make_response_future(session)
+
+        def send_msg(message, request_id, cb, **kwargs):
+            connection._requests[request_id] = \
+                (cb, kwargs.get('decoder'), kwargs.get('result_metadata'))
+            rf._on_timeout()
+            # A response reached process_msg while the transport was still
+            # returning from send_msg; the reactor now owns the final release.
+            with connection.lock:
+                connection.in_flight -= 1
+                connection.orphaned_request_ids.remove(request_id)
+            raise ConnectionException('send failed', connection.endpoint)
+
+        connection.send_msg.side_effect = send_msg
+        rf.send_request()
+        assert rf._event.wait(1)
+        with pytest.raises(OperationTimedOut):
+            rf.result()
+        assert connection.in_flight == 0
+        assert not connection.request_ids
+        assert not rf._control_connection_requests
+        late_cb, _, _ = connection._requests.pop(7)
+        late_cb(Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                     new_keyspace='late_ks'))
+        connection.request_ids.append(7)
+        assert connection.in_flight == 0
+        assert list(connection.request_ids) == [7]
+        assert not connection.orphaned_request_ids
+        assert connection.keyspace == 'late_ks'
+        assert session.keyspace is None
 
     def test_control_connection_timeout_does_not_orphan_reused_stream(self):
         session = self._make_fallback_session()
@@ -3146,7 +3726,6 @@ class ResponseFutureTests(unittest.TestCase):
                          schema_change_event={}))
         assert not rf._event.is_set()
         assert not rf._control_connection_requests
-        assert session.cluster.control_connection._application_requests_in_flight == 0
 
         unrelated_cb = Mock()
         unrelated_decoder = Mock()
@@ -3163,19 +3742,39 @@ class ResponseFutureTests(unittest.TestCase):
         assert connection._requests[7] is unrelated_request
         assert not connection.orphaned_request_ids
         recovered_pool.return_connection.assert_not_called()
-        assert session.cluster.control_connection._application_requests_in_flight == 0
-        assert not session.cluster.control_connection._application_orphaned_requests
         with pytest.raises(OperationTimedOut):
             rf.result()
 
-    def test_control_connection_fallback_timeout_barrier_ends_on_late_use(self):
-        session1 = self._make_fallback_session(keyspace='ks1')
-        control_connection = session1.cluster.control_connection
+    def test_control_connection_retry_gap_preserves_reused_stream(self):
+        session = self._make_fallback_session()
         connection = self.make_control_connection()
-        connection.get_request_id.side_effect = [7, 8]
+        session.cluster.control_connection._connection = connection
+        rf = self.make_response_future(session)
+        assert rf.send_request()
+        connection.send_msg.call_args.kwargs['cb'](ConnectionShutdown(
+            'retry required', connection.endpoint))
+        unrelated = (Mock(), Mock(), [])
+        connection._requests[7] = unrelated
+        connection.in_flight = 1
+        # Stop the retry after it clears the attempt flag, before admission.
+        rf.send_request = Mock(side_effect=rf._on_timeout)
+        rf._retry_task(False, rf._current_host, 0)
+        assert rf._event.wait(1)
+        with pytest.raises(OperationTimedOut):
+            rf.result()
+        assert connection._requests[7] is unrelated
+        assert connection.in_flight == 1
+        assert not connection.orphaned_request_ids
+
+    def test_control_connection_fallback_late_setup_does_not_touch_replacement(self):
+        session = self._make_fallback_session(keyspace='ks1')
+        control_connection = session.cluster.control_connection
+        connection = self.make_control_connection()
+        connection.is_defunct = False
+        connection.is_closed = False
+        connection.defunct.side_effect = lambda exc: setattr(connection, 'is_defunct', True)
+        control_connection.reconnect = Mock()
         control_connection._connection = connection
-        session1.cluster.get_control_connection_host.return_value = \
-            self.make_host(connection.endpoint)
 
         def send_msg(message, request_id, cb, **kwargs):
             connection._requests[request_id] = \
@@ -3183,41 +3782,28 @@ class ResponseFutureTests(unittest.TestCase):
             return 128
 
         connection.send_msg.side_effect = send_msg
-
-        rf1 = self.make_response_future(session1)
-        assert rf1.send_request()
-        assert connection.send_msg.call_args_list[0][0][0].query == 'USE ks1'
-        rf1._on_timeout()
-        session1.is_shutdown = True
-
-        # Active accounting is released at timeout, but the orphaned USE still
-        # prevents a different keyspace from sharing the physical connection.
-        assert control_connection._application_requests_in_flight == 0
-        session2 = self._make_fallback_session(
-            cluster=session1.cluster, keyspace='ks2')
-        rf2 = self.make_response_future(session2)
-        assert rf2.send_request()
-        with pytest.raises(InvalidRequest, match='already attached'):
-            rf2.result()
-
-        # Process the late SET_KEYSPACE response through the cleanup-only
-        # callback installed by the timeout. It must not send rf1's query.
+        rf = self.make_response_future(session)
+        assert rf.send_request()
+        rf._on_timeout()
+        connection.defunct.assert_called_once()
+        control_connection.reconnect.assert_called_once_with()
+        replacement = self.make_control_connection()
+        replacement.keyspace = 'newer_ks'
+        control_connection._connection = replacement
+        other = self._make_fallback_session(cluster=session.cluster)
+        next_query = self.make_response_future(other)
+        assert next_query.send_request()
         late_cb, _, _ = connection._requests.pop(7)
-        with connection.lock:
-            connection.in_flight -= 1
-            connection.orphaned_request_ids.remove(7)
         late_cb(Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
                      new_keyspace='ks1'))
         assert connection.send_msg.call_count == 1
-        assert not control_connection._application_orphaned_requests
         assert connection.keyspace == 'ks1'
-
-        # With the late USE retired, a new owner can safely switch keyspaces.
-        session3 = self._make_fallback_session(
-            cluster=session1.cluster, keyspace='ks2')
-        rf3 = self.make_response_future(session3)
-        assert rf3.send_request()
-        assert connection.send_msg.call_args_list[1][0][0].query == 'USE ks2'
+        assert replacement.keyspace == 'newer_ks'
+        assert replacement.send_msg.call_args.args[0] is next_query.message
+        assert session.keyspace == 'ks1'
+        assert rf._event.wait(1), "future was not completed"
+        with pytest.raises(OperationTimedOut):
+            rf.result()
 
     def test_control_connection_fallback_timeout_without_metadata_host_uses_connection_endpoint(self):
         session = self.make_basic_session()

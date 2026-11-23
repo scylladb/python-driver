@@ -241,8 +241,8 @@ class ClusterTest(unittest.TestCase):
 
         same_keyspace_session = Session(cluster, [host])
         assert same_keyspace_session.keyspace is None
-        with pytest.raises(InvalidRequest, match='already attached'):
-            Session(cluster, [host], keyspace='different')
+        different_session = Session(cluster, [host], keyspace='different')
+        assert different_session.keyspace == 'different'
 
     def test_control_connection_query_fallback_no_node_pool_empty_keyspace_is_unset(self):
         cluster = Cluster(
@@ -252,13 +252,12 @@ class ClusterTest(unittest.TestCase):
         host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())
 
         empty_session = Session(cluster, [host], keyspace='')
-        assert cluster.control_connection._get_application_keyspace() is None
 
         none_session = Session(cluster, [host], keyspace=None)
         assert empty_session.keyspace == ''
         assert none_session.keyspace is None
-        with pytest.raises(InvalidRequest, match='already attached'):
-            Session(cluster, [host], keyspace='different')
+        different_session = Session(cluster, [host], keyspace='different')
+        assert different_session.keyspace == 'different'
 
     def test_control_connection_query_fallback_fallback_tolerates_empty_initial_pools(self):
         cluster = Cluster(
@@ -275,8 +274,6 @@ class ClusterTest(unittest.TestCase):
         mocked_add_or_renew_pool.assert_called_once_with(host, is_host_addition=False)
         assert session._initial_connect_futures == {future}
         assert session._pools == {}
-        assert set(cluster.control_connection._application_sessions) == set()
-        assert cluster.control_connection._get_application_keyspace() is _NOT_SET
 
     def test_on_add_waits_until_every_session_pool_is_scheduled(self):
         cluster = Cluster()
@@ -5683,7 +5680,7 @@ class SessionTest(unittest.TestCase):
         s.execute = Mock()
 
         s.set_keyspace('my"ks')
-        query = s.execute.call_args[0][0]
+        query = s.execute.call_args[0][0].query_string
         assert query == 'USE "my""ks"', (
             "Double quotes in keyspace name must be escaped as double-double quotes, "
             "got: %r" % query)
@@ -5691,7 +5688,7 @@ class SessionTest(unittest.TestCase):
         # Also verify a simple keyspace name doesn't get unnecessarily quoted
         s.execute.reset_mock()
         s.set_keyspace('simple_ks')
-        query = s.execute.call_args[0][0]
+        query = s.execute.call_args[0][0].query_string
         assert query == 'USE simple_ks', (
             "Simple keyspace names should not be quoted, got: %r" % query)
 
@@ -5819,6 +5816,25 @@ class SessionTest(unittest.TestCase):
 
         callback.assert_called_once()
         assert callback.call_args.args[0] == {'host1': [keyspace_error]}
+
+    def test_keyspace_propagation_dispatches_the_tracked_pool_snapshot(self):
+        pool = Mock(host='host1')
+        session = Mock(_pools={'host1': pool})
+
+        class RemovePoolAfterSnapshot:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                session._pools.clear()
+
+        session._lock = RemovePoolAfterSnapshot()
+        pool._set_keyspace_for_all_conns.side_effect = (
+            lambda keyspace, callback: callback(pool, []))
+        callback = Mock()
+        Session._set_keyspace_for_all_pools(session, 'ks', callback)
+        pool._set_keyspace_for_all_conns.assert_called_once()
+        callback.assert_called_once_with({})
 
     def test_remove_pool_by_equal_host_at_another_endpoint(self):
         host = Host("127.0.0.1", SimpleConvictionPolicy, host_id=uuid.uuid4())

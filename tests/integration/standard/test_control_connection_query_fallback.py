@@ -123,10 +123,11 @@ class ControlConnectionQueryFallbackIntegrationTests(unittest.TestCase):
         finally:
             bootstrap_cluster.shutdown()
 
-    def test_shared_control_connection_accepts_only_one_session_keyspace(self):
+    def test_shared_control_connection_supports_session_defaults(self):
         self._bootstrap_keyspaces(
             'fallback_ks_one', 'fallback_ks_two',
-            tables=("CREATE TABLE fallback_ks_one.items (id int PRIMARY KEY, value text)",))
+            tables=("CREATE TABLE fallback_ks_one.items (id int PRIMARY KEY, value text)",
+                    "CREATE TABLE fallback_ks_two.items (id int PRIMARY KEY, value text)"))
 
         self.cluster = TestCluster(
             allow_control_connection_query_fallback=ControlConnectionQueryFallback.SkipPoolCreation,
@@ -134,14 +135,12 @@ class ControlConnectionQueryFallbackIntegrationTests(unittest.TestCase):
         )
         session_one = self.cluster.connect('fallback_ks_one')
         session_one_peer = self.cluster.connect('fallback_ks_one')
+        session_two = self.cluster.connect('fallback_ks_two')
+        session_unset = self.cluster.connect()
         control_connection = self.cluster.control_connection._connection
 
         assert list(session_one.get_pools()) == []
         assert list(session_one_peer.get_pools()) == []
-        with pytest.raises(InvalidRequest, match='already attached'):
-            self.cluster.connect('fallback_ks_two')
-        with pytest.raises(InvalidRequest, match='already attached'):
-            self.cluster.connect()
 
         insert_one = session_one.execute_async(
             "INSERT INTO items (id, value) VALUES (1, 'one')")
@@ -159,6 +158,15 @@ class ControlConnectionQueryFallbackIntegrationTests(unittest.TestCase):
             "SELECT value FROM items WHERE id IN (1, 2)")
 
         assert {row.value for row in select_one.result()} == {'one', 'prepared-one'}
+
+        # Sequential requests select each Session's default on the same socket.
+        session_two.execute("INSERT INTO items (id, value) VALUES (1, 'two')")
+        assert session_two.execute('SELECT value FROM items WHERE id = 1').one().value == 'two'
+        assert session_one.execute('SELECT value FROM items WHERE id = 1').one().value == 'one'
+
+        # No default means inherit the physical connection's current state.
+        assert session_unset.execute('SELECT value FROM items WHERE id = 1').one().value == 'one'
+        assert session_unset.keyspace is None
         assert self.cluster.control_connection._connection is control_connection
 
     def test_single_session_can_change_keyspace_with_use(self):
@@ -191,7 +199,7 @@ class ControlConnectionQueryFallbackIntegrationTests(unittest.TestCase):
                 finally:
                     cluster.shutdown()
 
-    def test_shared_control_connection_keyspace_is_reclaimed_after_shutdown(self):
+    def test_shared_control_connection_allows_other_sessions_before_shutdown(self):
         self._bootstrap_keyspaces('fallback_ks_one', 'fallback_ks_two')
 
         self.cluster = TestCluster(
@@ -205,22 +213,39 @@ class ControlConnectionQueryFallbackIntegrationTests(unittest.TestCase):
         session_one.execute("SELECT key FROM system.local WHERE key='local'")
         assert control_connection.keyspace == 'fallback_ks_one'
 
-        # while the binding is held, another keyspace cannot use the fallback
-        with pytest.raises(InvalidRequest, match='already attached'):
-            self.cluster.connect('fallback_ks_two')
+        session_two = self.cluster.connect('fallback_ks_two')
+        session_two.execute("SELECT key FROM system.local WHERE key='local'")
+        assert control_connection.keyspace == 'fallback_ks_two'
 
         session_one.shutdown()
 
-        # the binding is released with its only holder, so it can be taken over
-        session_two = self.cluster.connect('fallback_ks_two')
         session_two.execute("SELECT key FROM system.local WHERE key='local'")
         assert control_connection.keyspace == 'fallback_ks_two'
 
         session_two.shutdown()
 
-        # ...but not by a session without a keyspace: the shared connection is
-        # still in 'fallback_ks_two' and CQL cannot unset it
-        with pytest.raises(InvalidRequest, match='cannot be reset to no keyspace'):
-            self.cluster.connect()
+        session_unset = self.cluster.connect()
+        session_unset.execute("SELECT key FROM system.local WHERE key='local'")
+        assert session_unset.keyspace is None
+        assert control_connection.keyspace == 'fallback_ks_two'
 
         assert self.cluster.control_connection._connection is control_connection
+
+    def test_rejected_use_keeps_fallback_available(self):
+        self._bootstrap_keyspaces('fallback_ks_one')
+        self.cluster = TestCluster(
+            allow_control_connection_query_fallback=(
+                ControlConnectionQueryFallback.SkipPoolCreation),
+            connect_timeout=1,
+        )
+        session = self.cluster.connect('fallback_ks_one')
+        session.execute("SELECT key FROM system.local WHERE key='local'")
+        connection = self.cluster.control_connection._connection
+
+        with pytest.raises(InvalidRequest):
+            session.execute('USE fallback_keyspace_that_does_not_exist')
+
+        assert session.execute(
+            "SELECT key FROM system.local WHERE key='local'").one().key == 'local'
+        assert session.keyspace == 'fallback_ks_one'
+        assert self.cluster.control_connection._connection is connection

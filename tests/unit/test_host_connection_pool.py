@@ -12,22 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from concurrent.futures import Future, ThreadPoolExecutor
+from collections import deque
 import logging
 import uuid
 from cassandra.protocol_features import ProtocolFeatures
+from cassandra.protocol import ResultMessage
 
 from cassandra.shard_info import _ShardingInfo
 
 import unittest
-from threading import Barrier, Thread, Event, Lock, RLock
+from threading import Barrier, Thread, Event, Lock, RLock, current_thread
 from unittest.mock import Mock, NonCallableMagicMock, MagicMock, patch
 
 from cassandra import AuthenticationFailed
-from cassandra.cluster import Cluster, Session, ShardAwareOptions
+from cassandra.cluster import Cluster, ResponseFuture, Session, ShardAwareOptions
 from cassandra._lifecycle import ConnectionFailureReservation, PoolOwnershipReservation
 from cassandra.connection import (ClientRoutesEndPoint, Connection, ConnectionBusy,
                                   ConnectionException, ConnectionSendError,
-                                  ConnectionShutdown,
+                                  ConnectionShutdown, Timer,
                                   DefaultEndPoint, SniEndPoint, UnixSocketEndPoint)
 from cassandra.pool import HostConnection
 from cassandra.pool import Host, NoConnectionsAvailable
@@ -65,6 +67,24 @@ def _make_socket_pool(session=None):
     pool = HostConnection(host, HostDistance.LOCAL, session)
     session._pools = {host: pool}
     return host, session, pool, original, replacement
+
+
+def _real_async_keyspace(conn):
+    conn._requests = {}
+    conn._sender_released_request_ids = set()
+    conn.request_ids = deque()
+    conn.get_request_id.return_value = 7
+    conn.set_keyspace_async.side_effect = (
+        lambda *args: Connection.set_keyspace_async(conn, *args))
+    timers = []
+
+    def create_timer(delay, callback):
+        timer = Timer(delay, callback)
+        timers.append(timer)
+        return timer
+
+    conn.create_timer.side_effect = create_timer
+    return timers
 
 
 @pytest.fixture
@@ -1353,7 +1373,7 @@ class HostConnectionTests(_PoolTests):
         replacement.close.assert_not_called()
         pool.shutdown()
 
-    def test_borrow_rejects_unsynchronized_connection_without_waiting(self):
+    def test_borrow_allows_unsynchronized_connection_without_waiting(self):
         host = Mock(spec=Host, address='ip1')
         session = self.make_session()
         conn = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
@@ -1366,8 +1386,9 @@ class HostConnectionTests(_PoolTests):
             lambda keyspace: setattr(conn, 'keyspace', keyspace)
         with patch.object(pool._stream_available_condition, 'wait',
                           side_effect=AssertionError('borrow blocked the reactor')):
-            with pytest.raises(NoConnectionsAvailable, match='current session keyspace'):
-                pool.borrow_connection(timeout=1)
+            borrowed, _ = pool.borrow_connection(timeout=1)
+            assert borrowed is conn
+            pool.return_connection(borrowed)
 
         pool._sync_keyspace(conn)
         borrowed, _ = pool.borrow_connection(timeout=1)
@@ -1381,6 +1402,7 @@ class HostConnectionTests(_PoolTests):
                             is_closed=False, max_request_id=100, lock=Lock())
         session.cluster.connection_factory.return_value = conn
         pool = self.make_pool(host, session)
+        session.keyspace = 'missing_ks'
 
         errors = []
         pool._set_keyspace_for_all_conns(
@@ -1390,11 +1412,7 @@ class HostConnectionTests(_PoolTests):
             conn, ConnectionException('keyspace unavailable', host.endpoint))
         assert errors
         assert conn.keyspace == 'foobarkeyspace'
-        with pytest.raises(NoConnectionsAvailable):
-            pool.borrow_connection(timeout=0)
-
-        borrowed, _ = pool.borrow_connection(
-            timeout=0, allow_keyspace_mismatch=True)
+        borrowed, _ = pool.borrow_connection(timeout=0)
         assert borrowed is conn
         pool.return_connection(borrowed)
 
@@ -1405,7 +1423,8 @@ class HostConnectionTests(_PoolTests):
                             is_closed=False, max_request_id=100, lock=Lock())
         session.cluster.connection_factory.return_value = conn
         pool = self.make_pool(host, session)
-        error = ConnectionBusy('send blocked')
+        session.keyspace = 'newks'
+        error = ConnectionSendError('send failed', conn.endpoint)
         conn.set_keyspace_async.side_effect = error
         callback = Mock()
 
@@ -1415,7 +1434,7 @@ class HostConnectionTests(_PoolTests):
         assert conn.in_flight == 0
         assert pool._keyspace == 'newks'
 
-    def test_stale_shard_uses_aligned_connection(self):
+    def test_keyspace_mismatch_keeps_shard_routing(self):
         host = Mock(spec=Host, address='ip1')
         session = self.make_session()
         stale = HashableMock(spec=Connection, in_flight=0, is_defunct=False,
@@ -1432,7 +1451,7 @@ class HostConnectionTests(_PoolTests):
         pool._get_connection_for_routing_key = Mock(return_value=stale)
 
         borrowed, _ = pool.borrow_connection(timeout=0)
-        assert borrowed is aligned
+        assert borrowed is stale
         pool.return_connection(borrowed)
 
     def test_published_connection_catches_newer_keyspace(self):
@@ -1462,12 +1481,14 @@ class HostConnectionTests(_PoolTests):
                             is_closed=False, max_request_id=100, lock=Lock())
         session.cluster.connection_factory.return_value = conn
         pool = self.make_pool(host, session)
+        session.keyspace = 'older'
         finished = []
 
         pool._set_keyspace_for_all_conns(
             'older', lambda _pool, errors: finished.append(errors))
         older_callback = conn.set_keyspace_async.call_args.args[1]
         pool._keyspace = 'newer'
+        session.keyspace = 'newer'
         conn.keyspace = 'older'
         conn.in_flight = 1
         older_callback(conn, None)
@@ -1482,6 +1503,201 @@ class HostConnectionTests(_PoolTests):
         assert finished == [[]]
         assert conn.in_flight == 0
         assert conn.keyspace == pool._keyspace
+
+    def test_keyspace_propagation_does_not_depend_on_another_executor_worker(self):
+        _host, session, pool, conn, _replacement = _make_socket_pool()
+        session.keyspace = 'newks'
+        completed = Event()
+
+        def set_keyspace(keyspace, callback):
+            conn.in_flight += 1
+            conn.keyspace = keyspace
+            callback(conn, None)
+
+        conn.set_keyspace_async.side_effect = set_keyspace
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            session.submit.side_effect = executor.submit
+
+            def synchronize_from_worker():
+                pool._set_keyspace_for_all_conns(
+                    'newks', lambda _pool, errors: completed.set())
+                if not completed.wait(1):
+                    raise RuntimeError('synchronization queued behind its own worker')
+
+            executor.submit(synchronize_from_worker).result(timeout=2)
+        assert conn.in_flight == 0
+
+    def test_keyspace_capacity_retry_and_retirement(self):
+        for retire in (False, True):
+            with self.subTest(retire=retire):
+                _host, session, pool, conn, _replacement = _make_socket_pool()
+                session.keyspace = 'newks'
+                conn.in_flight = conn.max_request_id
+                timers = _real_async_keyspace(conn)
+                finished = []
+                with patch('cassandra.connection.time.sleep',
+                           side_effect=RuntimeError('reactor capacity wait')):
+                    pool._set_keyspace_for_all_conns(
+                        'newks', lambda _pool, errors: finished.append(errors))
+                assert len(timers) == 1
+                assert not finished
+                assert conn.in_flight == conn.max_request_id
+                session.submit.assert_not_called()
+                if retire:
+                    late_retry = timers[0].callback
+                    pool.shutdown()
+                    assert timers[0].canceled
+                    assert timers[0].callback is None
+                    assert len(finished) == 1 and finished[0]
+                    assert not pool._keyspace_waiters
+                    late_retry()
+                    assert len(finished) == 1
+                    conn.send_msg.assert_not_called()
+                else:
+                    conn.in_flight = 0
+                    timers[0].callback()
+                    conn.send_msg.call_args.args[2](Mock(spec=ResultMessage))
+                    assert finished == [[]]
+                    assert conn.keyspace == 'newks'
+                    assert conn.in_flight == 0
+                    assert not pool._keyspace_waiters
+
+    def test_shutdown_closes_connections_when_keyspace_errback_raises(self):
+        host, session, pool, conn, _replacement = _make_socket_pool()
+        session.keyspace = 'newks'
+        session._pool_generations = {}
+        session._pool_intents = {}
+        session._initial_connect_futures = ()
+        session._pool_creation_work = {}
+        conn.in_flight = conn.max_request_id
+        timers = _real_async_keyspace(conn)
+        first = ResponseFuture(session, None, None, None, host=host)
+        second = ResponseFuture(session, None, None, None, host=host)
+
+        def fail(error):
+            raise RuntimeError('user errback')
+
+        first.add_errback(fail)
+        second_errback = Mock()
+        second.add_errback(second_errback)
+        for future in (first, second):
+            Session._set_keyspace_for_all_pools(
+                session, 'newks', future._set_keyspace_completed)
+        assert len(timers) == 2
+
+        with patch('cassandra.pool.log.exception') as log_exception:
+            Session.shutdown(session)
+
+        log_exception.assert_called_once()
+        assert session.is_shutdown and pool.is_shutdown
+        assert not pool._keyspace_waiters
+        assert all(timer.canceled and timer.callback is None for timer in timers)
+        assert first._event.is_set() and second._event.is_set()
+        second_errback.assert_called_once()
+        for future in (first, second):
+            with pytest.raises(ConnectionException):
+                future.result()
+        conn.close.assert_called_once()
+
+    def test_keyspace_capacity_timer_failure_and_registration_retirement(self):
+        for retire in (False, True):
+            with self.subTest(retire=retire):
+                _host, session, pool, conn, _replacement = _make_socket_pool()
+                session.keyspace = 'newks'
+                conn.in_flight = conn.max_request_id
+                timers = _real_async_keyspace(conn)
+                create_timer = conn.create_timer.side_effect
+
+                def fail_or_retire(delay, callback):
+                    if retire:
+                        pool.shutdown()
+                        return create_timer(delay, callback)
+                    raise RuntimeError('timer unavailable')
+
+                conn.create_timer.side_effect = fail_or_retire
+                finished = []
+                pool._set_keyspace_for_all_conns(
+                    'newks', lambda _pool, errors: finished.append(errors))
+                assert len(finished) == 1 and finished[0]
+                assert conn.in_flight == conn.max_request_id
+                assert not pool._keyspace_waiters
+                if retire:
+                    assert timers[0].canceled and timers[0].callback is None
+                conn.send_msg.assert_not_called()
+                session.submit.assert_not_called()
+
+    def test_corrective_keyspace_capacity_retry_leaves_the_reactor_free(self):
+        _host, session, pool, conn, _replacement = _make_socket_pool()
+        session.keyspace = 'older'
+        timers = _real_async_keyspace(conn)
+        finished = []
+        pool._set_keyspace_for_all_conns(
+            'older', lambda _pool, errors: finished.append(errors))
+        old_response = conn.send_msg.call_args.args[2]
+        session.keyspace = pool._keyspace = 'newer'
+        return_connection = pool.return_connection
+
+        def fill_after_release(connection):
+            return_connection(connection)
+            connection.in_flight = connection.max_request_id
+
+        pool.return_connection = fill_after_release
+        with patch('cassandra.connection.time.sleep',
+                   side_effect=RuntimeError('reactor capacity wait')):
+            old_response(Mock(spec=ResultMessage))
+        assert len(timers) == 1
+        assert not finished
+        assert conn.send_msg.call_count == 1
+        pool.return_connection = return_connection
+        conn.in_flight = 0
+        timers[0].callback()
+        conn.send_msg.call_args.args[2](Mock(spec=ResultMessage))
+        assert conn.keyspace == 'newer'
+        assert conn.in_flight == 0
+        assert finished == [[]]
+        session.submit.assert_not_called()
+
+    def test_keyspace_fast_path_keeps_the_calling_callback_thread(self):
+        _host, session, pool, conn, _replacement = _make_socket_pool()
+        session.keyspace = conn.keyspace = 'newks'
+        callback_threads = []
+
+        def set_keyspace(keyspace, callback):
+            conn.in_flight += 1
+            callback(conn, None)
+
+        conn.set_keyspace_async.side_effect = set_keyspace
+        caller = current_thread()
+        pool._set_keyspace_for_all_conns(
+            'newks', lambda _pool, errors: callback_threads.append(current_thread()))
+        assert callback_threads == [caller]
+        session.submit.assert_not_called()
+
+    def test_stale_pool_dispatch_keeps_the_current_session_default(self):
+        _host, session, pool, conn, _replacement = _make_socket_pool()
+        session._lock = RLock()
+        session.keyspace = 'older'
+        completed = []
+
+        def set_keyspace(keyspace, callback):
+            conn.in_flight += 1
+            conn.keyspace = keyspace
+            callback(conn, None)
+
+        conn.set_keyspace_async.side_effect = set_keyspace
+        actual_dispatch = pool._set_keyspace_for_all_conns
+
+        def dispatch_after_newer_default(keyspace, callback):
+            pool._set_keyspace_for_all_conns = actual_dispatch
+            Session._set_keyspace_for_all_pools(
+                session, 'newer', lambda errors: completed.append(('newer', errors)))
+            actual_dispatch(keyspace, callback)
+
+        pool._set_keyspace_for_all_conns = dispatch_after_newer_default
+        Session._set_keyspace_for_all_pools(
+            session, 'older', lambda errors: completed.append(('older', errors)))
+        assert completed == [('newer', {}), ('older', {})]
+        assert session.keyspace == pool._keyspace == conn.keyspace == 'newer'
 
     def test_failed_replacement_keyspace_sync_removes_connection(self):
         host, session, pool, old_conn, new_conn = _make_socket_pool()
