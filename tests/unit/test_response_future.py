@@ -45,7 +45,7 @@ from cassandra.policies import (RetryPolicy, ExponentialBackoffRetryPolicy,
 from cassandra.pool import Host, NoConnectionsAvailable
 from cassandra.query import (SimpleStatement, PreparedStatement, BoundStatement,
                              BatchStatement)
-from tests.unit.utils import move_host
+from tests.unit.utils import move_host, run_isolated_subprocess
 from tests.util import assertEqual, assertIsInstance
 import pytest
 
@@ -3007,6 +3007,51 @@ class ResponseFutureTests(unittest.TestCase):
         assert rf._is_keyspace_change_query(indented_use)
         assert not rf._is_keyspace_change_query(indented_select)
         assert time.time() - start < 2
+
+    def test_control_connection_fallback_line_comment_endings(self):
+        rf = ResponseFuture.__new__(ResponseFuture)
+        for marker in ('--', '//'):
+            for ending in ('\r', '\n', '\r\n'):
+                prefix = marker + ' comment' + ending
+                for statement, expected in (
+                        ('USE newks', True),
+                        ('use newks', True),
+                        ('USEFUL', False),
+                        ('SELECT * FROM foo', False)):
+                    query = prefix + statement
+                    with self.subTest(query=query):
+                        message = QueryMessage(
+                            query=query, consistency_level=ConsistencyLevel.ONE)
+                        assert rf._is_keyspace_change_query(message) is expected
+
+            # USE inside a comment at EOF must not be treated as a statement.
+            for query in (marker, marker + ' USE newks'):
+                with self.subTest(query=query):
+                    message = QueryMessage(
+                        query=query, consistency_level=ConsistencyLevel.ONE)
+                    assert not rf._is_keyspace_change_query(message)
+
+    def test_control_connection_fallback_repeated_crlf_comments(self):
+        # Bound the runtime in a subprocess so a backtracking regression cannot
+        # hang the test runner while holding the GIL.
+        script = r'''
+from cassandra import ConsistencyLevel
+from cassandra.cluster import ResponseFuture
+from cassandra.protocol import QueryMessage
+
+rf = ResponseFuture.__new__(ResponseFuture)
+for marker in ('--', '//'):
+    prefix = (marker + '\r\n') * 256
+    for statement, expected in (
+            ('USE newks', True),
+            ('SELECT * FROM foo', False),
+            ('USEFUL', False),
+            ('', False)):
+        message = QueryMessage(query=prefix + statement,
+                               consistency_level=ConsistencyLevel.ONE)
+        assert rf._is_keyspace_change_query(message) is expected
+'''
+        run_isolated_subprocess(script, timeout=10)
 
     def test_control_connection_fallback_use_failure_reports_error_once(self):
         session = self.make_basic_session()

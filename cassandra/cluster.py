@@ -7756,8 +7756,10 @@ class ResponseFuture(object):
                 query = query.decode('utf8')
             except UnicodeDecodeError:
                 return False
+        # Consume only one line-ending character per comment. An optional LF
+        # after CR can also match the whitespace branch, causing backtracking.
         return isinstance(query, str) and \
-            re.match(r'^(?:\s|(?:--|//)[^\r\n]*(?:\r\n?|\n|$)|/\*(?:[^*]|\*(?!/))*\*/)*USE\b',
+            re.match(r'^(?:\s|(?:--|//)[^\r\n]*(?:[\r\n]|$)|/\*(?:[^*]|\*(?!/))*\*/)*USE\b',
                      query, re.IGNORECASE) is not None
 
     def _control_connection_failed(self):
