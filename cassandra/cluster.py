@@ -5752,12 +5752,13 @@ class ControlConnection(object):
                 return
             waiters = self._application_keyspace_waiters
             self._application_keyspace_waiters = []
-        for future, host in waiters:
+        for future, host, retry_context in waiters:
             if future._is_final():
                 continue
             try:
                 submitted = future.session.submit(
-                    future._retry_task, False, host)
+                    future._retry_task, False, host,
+                    retry_context=retry_context)
             except Exception as exc:
                 future._set_final_exception(exc)
             else:
@@ -7302,6 +7303,7 @@ class ResponseFuture(object):
     _current_host = None
     _connection = None
     _request_pool = None
+    _request_callback = None
     _query_retries = 0
     _start_time = None
     _metrics = None
@@ -7426,9 +7428,7 @@ class ResponseFuture(object):
         conn_in_flight = None
         connection = self._connection
         if connection is not None:
-            control_connection_request = \
-                connection.is_control_connection and \
-                self._control_connection_query_attempted
+            control_connection_request = connection.is_control_connection
             if control_connection_request:
                 self._orphan_control_connection_request(
                     connection, self._req_id)
@@ -7445,14 +7445,21 @@ class ResponseFuture(object):
                             retry_timeout = True
                         else:
                             request_id = self._req_id
-                            pool = self._request_pool
-                            connection._requests.pop(request_id)
-                            if (pool and not pool.is_shutdown) or \
-                                    connection.is_control_connection:
-                                connection.orphaned_request_ids.add(request_id)
-                                if len(connection.orphaned_request_ids) >= \
-                                        connection.orphaned_threshold:
-                                    connection.orphaned_threshold_reached = True
+                            request = connection._requests[request_id]
+                            callback = request[0] if isinstance(request, tuple) else request
+                            # A completed attempt's stream may already belong
+                            # to another future while this one waits to retry.
+                            owns_request = (self._request_callback is None or
+                                            callback is self._request_callback())
+                            if owns_request:
+                                pool = self._request_pool
+                                connection._requests.pop(request_id)
+                                if (pool and not pool.is_shutdown) or \
+                                        connection.is_control_connection:
+                                    connection.orphaned_request_ids.add(request_id)
+                                    if len(connection.orphaned_request_ids) >= \
+                                            connection.orphaned_threshold:
+                                        connection.orphaned_threshold_reached = True
                     if retry_timeout:
                         return self._on_timeout(_attempts)
             # PYTHON-1044
@@ -7555,8 +7562,18 @@ class ResponseFuture(object):
             # they last left off
             self.query_plan = iter(self._load_balancer.make_query_plan(self.session.keyspace, self.query))
 
-    def send_request(self, error_no_hosts=True, is_speculative=False):
+    def send_request(self, error_no_hosts=True, is_speculative=False,
+                     excluded_host=None, retry_error=None, retry_context=None):
         """ Internal """
+        # Internal PREPARE/keyspace callbacks may return here before the
+        # application resend. Keep its policy destination across that work.
+        if not self._retry_context_is_current(retry_context):
+            return True
+        if not is_speculative and retry_context is not None:
+            reuse, retry_host, original_error, _generation = retry_context
+            if reuse:
+                return self._retry_same_host(retry_host, original_error, retry_context)
+            excluded_host, retry_error = retry_host, original_error
         # query_plan is an iterator, so this will resume where we last left
         # off if send_request() is called multiple times
         for host in self.query_plan:
@@ -7564,6 +7581,8 @@ class ResponseFuture(object):
                 self._set_final_exception(TypeError(
                     "Query plan entries must be Host instances"))
                 return True
+            if excluded_host is not None and self._same_retry_host(host, excluded_host):
+                continue
             # Public targets and extension query plans may retain a Host from
             # an older Cluster or endpoint generation. Resolve only new
             # selections; internal attempt callbacks keep their original owner.
@@ -7585,7 +7604,10 @@ class ResponseFuture(object):
                           host.host_id)
                 req_id = None
             else:
-                req_id = self._query(host, is_speculative=is_speculative)
+                req_id = self._query(host, is_speculative=is_speculative,
+                                     retry_context=retry_context)
+            if not self._retry_context_is_current(retry_context):
+                return True
             if req_id is _NOT_SET:
                 # The failed send has a retry decision or final result.
                 return True
@@ -7597,14 +7619,24 @@ class ResponseFuture(object):
                     time.time() - self._start_time > self.timeout):
                 self._on_timeout()
                 return True
+        if not self._retry_context_is_current(retry_context):
+            return True
         if self._timeout_before_send:
             # The timeout fired before anything was sent: report it rather
             # than NoHostAvailable, and don't fall back after the deadline.
             self._on_timeout()
             return True
         if error_no_hosts:
-            if self._fallback_to_control_connection():
-                req_id = self._query_control_connection()
+            control_host = self.session.cluster.get_control_connection_host()
+            control = self.session.cluster.control_connection
+            if control_host is None and control is not None:
+                control_socket = control._connection
+                if control_socket is not None:
+                    control_host = control_socket.endpoint
+            if (self._fallback_to_control_connection() and
+                    (excluded_host is None or not self._same_retry_host(
+                        control_host, excluded_host))):
+                req_id = self._query_control_connection(retry_context=retry_context)
                 if req_id is _NOT_SET:
                     return True
                 if req_id is not None:
@@ -7613,14 +7645,17 @@ class ResponseFuture(object):
                     # would clobber it with the USE id on the keyspace path.
                     return True
 
-            if self._timeout_before_send:
-                # The timeout fired after the check above: before the fallback
-                # was admitted, or while deciding not to fall back. Nothing
-                # was sent, so report the timeout, not NoHostAvailable.
+            if not self._retry_context_is_current(retry_context):
+                return True
+            if self._timeout_before_send or (self._time_remaining is not None and
+                                             self._time_remaining <= 0):
+                # The timeout fired or the deadline expired during fallback
+                # selection. Nothing was sent, so the timeout takes precedence.
                 self._on_timeout()
                 return True
-            self._set_final_exception(NoHostAvailable(
-                "Unable to complete the operation against any hosts", self._errors))
+            self._set_final_exception(retry_error if retry_error is not None else NoHostAvailable(
+                "Unable to complete the operation against any hosts", self._errors),
+                retry_context=retry_context)
         return False
 
     def _has_usable_node_pool(self):
@@ -7760,54 +7795,77 @@ class ResponseFuture(object):
             re.match(r'^(?:\s|(?:--|//)[^\r\n]*(?:\r\n?|\n|$)|/\*(?:[^*]|\*(?!/))*\*/)*USE\b',
                      query, re.IGNORECASE) is not None
 
-    def _control_connection_failed(self):
+    def _control_connection_failed(self, retry_context=None):
+        if not self._retry_context_is_current(retry_context):
+            return
+        if retry_context is not None:
+            if self._time_remaining is not None and self._time_remaining <= 0:
+                self._on_timeout()
+            else:
+                self._set_final_exception(retry_context[2], retry_context=retry_context)
+            return
         self._set_final_exception(NoHostAvailable(
             "Unable to complete the operation against any hosts", self._errors))
 
     def _set_control_connection_keyspace(self, connection, host, keyspace,
                                          message=None, cb=None, request_id=_NOT_SET,
-                                         provisional_session=None):
+                                         provisional_session=None, retry_context=None):
         use_message = QueryMessage(
             query='USE %s' % protect_name(keyspace),
             consistency_level=ConsistencyLevel.ONE)
         control_connection = self.session.cluster.control_connection
+        page_generation = self._page_generation
 
         def keyspace_set(response):
             if isinstance(response, ResultMessage) and response.kind == RESULT_KIND_SET_KEYSPACE:
                 connection.keyspace = response.new_keyspace
+            if (page_generation != self._page_generation or self._is_final() or
+                    not self._retry_context_is_current(retry_context)):
+                control_connection._finish_internal_keyspace_change(
+                    connection, request_id)
+                return
+            if isinstance(response, ResultMessage) and response.kind == RESULT_KIND_SET_KEYSPACE:
                 control_connection._finish_internal_keyspace_change(
                     connection, request_id)
                 if self._send_control_connection_message(
-                        message=message, cb=cb, connection=connection, host=host) is None:
-                    self._control_connection_failed()
+                        message=message, cb=cb, connection=connection, host=host,
+                        retry_context=retry_context) is None:
+                    self._control_connection_failed(retry_context)
             elif isinstance(response, ErrorMessage):
                 control_connection._finish_internal_keyspace_change(
                     connection, request_id)
-                self._set_final_exception(response.to_exception())
+                if retry_context is not None:
+                    self._control_connection_failed(retry_context)
+                else:
+                    self._set_final_exception(response.to_exception())
             elif isinstance(response, ConnectionException):
                 control_connection._finish_internal_keyspace_change(
                     connection, request_id)
                 self._errors[host] = response
-                # Known limitation: this retry goes around the RetryPolicy and
-                # _query_retries, because both are keyed to the user's statement
-                # and this is the driver's own USE. It also has no backoff, so a
-                # flapping control connection re-sends USE until the client-side
-                # timeout fires instead of failing fast. Routing it through the
-                # retry machinery shared with the pooled path would be the fix.
-                self.session.submit(self._retry_task, False, host)
+                # Internal USE does not consult application policy. Retain any
+                # existing policy destination; without one, legacy recovery can
+                # retry a flapping control connection until the client deadline.
+                self.session.submit(self._retry_task, False, host, page_generation,
+                                    retry_context=retry_context)
             elif isinstance(response, Exception):
                 control_connection._finish_internal_keyspace_change(
                     connection, request_id)
-                self._set_final_exception(response)
+                if retry_context is not None:
+                    self._control_connection_failed(retry_context)
+                else:
+                    self._set_final_exception(response)
             else:
                 control_connection._finish_internal_keyspace_change(
                     connection, request_id)
-                self._set_final_exception(ConnectionException(
-                    "Unexpected response while setting the control-connection keyspace: %r" %
-                    (response,), connection.endpoint))
+                if retry_context is not None:
+                    self._control_connection_failed(retry_context)
+                else:
+                    self._set_final_exception(ConnectionException(
+                        "Unexpected response while setting the control-connection keyspace: %r" %
+                        (response,), connection.endpoint))
 
-        # Returns None on failure; send_request() turns that into the final
-        # NoHostAvailable. Setting it here too would fire every errback twice.
+        # Returns None on failure; the caller reports the retained retry error
+        # or NoHostAvailable. Keep finalization in that caller.
         sent = self._send_control_connection_message(
             message=use_message, cb=keyspace_set, connection=connection,
             host=host, record_attempt=False, record_size=False,
@@ -7826,7 +7884,7 @@ class ResponseFuture(object):
     def _send_control_connection_message(self, message=None, cb=None, connection=None,
                                          host=None, record_attempt=True, record_size=True,
                                          request_id=_NOT_SET,
-                                         provisional_session=None):
+                                         provisional_session=None, retry_context=None):
         if message is None:
             message = self.message
 
@@ -7844,6 +7902,11 @@ class ResponseFuture(object):
         if request_id is _NOT_SET:
             request_id = None
         request_sent = False
+        send_error = None
+        use_retry_policy = (message is self.message and record_attempt and
+                            not isinstance(message, PrepareMessage))
+        previous_connection = self._connection
+        previous_pool = self._request_pool
         previous_req_id = self._req_id
         try:
             if request_id is None:
@@ -7851,18 +7914,19 @@ class ResponseFuture(object):
             result_meta = self._bound_result_metadata
             if cb is None:
                 cb = partial(self._set_result, host, connection, None,
-                             page_generation=self._page_generation)
+                             page_generation=self._page_generation,
+                             retry_context=retry_context)
             cb = partial(self._handle_control_connection_response, connection,
                          request_id, cb)
 
             control_connection = self.session.cluster.control_connection
             with control_connection._application_query_lock:
                 self._control_connection_requests[(connection, request_id)] = cb
-                # Same admission rule as _query(): once the timeout has fired
-                # without a connection, nothing may be sent. The finally block
-                # below finds the registered request and returns its stream.
+                # A timeout or page transition can block admission after
+                # borrowing. The finally block returns the unused stream.
                 with self._send_admission_lock:
-                    if self._timeout_before_send:
+                    if (self._timeout_before_send or
+                            not self._retry_context_is_current(retry_context)):
                         return None
                     self._connection = connection
                     self._request_pool = None
@@ -7896,6 +7960,7 @@ class ResponseFuture(object):
         except ConnectionSendError as exc:
             log.debug("Error pushing request to control connection", exc_info=True)
             self._errors[host] = exc
+            send_error = exc
             if self._metrics is not None:
                 self._metrics.on_connection_error()
             with connection.lock:
@@ -7911,14 +7976,31 @@ class ResponseFuture(object):
             if request_id is not None and not request_sent:
                 # Only roll back if nothing else claimed _req_id in the meantime,
                 # so a nested send that did go out keeps its id.
-                if self._req_id == request_id:
+                if self._connection is connection and self._req_id == request_id:
+                    self._connection = previous_connection
+                    self._request_pool = previous_pool
                     self._req_id = previous_req_id
                 self._release_control_connection_request(
                     connection, request_id, provisional_session)
 
+        if send_error is not None and use_retry_policy:
+            # The push may have queued application bytes. Release the stream,
+            # provisional session and keyspace marker before policy can resend.
+            control_connection._finish_application_keyspace_change(
+                connection, request_id)
+            try:
+                if not self._is_final() and self._retry_context_is_current(retry_context):
+                    self._handle_request_error(send_error, host)
+            except Exception as exc:
+                self._set_final_exception(exc)
+            return _NOT_SET
+
         return None
 
-    def _query_control_connection(self, message=None, cb=None, connection=None, host=None):
+    def _query_control_connection(self, message=None, cb=None, connection=None, host=None,
+                                  retry_context=None):
+        if not self._retry_context_is_current(retry_context):
+            return _NOT_SET
         self._control_connection_query_attempted = True
         control_connection = self.session.cluster.control_connection
         if control_connection is None:
@@ -7938,8 +8020,22 @@ class ResponseFuture(object):
                     "Control connection is not connected")
                 return None
 
+            # Reconnection can replace control._connection independently of
+            # this lock. Retain the physical connection's bound node identity
+            # even when metadata has replaced that Host after an endpoint move.
+            host = (vars(connection).get('_control_connection_host')
+                    or control_connection._get_host_for_connection(connection)
+                    or connection.endpoint)
+            application_message = self.message if message is None else message
+            if (application_message is self.message and
+                    not isinstance(application_message, PrepareMessage) and
+                    not self._retry_host_allowed(host, retry_context)):
+                return None
+
             keyspace = self.session.keyspace or None
             if changing_keyspace and control_connection._application_keyspace_change is not None:
+                if retry_context is not None:
+                    return None
                 self._set_final_exception(InvalidRequest(
                     "A control-connection keyspace change is already in progress"))
                 return _NOT_SET
@@ -7948,18 +8044,22 @@ class ResponseFuture(object):
                 control_connection._prune_application_sessions()
                 if any(other is not self.session for other in
                        control_connection._application_sessions):
+                    if retry_context is not None:
+                        return None
                     self._set_final_exception(InvalidRequest(
                         "Cannot change keyspace while another Session uses "
                         "control-connection fallback"))
                 else:
                     control_connection._application_keyspace_waiters.append(
-                        (self, host))
+                        (self, host, retry_context))
                 return _NOT_SET
             new_application_session = \
                 self.session not in control_connection._application_sessions
             conflict = control_connection._attach_application_session(
                 keyspace, self.session, changing_keyspace=changing_keyspace)
             if conflict is not None:
+                if retry_context is not None:
+                    return None
                 self._set_final_exception(InvalidRequest(conflict))
                 return _NOT_SET
             provisional_session = \
@@ -8026,7 +8126,8 @@ class ResponseFuture(object):
                         connection, request_id)
                 try:
                     self._set_result(host, connection, None, response,
-                                     page_generation=self._page_generation)
+                                     page_generation=self._page_generation,
+                                     retry_context=retry_context)
                 finally:
                     if self._is_final():
                         # A timeout may have finalized this future while the
@@ -8036,7 +8137,7 @@ class ResponseFuture(object):
             sent = self._send_control_connection_message(
                 message=message, cb=keyspace_changed, connection=connection,
                 host=host, request_id=request_id,
-                provisional_session=provisional_session)
+                provisional_session=provisional_session, retry_context=retry_context)
             if sent is None:
                 control_connection._finish_application_keyspace_change(
                     connection, request_id)
@@ -8052,20 +8153,22 @@ class ResponseFuture(object):
             return self._send_control_connection_message(
                 message=message, cb=cb, connection=connection, host=host,
                 request_id=request_id,
-                provisional_session=provisional_session)
+                provisional_session=provisional_session, retry_context=retry_context)
 
         if needs_internal_use:
             return self._set_control_connection_keyspace(
                 connection, host, keyspace, message=message, cb=cb,
                 request_id=request_id,
-                provisional_session=provisional_session)
+                provisional_session=provisional_session, retry_context=retry_context)
 
         return self._send_control_connection_message(
             message=message, cb=cb, connection=connection, host=host,
             request_id=request_id,
-            provisional_session=provisional_session)
+            provisional_session=provisional_session, retry_context=retry_context)
 
-    def _query(self, host, message=None, cb=None, is_speculative=False):
+    def _query(self, host, message=None, cb=None, is_speculative=False, retry_context=None):
+        if not self._retry_context_is_current(retry_context):
+            return _NOT_SET
         if message is None:
             message = self.message
 
@@ -8073,6 +8176,8 @@ class ResponseFuture(object):
                             message is self.message and cb is None and
                             not isinstance(message, PrepareMessage))
 
+        if use_retry_policy and not self._retry_host_allowed(host, retry_context):
+            return None
         self._control_connection_query_attempted = False
 
         pool = self.session._pools.get(host)
@@ -8091,6 +8196,7 @@ class ResponseFuture(object):
         connection = None
         previous_req_id = self._req_id
         previous_pool = self._request_pool
+        previous_callback = self._request_callback
         request_id = None
         request_sent = False
         replace_failed_connection = False
@@ -8132,7 +8238,9 @@ class ResponseFuture(object):
 
                 if cb is None:
                     cb = partial(self._set_result, host, connection, pool,
-                                 page_generation=self._page_generation)
+                                 page_generation=self._page_generation,
+                                 is_speculative=is_speculative,
+                                 retry_context=retry_context)
 
                 # Timeout reads the connection, pool, and stream under this
                 # lock. Keep it until send_msg installs the callback, so it
@@ -8140,15 +8248,16 @@ class ResponseFuture(object):
                 connection.lock.acquire()
                 try:
                     with self._send_admission_lock:
-                        if self._timeout_before_send:
-                            # The timeout already fired; the finally below
-                            # gives the stream back and send_request() times
-                            # out.
+                        if (self._timeout_before_send or
+                                not self._retry_context_is_current(retry_context)):
+                            # Release the borrowed stream in finally when a
+                            # timeout or page transition blocks admission.
                             return None
                         self._current_host = host
                         self._connection = connection
                     self._request_pool = pool
                     self._req_id = request_id
+                    self._request_callback = weakref.ref(cb)
                     self.request_encoded_size = connection.send_msg(
                         message, request_id, cb=cb,
                         encoder=self._protocol_handler.encode_message,
@@ -8180,6 +8289,7 @@ class ResponseFuture(object):
                         self._current_host = previous_host
                         self._req_id = previous_req_id
                         self._request_pool = previous_pool
+                        self._request_callback = previous_callback
                 # Claim the local failure before defunct() invokes other
                 # requests' callbacks. If another reactor already retired the
                 # connection, preserve its host failure reporting.
@@ -8200,6 +8310,7 @@ class ResponseFuture(object):
                         self._current_host = previous_host
                         self._req_id = previous_req_id
                         self._request_pool = previous_pool
+                        self._request_callback = previous_callback
                     connection._requests.pop(request_id, None)
                     connection.orphaned_request_ids.discard(request_id)
                     if not connection.is_defunct:
@@ -8213,7 +8324,7 @@ class ResponseFuture(object):
             # A failed push may have queued bytes. Finish cleanup before
             # consulting application policy or scheduling a retry.
             try:
-                if not self._is_final():
+                if not self._is_final() and self._retry_context_is_current(retry_context):
                     self._handle_request_error(send_error, host)
             except Exception as exc:
                 self._set_final_exception(exc)
@@ -8300,17 +8411,41 @@ class ResponseFuture(object):
         self._start_timer()
         self.send_request()
 
-    def _reprepare(self, prepare_message, host, connection, pool, query_id=None):
+    def _reprepare(self, prepare_message, host, connection, pool, query_id=None,
+                   is_speculative=False, retry_context=None, page_generation=None):
+        if page_generation is None:
+            page_generation = self._page_generation
+        if (page_generation != self._page_generation or
+                not self._retry_context_is_current(retry_context)):
+            return
         cb = partial(self.session.submit, self._execute_after_prepare, host, connection, pool,
-                     expected_query_id=query_id)
+                     expected_query_id=query_id, is_speculative=is_speculative,
+                     retry_context=retry_context, page_generation=page_generation)
         if pool is None and connection is not None and connection.is_control_connection:
             request_id = self._query_control_connection(prepare_message, cb=cb,
-                                                        connection=connection, host=host)
+                                                        connection=connection, host=host,
+                                                        retry_context=retry_context)
         else:
-            request_id = self._query(host, prepare_message, cb=cb)
+            request_id = self._query(host, prepare_message, cb=cb,
+                                     retry_context=retry_context)
         if request_id is None:
-            # try to submit the original prepared statement on some other host
-            self.send_request()
+            self._retry_after_prepare_failure(is_speculative, retry_context)
+
+    def _retry_after_prepare_failure(self, is_speculative, retry_context):
+        if not self._retry_context_is_current(retry_context):
+            return
+        if not is_speculative and retry_context is not None and retry_context[0]:
+            # Re-executing without PREPARE on the same host can loop forever on
+            # UNPREPARED, especially with no client timeout. No other host is
+            # permitted by this policy decision.
+            if self._time_remaining is not None and self._time_remaining <= 0:
+                self._on_timeout()
+            else:
+                self._set_final_exception(retry_context[2], retry_context=retry_context)
+            return
+        self.send_request(is_speculative=is_speculative,
+                          error_no_hosts=not is_speculative,
+                          retry_context=retry_context)
 
     def _cache_tablet_from_payload(self, payload_key, ctype):
         """
@@ -8333,10 +8468,11 @@ class ResponseFuture(object):
         if tablet and keyspace and table:
             self.session.cluster.metadata._tablets.add_tablet(keyspace, table, tablet)
 
-    def _set_result(self, host, connection, pool, response, page_generation=None):
+    def _set_result(self, host, connection, pool, response, page_generation=None,
+                    is_speculative=False, retry_context=None):
         try:
-            if self._is_final() or (page_generation is not None and
-                                    page_generation != self._page_generation):
+            if (self._is_final() or not self._retry_context_is_current(retry_context) or
+                    (page_generation is not None and page_generation != self._page_generation)):
                 # Late (e.g. speculative) or previous-page response: only give the connection back.
                 if pool and not pool.is_shutdown:
                     pool.return_connection(connection)
@@ -8508,7 +8644,10 @@ class ResponseFuture(object):
                     # since this might block, run on the executor to avoid hanging
                     # the event loop thread
                     self.session.submit(self._reprepare, prepare_message, host, connection, pool,
-                                        query_id=query_id)
+                                        query_id=query_id, is_speculative=is_speculative,
+                                        retry_context=retry_context,
+                                        page_generation=(self._page_generation if page_generation is None
+                                                         else page_generation))
                     return
                 else:
                     if hasattr(response, 'to_exception'):
@@ -8556,7 +8695,8 @@ class ResponseFuture(object):
             self._set_final_exception(ConnectionException(
                 "Failed to set keyspace on all hosts: %s" % (errors,)))
 
-    def _execute_after_prepare(self, host, connection, pool, response, expected_query_id=None):
+    def _execute_after_prepare(self, host, connection, pool, response, expected_query_id=None,
+                               is_speculative=False, retry_context=None, page_generation=None):
         """
         Handle the response to our attempt to prepare a statement.
         If it succeeded, run the original query again against the same host.
@@ -8564,7 +8704,11 @@ class ResponseFuture(object):
         if pool:
             pool.return_connection(connection)
 
-        if self._final_exception:
+        if (self._final_exception is not None or
+                (self._is_final() and not (isinstance(response, ResultMessage) and
+                                          response.kind == RESULT_KIND_PREPARED)) or
+                not self._retry_context_is_current(retry_context) or
+                (page_generation is not None and page_generation != self._page_generation)):
             return
 
         if isinstance(response, ResultMessage):
@@ -8604,30 +8748,38 @@ class ResponseFuture(object):
                     if prepared_statement is not None:
                         prepared_statement.column_metadata = response.bind_metadata
 
-                # use self._query to re-use the same host and
-                # at the same time properly borrow the connection
+                # A concurrent successful attempt still benefits from refreshed
+                # prepared metadata, but must not send another EXECUTE.
+                if self._is_final():
+                    return
+                # Borrow again from the same host after successful PREPARE.
                 if pool is None and connection is not None and connection.is_control_connection:
-                    request_id = self._query_control_connection(connection=connection, host=host)
+                    request_id = self._query_control_connection(connection=connection, host=host,
+                                                                retry_context=retry_context)
                 else:
-                    request_id = self._query(host)
+                    request_id = self._query(host, is_speculative=is_speculative,
+                                             retry_context=retry_context)
                 if request_id is None:
-                    # this host errored out, move on to the next
-                    self.send_request()
+                    # Continue only within the retained policy destination.
+                    self.send_request(is_speculative=is_speculative,
+                                      error_no_hosts=not is_speculative,
+                                      retry_context=retry_context)
             else:
                 self._set_final_exception(ConnectionException(
                     "Got unexpected response when preparing statement "
                     "on host %s: %s" % (host, response)))
         elif isinstance(response, ErrorMessage):
-            if hasattr(response, 'to_exception'):
+            if not is_speculative and retry_context is not None and retry_context[0]:
+                self._retry_after_prepare_failure(is_speculative, retry_context)
+            elif hasattr(response, 'to_exception'):
                 self._set_final_exception(response.to_exception())
             else:
                 self._set_final_exception(response)
         elif isinstance(response, ConnectionException):
             log.debug("Connection error when preparing statement on host %s: %s",
                       host, response)
-            # try again on a different host, preparing again if necessary
             self._errors[host] = response
-            self.send_request()
+            self._retry_after_prepare_failure(is_speculative, retry_context)
         else:
             self._set_final_exception(ConnectionException(
                 "Got unexpected response type when preparing "
@@ -8670,14 +8822,15 @@ class ResponseFuture(object):
             callback_partial()
 
     def _set_final_exception(self, response,
-                             retry_abort_generation=_NOT_SET):
-        self._finish_control_connection_keyspace_change()
+                             retry_abort_generation=_NOT_SET, retry_context=None):
+        if retry_context is None:
+            self._finish_control_connection_keyspace_change()
         abort_retry = retry_abort_generation is not _NOT_SET
-        if not abort_retry:
+        if not abort_retry and retry_context is None:
             self._cancel_timer()
 
         with self._callback_lock:
-            if self._retry_aborted:
+            if self._retry_aborted or not self._retry_context_is_current(retry_context):
                 return
             if abort_retry:
                 if retry_abort_generation != self._page_generation or \
@@ -8697,7 +8850,9 @@ class ResponseFuture(object):
                 for (fn, args, kwargs) in self._errbacks
             )
 
-        if abort_retry:
+        if retry_context is not None:
+            self._finish_control_connection_keyspace_change()
+        if abort_retry or retry_context is not None:
             self._cancel_timer()
         if self._metrics is not None:
             self._metrics.request_timer.addValue(time.time() - self._start_time)
@@ -8726,10 +8881,12 @@ class ResponseFuture(object):
         elif len(retry_decision) == 3:
             retry_type, consistency, delay = retry_decision
 
+        error = exception_from_response(response)
+        self._errors[host] = error
         if retry_type in (RetryPolicy.RETRY, RetryPolicy.RETRY_NEXT_HOST):
             self._query_retries += 1
             reuse = retry_type == RetryPolicy.RETRY
-            self._retry(reuse, consistency, host, delay)
+            self._retry(reuse, consistency, host, delay, retry_error=error)
         elif retry_type is RetryPolicy.RETHROW:
             self._set_final_exception(exception_from_response(response))
         else:  # IGNORE
@@ -8737,9 +8894,8 @@ class ResponseFuture(object):
                 self._metrics.on_ignore()
             self._set_final_result(None)
 
-        self._errors[host] = exception_from_response(response)
-
-    def _retry(self, reuse_connection, consistency_level, host, delay):
+    def _retry(self, reuse_connection, consistency_level, host, delay,
+               retry_error=None):
         with self._callback_lock:
             if self._final_exception:
                 # the connection probably broke while we were waiting
@@ -8765,30 +8921,137 @@ class ResponseFuture(object):
         # don't retry on the event loop thread
         self.session.cluster.scheduler.schedule_with_shutdown(
             delay, partial(self._abort_retry, page_generation),
-            self._retry_task, reuse_connection, host, page_generation)
+            self._retry_task, reuse_connection, host, page_generation,
+            retry_error=retry_error)
 
     def _abort_retry(self, page_generation):
         self._set_final_exception(ConnectionShutdown(
             "Cluster scheduler was shut down before the retry could run"),
             retry_abort_generation=page_generation)
 
-    def _retry_task(self, reuse_connection, host, page_generation=None):
+    @staticmethod
+    def _same_retry_host(first, second):
+        if (isinstance(first, Host) and isinstance(second, Host) and
+                first.host_id is not None and second.host_id is not None):
+            return first.host_id == second.host_id
+        return getattr(first, 'endpoint', first) == getattr(second, 'endpoint', second)
+
+    def _retry_task(self, reuse_connection, host, page_generation=None,
+                    retry_error=None, retry_context=None):
         if self._is_final() or (page_generation is not None and
-                                page_generation != self._page_generation):
-            # the connection probably broke while we were waiting
-            # to retry the operation
+                                page_generation != self._page_generation) or \
+                not self._retry_context_is_current(retry_context):
             return
 
-        if self._control_connection_query_attempted:
-            self._control_connection_query_attempted = False
+        if page_generation is None:
+            with self._callback_lock:
+                page_generation = (retry_context[3] if retry_context is not None
+                                   else self._page_generation)
+
+        # Internal work can recover without consulting application policy,
+        # while retaining a prior policy destination for the eventual resend.
+        if retry_error is None and retry_context is not None:
+            reuse_connection, host, retry_error, _generation = retry_context
+        if retry_error is None:
+            if self._control_connection_query_attempted:
+                self._control_connection_query_attempted = False
+                self.send_request()
+                return
+            if reuse_connection and self._query(host) is not None:
+                return
             self.send_request()
             return
 
-        if reuse_connection and self._query(host) is not None:
+        if self._time_remaining is not None and self._time_remaining <= 0:
+            self._on_timeout()
             return
 
-        # otherwise, move onto another host
-        self.send_request()
+        # Our completed send frames can retain preceding retry contexts. Errors
+        # and causes may be shared with other futures and application code: only
+        # clear driver-owned send frames, preserving all application frames.
+        # Only failed sends retain encoded payloads. Shared shutdown errors
+        # can contain growing application tracebacks and need no frame cleanup.
+        errors = ([retry_error] if issubclass(type(retry_error), ConnectionSendError)
+                  else [])
+        seen = set()
+        seen_frames = set()
+        while errors:
+            error = errors.pop()
+            if not issubclass(type(error), BaseException) or id(error) in seen:
+                continue
+            seen.add(id(error))
+            tb = error.__traceback__
+            while tb is not None:
+                frame = tb.tb_frame
+                while frame is not None and id(frame) not in seen_frames:
+                    seen_frames.add(id(frame))
+                    module = frame.f_globals.get('__name__')
+                    name = frame.f_code.co_name.rsplit('.', 1)[-1]
+                    if ((module == __name__ and name in
+                         ('_query', '_send_control_connection_message', 'send_request',
+                          '_retry_same_host', '_retry_task')) or
+                            (module == 'cassandra.connection' and name == 'send_msg')):
+                        try:
+                            frame.clear()
+                        except RuntimeError:
+                            # Immediate retries may still be in the send stack.
+                            pass
+                    frame = frame.f_back
+                tb = tb.tb_next
+            errors.extend(cause for cause in (error.__cause__, error.__context__)
+                          if cause is not None)
+
+        # Capture this per attempt. An independent speculative retry must not
+        # replace the destination of an earlier PREPARE or keyspace continuation.
+        retry_context = (reuse_connection, host, retry_error, page_generation)
+        self._control_connection_query_attempted = False
+        if not reuse_connection:
+            self.send_request(excluded_host=host, retry_error=retry_error,
+                              retry_context=retry_context)
+            return
+
+        self._retry_same_host(host, retry_error, retry_context)
+
+    def _retry_context_is_current(self, retry_context):
+        return retry_context is None or retry_context[3] == self._page_generation
+
+    def _retry_host_allowed(self, host, retry_context):
+        if retry_context is None:
+            return True
+        reuse, retry_host, _error, _generation = retry_context
+        return self._same_retry_host(host, retry_host) == reuse
+
+    def _retry_same_host(self, host, retry_error, retry_context):
+        if self._is_final() or not self._retry_context_is_current(retry_context):
+            return True
+        if self._time_remaining is not None and self._time_remaining <= 0:
+            self._on_timeout()
+            return True
+        query_host = host
+        if isinstance(host, Host) and host.host_id is not None:
+            query_host = self.session.cluster.metadata.get_host_by_host_id(host.host_id)
+        if query_host is not None and self._query(query_host, retry_context=retry_context) is not None:
+            return True
+        if not self._retry_context_is_current(retry_context):
+            return True
+        control = self.session.cluster.control_connection
+        control_host = self.session.cluster.get_control_connection_host()
+        if control_host is None and control is not None:
+            control_socket = control._connection
+            if control_socket is not None:
+                control_host = control_socket.endpoint
+        if (self._same_retry_host(control_host, host) and
+                self._fallback_to_control_connection()):
+            if self._query_control_connection(retry_context=retry_context) is not None:
+                return True
+        if not self._retry_context_is_current(retry_context):
+            return True
+        if self._timeout_before_send or (self._time_remaining is not None and
+                                         self._time_remaining <= 0):
+            self._on_timeout()
+        else:
+            self._set_final_exception(retry_error, retry_context=retry_context)
+        return False
 
     def result(self):
         """
