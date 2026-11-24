@@ -679,9 +679,9 @@ def _retry_report(policy, setting):
         return {'policy': {'type': policy_type}}
 
     if type(policy) is ExponentialBackoffRetryPolicy:
-        # It retries the same errors as the standard policy and adds a growing
-        # delay between attempts, which is what the schema's backoff describes,
-        # so it is that policy with a backoff rather than a type of its own.
+        # The schema represents this policy as standard-error-aware with backoff.
+        # Its legacy handlers can retry unmarked statements and use server-echoed
+        # timeout consistency, unlike RetryPolicy's safety checks.
         report = {'policy': {'type': 'standard-error-aware'}}
         # Every on_* method gives up once retry_num reaches max_num_retries, and
         # the comparison is `<`, so a fractional limit permits the ceiling: 0.5

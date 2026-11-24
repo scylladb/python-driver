@@ -223,7 +223,10 @@ class Statement(object):
 
     is_idempotent = False
     """
-    Flag indicating whether this statement is safe to run multiple times in speculative execution.
+    Flag indicating whether this statement is safe to run multiple times.
+    Enables speculative execution and default-policy retries after uncertain
+    server, overload, connection and failed-push errors, and batch-log timeouts.
+    Explicit custom retry policies can make different decisions.
     """
 
     _serial_consistency_level = None

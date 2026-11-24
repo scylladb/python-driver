@@ -1069,12 +1069,14 @@ class RetryPolicy(object):
         the first time this method is called, `retry_num` will be 0.
 
         By default, operations will be retried at most once, and only if
-        a sufficient number of replicas responded (with data digests).
+        a sufficient number of replicas responded (with data digests). The retry
+        keeps the effective outgoing consistency, even if the server reports a
+        different consistency in the timeout response.
         """
         if retry_num != 0:
             return self.RETHROW, None
         elif received_responses >= required_responses and not data_retrieved:
-            return self.RETRY, consistency
+            return self.RETRY, None
         else:
             return self.RETHROW, None
 
@@ -1102,12 +1104,14 @@ class RetryPolicy(object):
 
         By default, failed write operations will be retried at most once, and
         will only be retried if the `write_type` was
-        :attr:`~.WriteType.BATCH_LOG`.
+        :attr:`~.WriteType.BATCH_LOG` and `query` is marked
+        :attr:`~.Statement.is_idempotent`. The retry keeps the effective outgoing
+        consistency. Other write timeouts are not retried.
         """
         if retry_num != 0:
             return self.RETHROW, None
-        elif write_type == WriteType.BATCH_LOG:
-            return self.RETRY, consistency
+        elif write_type == WriteType.BATCH_LOG and query is not None and query.is_idempotent:
+            return self.RETRY, None
         else:
             return self.RETHROW, None
 
@@ -1156,9 +1160,30 @@ class RetryPolicy(object):
         `retry_num` counts how many times the operation has been retried, so
         the first time this method is called, `retry_num` will be 0.
 
-        By default, it triggers a retry on the next host in the query plan
-        with the same consistency level.
+        By default, server errors and connection failures (including a failed
+        push that may have queued request bytes) are retried on the next host
+        only when `query` is marked :attr:`~.Statement.is_idempotent`. Their
+        outcome can be unknown. Internal PREPARE requests use `query=None`
+        and remain retryable because preparing does not execute the statement.
+        Client-side :exc:`.OperationTimedOut` deadlines are terminal.
+
+        Bootstrapping responses retain their next-host retry behavior because the
+        node rejects application queries before execution. Overloaded responses
+        require an idempotent statement: the error alone does not establish
+        nonexecution on all server versions, notably for counters and LWTs.
+        Custom policies can explicitly select different retry behavior,
+        including for unmarked statements. Subclasses delegating to this method
+        inherit its idempotency requirement. A retry keeps the effective
+        outgoing consistency level.
         """
+        # Defer this import to avoid the protocol -> policies import cycle.
+        from cassandra.protocol import IsBootstrappingErrorMessage
+
+        if isinstance(error, OperationTimedOut):
+            return self.RETHROW, None
+        if not isinstance(error, IsBootstrappingErrorMessage):
+            if query is not None and not query.is_idempotent:
+                return self.RETHROW, None
         # TODO revisit this for the next major
         # To preserve the same behavior than before, we don't take retry_num into account
         return self.RETRY_NEXT_HOST, None
@@ -1200,8 +1225,10 @@ class DowngradingConsistencyRetryPolicy(RetryPolicy):
     that queries that required a consistency level downgrade can be
     recorded (so that repairs can be made later, etc.).
 
-    This policy implements the same retries as :class:`.RetryPolicy`,
-    but on top of that, it also retries in the following cases:
+    This policy inherits request-error handling from :class:`.RetryPolicy`,
+    including its idempotency checks. Its timeout handlers retain their legacy
+    behavior: batch-log timeouts can retry unmarked statements, and retries can
+    use the consistency reported by the server. It also handles these cases:
 
     * On a read timeout: if the number of replicas that responded is
       greater than one but lower than is required by the requested
@@ -1292,7 +1319,13 @@ class DowngradingConsistencyRetryPolicy(RetryPolicy):
 
 class ExponentialBackoffRetryPolicy(RetryPolicy):
     """
-    A policy that do retries with exponential backoff
+    A policy that retries with exponential backoff.
+
+    Unlike :class:`.RetryPolicy`, its overridden handlers do not check
+    :attr:`~.Statement.is_idempotent`. Request errors and batch-log timeouts can
+    retry unmarked statements, and timeout retries use the consistency reported
+    by the server. Select this policy only when these retries are appropriate
+    for the application.
     """
 
     def __init__(self, max_num_retries: float, min_interval: float = 0.1, max_interval: float = 10.0,
