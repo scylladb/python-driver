@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import unittest
+from unittest.mock import patch
 
 import datetime
 import tempfile
@@ -22,12 +23,12 @@ from binascii import unhexlify
 import cassandra
 from cassandra import util
 from cassandra.cqltypes import (
-    CassandraType, DateRangeType, DateType, DecimalType,
-    EmptyValue, LongType, SetType, UTF8Type,
+    ByteType, CassandraType, DateRangeType, DateType, DecimalType,
+    EmptyValue, LongType, SetType, ShortType, UTF8Type,
     _cqltypes, cql_typename, int8_pack, int64_pack, int64_unpack, lookup_casstype,
     lookup_casstype_simple, parse_casstype_args,
     int32_pack, Int32Type, ListType, MapType, VectorType,
-    FloatType
+    DoubleType, FloatType
 )
 from cassandra.encoder import cql_quote
 from cassandra.pool import Host
@@ -406,6 +407,21 @@ class VectorTests(unittest.TestCase):
         self._round_trip_test([util.Duration(1,1,1), util.Duration(2,2,2), util.Duration(3,3,3)], \
             "org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.DurationType, 3)")
 
+    def test_short_and_byte_vectors_use_variable_length_wire_format(self):
+        # Cassandra vint-frames smallint/tinyint vector elements; they must never go fixed-width.
+        for subtype, packed_value_size in ((ShortType, 2), (ByteType, 1)):
+            ctype = parse_casstype_args(
+                "org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.%s, 4)"
+                % subtype.__name__)
+            assert ctype.subtype.serial_size() is None
+            assert ctype.serial_size() is None
+
+            data = [3, -2, 100, -100]
+            data_bytes = ctype.serialize(data, 0)
+            # 1 vint length byte + the packed value per element.
+            assert len(data_bytes) == len(data) * (1 + packed_value_size)
+            assert ctype.deserialize(data_bytes, 0) == data
+
     def test_round_trip_collection_types(self):
         # List (subtype of fixed size)
         self._round_trip_test([[1, 2, 3, 4], [5, 6], [7, 8, 9, 10], [11, 12]], \
@@ -540,6 +556,48 @@ class VectorTests(unittest.TestCase):
         ctype_four = parse_casstype_args("org.apache.cassandra.db.marshal.VectorType(org.apache.cassandra.db.marshal.IntegerType, 4)")
         with pytest.raises(ValueError, match="Additional bytes remaining after vector deserialization completed"):
             ctype_four.deserialize(ctype_five_bytes, 0)
+
+    def test_large_numeric_vectors_decode_with_and_without_numpy(self):
+        from cassandra import numpy_support
+        for subtype, data in ((FloatType, [0.5 * i for i in range(64)]),
+                              (DoubleType, [0.25 * i for i in range(64)]),
+                              (Int32Type, list(range(-32, 32))),
+                              (LongType, [2 ** 40 * i for i in range(64)])):
+            ctype = VectorType.apply_parameters([subtype, len(data)], None)
+            data_bytes = ctype.serialize(data, 0)
+            expected = list(ctype._vector_struct.unpack(data_bytes))
+            assert expected == data
+            with patch.object(numpy_support, '_NUMPY', None):
+                assert ctype.deserialize(data_bytes, 0) == expected
+            if numpy_support.numpy_available():
+                assert ctype.deserialize(data_bytes, 0) == expected
+
+    def test_directly_declared_vector_subclass_is_fixed_size(self):
+        class Int3Vector(VectorType):
+            subtype = Int32Type
+            vector_size = 3
+        assert Int3Vector.serial_size() == 12
+        assert Int3Vector.serialize([1, 2, 3], 0) == b'\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00\x03'
+        assert Int3Vector.deserialize(b'\x00\x00\x00\x01\x00\x00\x00\x02\x00\x00\x00\x03', 0) == [1, 2, 3]
+
+    def test_subclass_vectors_keep_element_overrides(self):
+        # Bulk struct/NumPy codecs must not bypass a subclass's own codecs.
+        class OffsetInt32Type(Int32Type):
+            @staticmethod
+            def serialize(val, protocol_version):
+                return Int32Type.serialize(val + 100, protocol_version)
+
+            @staticmethod
+            def deserialize(byts, protocol_version):
+                return Int32Type.deserialize(byts, protocol_version) - 100
+
+        for vsize in (3, 64):
+            ctype = VectorType.apply_parameters([OffsetInt32Type, vsize], None)
+            assert ctype._vector_struct is None
+            data = list(range(vsize))
+            data_bytes = ctype.serialize(data, 0)
+            assert data_bytes == b''.join(int32_pack(v + 100) for v in data)
+            assert ctype.deserialize(data_bytes, 0) == data
 
 
 ZERO = datetime.timedelta(0)

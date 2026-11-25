@@ -298,3 +298,49 @@ assert caught
 assert 'numpy' not in sys.modules
 assert 'cassandra.numpy_parser' not in sys.modules
 """, timeout=10)
+
+
+def test_vector_types_request_numpy_only_for_large_vector_decode():
+    if importlib.util.find_spec('numpy') is None:
+        pytest.skip("NumPy is unavailable")
+
+    run_isolated_subprocess("""
+from cassandra.cqltypes import FloatType, VectorType, lookup_casstype
+
+small = VectorType.apply_parameters([FloatType, 4], None)
+large = lookup_casstype('org.apache.cassandra.db.marshal.VectorType('
+                        'org.apache.cassandra.db.marshal.FloatType, 64)')
+assert small.deserialize(small.serialize([1.0] * 4, 4), 4) == [1.0] * 4
+assert 'numpy' not in sys.modules
+
+assert large.deserialize(large.serialize([1.0] * 64, 4), 4) == [1.0] * 64
+assert 'numpy' in sys.modules
+""", timeout=10)
+
+
+def test_vector_decode_falls_back_to_struct_without_numpy():
+    run_isolated_subprocess("""
+sys.modules['numpy'] = None
+from cassandra.cqltypes import Int32Type, VectorType
+
+large = VectorType.apply_parameters([Int32Type, 64], None)
+data = list(range(64))
+assert large.deserialize(large.serialize(data, 4), 4) == data
+""", timeout=10)
+
+
+def test_cython_first_import_keeps_cython_enabled():
+    if importlib.util.find_spec('cassandra.row_parser') is None:
+        pytest.skip("Cython extensions are unavailable")
+
+    run_isolated_subprocess("""
+import cassandra.row_parser
+import cassandra.cython_deps as cython_deps
+import cassandra.protocol as protocol
+from cassandra.cqltypes import FloatType, VectorType
+
+assert cython_deps.HAVE_CYTHON
+assert protocol.HAVE_CYTHON
+large = VectorType.apply_parameters([FloatType, 64], None)
+assert large.deserialize(large.serialize([2.0] * 64, 4), 4) == [2.0] * 64
+""", timeout=10)
