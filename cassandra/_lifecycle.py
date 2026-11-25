@@ -734,13 +734,18 @@ class LifecycleCoordinator:
         token = object()
         host._pending_location = desired
         host._pending_location_token = token
+        host._location_reconciliation_token = token
         self.submit(
             self._notify_location_changed, host, datacenter, rack, token)
         return True
 
     def _notify_location_changed(self, host, datacenter, rack, token):
         try:
-            if not self.is_current(host):
+            if not self._location_is_current(host, token):
+                return
+            if (host.datacenter, host.rack) == (datacenter, rack):
+                # A reversal can supersede work before it reconciles pools.
+                self._reconcile_location_sessions(host, token)
                 return
             # Policies use the old DC/rack to remove membership. Publish the
             # new location only after that callback, then invalidate replica
@@ -752,12 +757,62 @@ class LifecycleCoordinator:
                 changed = self._cluster.metadata._update_host_location(
                     host, datacenter, rack)
             if changed:
-                self.dispatch_current(host, self._cluster.profile_manager.on_up)
+                if not self.dispatch_current(
+                        host, self._cluster.profile_manager.on_up):
+                    return
+                self._reconcile_location_sessions(host, token)
         finally:
             with self.transaction():
                 if getattr(host, '_pending_location_token', None) is token:
                     host._pending_location = None
                     host._pending_location_token = None
+
+    def _reconcile_location_sessions(self, host, token):
+        for session in tuple(self._cluster.sessions):
+            if not self._location_is_current(host, token):
+                return
+            self._reconcile_location_pools(host, token, session)
+
+    def _location_is_current(self, host, token):
+        return (self.is_current(host) and
+                getattr(host, '_location_reconciliation_token', None) is token)
+
+    def _reconcile_location_pools(self, host, token, session, retry=True):
+        if (not self._location_is_current(host, token) or
+                session.is_shutdown):
+            return
+
+        def completed(results):
+            if not any(isinstance(result, Exception) or not result
+                       for result in results):
+                return
+            if (not self._location_is_current(host, token) or
+                    session.is_shutdown):
+                return
+            level = log.debug if retry else log.warning
+            errors = [result for result in results
+                      if isinstance(result, Exception)]
+            for error in errors or [None]:
+                level(
+                    "Pool reconciliation %s in session %s; scan of all "
+                    "hosts triggered by location change for host %s",
+                    "failed; retrying" if retry else "retry failed",
+                    session, host,
+                    exc_info=(type(error), error, error.__traceback__)
+                    if error is not None else None)
+            if retry:
+                # One delayed retry also covers timeouts that do not convict
+                # the host. Session retains ownership of pool publication.
+                self._cluster.scheduler.schedule(
+                    1, self.submit, self._reconcile_location_pools,
+                    host, token, session, False)
+
+        try:
+            futures = session.update_created_pools()
+        except Exception as error:
+            completed([error])
+        else:
+            self.collect_futures(futures, completed)
 
     def drain(self):
         with self._lock:
