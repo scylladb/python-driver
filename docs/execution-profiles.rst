@@ -133,6 +133,16 @@ New profiles can be added constructing from scratch, or deriving from default:
 
 See :meth:`.Cluster.add_execution_profile` for details and optional parameters.
 
+Adding a profile can change a host's effective load-balancing distance even
+when its datacenter and rack stay the same. A distance change recreates that
+host's pools in each session and closes their previous connections, including
+connections with requests in progress. This also applies to changes between
+``LOCAL`` and ``LOCAL_RACK``.
+
+The method waits for pool work up to ``pool_wait_timeout``. If it raises
+:exc:`.OperationTimedOut`, the profile remains registered and pending pool work
+can continue. Adding the same profile name again raises ``ValueError``.
+
 Passing a profile instance without mapping
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

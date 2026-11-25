@@ -1863,6 +1863,10 @@ class Cluster(object):
         upon return. This behavior can be controlled using ``pool_wait_timeout`` (see
         `concurrent.futures.wait <https://docs.python.org/3/library/concurrent.futures.html#concurrent.futures.wait>`_
         for timeout semantics).
+
+        A change in host distance recreates the affected session pools and
+        closes their previous connections. If the wait times out, the profile
+        remains registered and pool creation can continue in the background.
         """
         if not isinstance(profile, ExecutionProfile):
             raise TypeError("profile must be an instance of ExecutionProfile")
@@ -4328,16 +4332,19 @@ class Session(object):
                 return False
             current_pool = self._pools.get(host)
             current_intent = self._pool_intents_locked().get(host)
+            distance = (current_intent.distance
+                        if current_intent is not None and
+                        current_intent.distance is not _NOT_SET
+                        else attempt.distance)
             retained_pool_is_live = (
                 not self.is_shutdown and
                 not host._is_removed and
                 current_pool is not None and
                 current_pool is not attempt.expected_pool and
                 not current_pool.is_shutdown and
+                not current_pool._retiring and
+                current_pool.host_distance == distance and
                 self._pool_matches_host(host, current_pool))
-            if (retained_pool_is_live and
-                    current_intent is attempt.intent):
-                current_pool.host_distance = attempt.distance
             ignored_intent_owns_cleanup = (
                 ignored_intent_is_success and
                 not self.is_shutdown and
@@ -4416,6 +4423,8 @@ class Session(object):
             return_live_success = False
             return_none = False
             pool_to_shutdown = None
+            pool_to_retire = None
+            owns_replacement_recovery = False
             with self._lock:
                 if self.is_shutdown:
                     terminal_result = None
@@ -4443,14 +4452,19 @@ class Session(object):
                         else:
                             current_generation, current_pool = \
                                 self._pool_state_locked(host)
+                            intent.distance = distance
+                            pool_has_distance = (
+                                current_pool is not None and
+                                current_pool.host_distance == distance)
                             newer_pool_is_live = (
                                 is_direct_add and
                                 current_pool is not None and
                                 current_pool is not claimed_pool and
                                 not current_pool.is_shutdown and
+                                not current_pool._retiring and
+                                pool_has_distance and
                                 self._pool_matches_host(host, current_pool))
                             if distance == HostDistance.IGNORED:
-                                intent.distance = distance
                                 pool_host = getattr(
                                     current_pool, 'host', host)
                                 pool_belongs_to_lifecycle = (
@@ -4464,7 +4478,6 @@ class Session(object):
                                 terminal_result = True
                                 return_none = True
                             elif newer_pool_is_live:
-                                current_pool.host_distance = distance
                                 terminal_result = True
                                 return_live_success = True
                             elif _expected_state is not None:
@@ -4479,10 +4492,11 @@ class Session(object):
                                         current_pool is not None and
                                         not current_pool.is_shutdown and
                                         self._pool_matches_host(host, current_pool))
-                                    if live_pool:
-                                        current_pool.host_distance = distance
-                                    terminal_result = bool(live_pool)
-                                    return_none = True
+                                    if (not live_pool or
+                                            (pool_has_distance and
+                                             not current_pool._retiring)):
+                                        terminal_result = bool(live_pool)
+                                        return_none = True
                                 elif host.is_up not in (True, None):
                                     self._pool_generations.pop(host, None)
                                     if pool_intents.get(host) is intent:
@@ -4491,7 +4505,17 @@ class Session(object):
                                     return_none = True
 
                             if terminal_result is _NOT_SET:
-                                intent.distance = distance
+                                if (current_pool is not None and
+                                        not current_pool.is_shutdown and
+                                        (current_pool._retiring or
+                                         not pool_has_distance)):
+                                    pool_to_retire = current_pool
+                                    if not pool_to_retire._retiring:
+                                        # Retirement is irrevocable, even if a
+                                        # newer intent requests its distance.
+                                        # Claim recovery once for this pool.
+                                        pool_to_retire._retiring = True
+                                        owns_replacement_recovery = True
                                 expected_pool = current_pool
                                 generation = current_generation
                                 if generation is None:
@@ -4537,6 +4561,26 @@ class Session(object):
                 removed_future = Future()
                 removed_future.set_result(terminal_result)
                 return removed_future
+            if pool_to_retire is not None:
+                # Shutdown can wait for pool work. Retire only the captured
+                # pool, outside session and host locks.
+                # Report failure through the returned future, as ignored-pool
+                # cleanup does, so callers keep reconciling other hosts.
+                try:
+                    pool_to_retire.shutdown()
+                except Exception as exc:
+                    log.exception(
+                        "Error retiring pool for %s after a distance change",
+                        host)
+                    intent.complete_exception(exc)
+                    retire_failure = Future()
+                    retire_failure.set_exception(exc)
+                    return retire_failure
+                finally:
+                    if owns_replacement_recovery:
+                        intent.completion.add_done_callback(
+                            lambda completed, pool=pool_to_retire:
+                            self._recover_pool(pool))
             break
 
         def run_add_or_renew_pool():
@@ -4631,19 +4675,26 @@ class Session(object):
                                         renewing_retired_pool = (
                                             expected_pool is not None and
                                             expected_pool.is_shutdown)
-                                        if (renewing_retired_pool and
+                                        intents = self._pool_intents_locked()
+                                        current_intent = intents.get(host)
+                                        requested_distance = (
+                                            current_intent.distance
+                                            if current_intent is not None
+                                            else _NOT_SET)
+                                        distance_changed = (
+                                            current_intent is not intent and
+                                            requested_distance is not _NOT_SET
+                                            and requested_distance !=
+                                            attempt.distance)
+                                        if distance_changed:
+                                            # The newer intent owns creation
+                                            # at the requested distance.
+                                            stale_candidate = True
+                                        elif (renewing_retired_pool and
                                                 connection_required and
                                                 not connected):
                                             unusable_candidate = True
                                         elif new_pool._keyspace == keyspace:
-                                            current_intent = \
-                                                self._pool_intents_locked().get(host)
-                                            previous = attempt.expected_pool
-                                            if (current_intent is not attempt.intent and
-                                                    previous is not None and
-                                                    not previous.is_shutdown):
-                                                new_pool.host_distance = \
-                                                    previous.host_distance
                                             self._pools[host] = new_pool
                                             self._pool_generations[host] = object()
                                             ownership.published = True
@@ -4788,9 +4839,15 @@ class Session(object):
                 retry()
                 return
             if futures:
-                # Reconciliation of this single host has one completion.
-                for future in futures:
-                    future.add_done_callback(partial(lifecycle.submit, retry))
+                # Reconciliation of this single host has one completion;
+                # advance the retry schedule once, whatever its shape.
+                future = next(iter(futures))
+                add_done_callback = getattr(
+                    future, 'add_done_callback', None)
+                if callable(add_done_callback):
+                    add_done_callback(partial(lifecycle.submit, retry))
+                else:
+                    retry()
             else:
                 retry()
 
@@ -4888,6 +4945,9 @@ class Session(object):
         This method ensures that all hosts for which a pool should exist
         have one, and hosts that shouldn't don't.
 
+        A pool's distance is fixed at construction. Distance changes retire
+        the old pool and create a replacement through add_or_renew_pool.
+
         ``excluded_host`` suppresses a new attempt for a host whose pool
         creation has just failed while still reconciling all other hosts.
         ``hosts`` may freeze the metadata snapshot used for reconciliation.
@@ -4978,8 +5038,9 @@ class Session(object):
                                 if pool_to_shutdown is None:
                                     terminal_result = True
                             elif pool is not None and not pool.is_shutdown:
-                                pool.host_distance = distance
-                                terminal_result = True
+                                if (not pool._retiring and
+                                        pool.host_distance == distance):
+                                    terminal_result = True
                             elif host.is_up not in (True, None):
                                 self._pool_generations.pop(host, None)
                                 if current_intent is intent:
@@ -5024,8 +5085,7 @@ class Session(object):
                         future = intent.completion
             elif (distance != HostDistance.IGNORED and
                   expected_state is not None and
-                  (expected_state[1] is None or
-                   expected_state[1].is_shutdown)):
+                  terminal_result is _NOT_SET):
                 future = self.add_or_renew_pool(
                     host, False, _expected_state=expected_state,
                     _expected_intent=intent, _distance=distance)

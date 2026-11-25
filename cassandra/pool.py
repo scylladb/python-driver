@@ -456,9 +456,9 @@ class HostConnection(object):
     """
 
     host = None
-    host_distance = None
     is_shutdown = False
     shutdown_on_error = False
+    _retiring = False
 
     _session = None
     _lock = None
@@ -473,7 +473,7 @@ class HostConnection(object):
     def __init__(self, host, host_distance, session, _ownership=None):
         self.host = host
         self.endpoint = host.endpoint
-        self.host_distance = host_distance
+        self._host_distance = host_distance
         self._session = weakref.proxy(session)
         self._session_ref = weakref.ref(session)
         self._lock = Lock()
@@ -545,6 +545,11 @@ class HostConnection(object):
 
         log.debug("Finished initializing connection for host %s", self.host)
         self._ownership.published = _ownership is None
+
+    @property
+    def host_distance(self):
+        """The load-balancing distance for which this pool was created."""
+        return self._host_distance
 
     def _get_connection_for_routing_key(self, routing_key=None, keyspace=None, table=None, routing_token=None):
         if self.is_shutdown:
