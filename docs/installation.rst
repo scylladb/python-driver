@@ -86,10 +86,8 @@ Windows Installation Notes
 Installing the driver with extensions in Windows sometimes presents some challenges. A few notes about common
 hang-ups:
 
-Setup requires a compiler. When using Python 2, this is as simple as installing `this package <http://aka.ms/vcpython27>`_
-(this link is also emitted during install if setuptools is unable to find the resources it needs). Depending on your
-system settings, this package may install as a user-specific application. Make sure to install for everyone, or at least
-as the user that will be building the Python environment.
+Setup requires a compiler. Install the `Microsoft C++ Build Tools <https://visualstudio.microsoft.com/visual-cpp-build-tools/>`_
+(setuptools prints this link during install if it cannot find a compiler).
 
 It is also possible to run the build with your compiler of choice. Just make sure to have your environment setup with
 the proper paths. Make sure the compiler target architecture matches the bitness of your Python runtime.
