@@ -258,7 +258,8 @@ class OrderedMapSerializedKeyTest(unittest.TestCase):
             assert list(om.items()) == []
             assert key not in om
 
-            # a valid key that is simply absent keeps the base KeyError(str(key))
+            # a valid key that is simply absent keeps the base
+            # KeyError(str(key))
             with pytest.raises(KeyError) as excinfo:
                 om[key]
             assert excinfo.value.args == (str(key),)

@@ -790,9 +790,11 @@ class OrderedMapSerializedKey(OrderedMap):
     def _serialize_key(self, key):
         return self.cass_key_type.serialize(key, self.protocol_version)
 
-    # Serializer errors for a key of the wrong type or out of range. A key
-    # rejected this way cannot be in the map, so lookups treat it as missing.
-    # Anything else raised by the serializer propagates unchanged.
+    # Serializer errors for a key of the wrong type or out of range.
+    # Lookups treat a key rejected this way as missing: no valid map
+    # entry can have it. A malformed decoded entry can (a negative key
+    # length decodes as key None), but stays unreachable by key, as it
+    # was before. Anything else the serializer raises propagates.
     _REJECTED_KEY_ERRORS = (TypeError, AttributeError, ValueError, OverflowError,
                             struct.error)
 
@@ -805,7 +807,8 @@ class OrderedMapSerializedKey(OrderedMap):
 
     @staticmethod
     def _missing(key, flat_key):
-        # a serialized key that is just absent keeps the base OrderedMap payload
+        # a serialized key that is just absent keeps the base
+        # OrderedMap payload
         return KeyError(key) if flat_key is None else KeyError(str(key))
 
     def __getitem__(self, key):
