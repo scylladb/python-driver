@@ -653,6 +653,7 @@ class BoundStatement(Statement):
                 (value_len, len(self.prepared_statement.routing_key_indexes)))
 
         serialized_values = []
+        has_ce = bool(ce_policy)
         for value, col_spec in zip(values, col_meta):
             if value is None:
                 serialized_values.append(None)
@@ -663,12 +664,15 @@ class BoundStatement(Statement):
                     raise ValueError("Attempt to bind UNSET_VALUE while using unsuitable protocol version (%d < 4)" % proto_version)
             else:
                 try:
-                    col_desc = ColDesc(col_spec.keyspace_name, col_spec.table_name, col_spec.name)
-                    uses_ce = ce_policy and ce_policy.contains_column(col_desc)
-                    col_type = ce_policy.column_type(col_desc) if uses_ce else col_spec.type
-                    col_bytes = col_type.serialize(value, proto_version)
-                    if uses_ce:
-                        col_bytes = ce_policy.encrypt(col_desc, col_bytes)
+                    if has_ce:
+                        col_desc = ColDesc(col_spec.keyspace_name, col_spec.table_name, col_spec.name)
+                        if ce_policy.contains_column(col_desc):
+                            col_type = ce_policy.column_type(col_desc)
+                            col_bytes = ce_policy.encrypt(col_desc, col_type.serialize(value, proto_version))
+                        else:
+                            col_bytes = col_spec.type.serialize(value, proto_version)
+                    else:
+                        col_bytes = col_spec.type.serialize(value, proto_version)
                     serialized_values.append(col_bytes)
                 except (TypeError, struct.error) as exc:
                     actual_type = type(value)

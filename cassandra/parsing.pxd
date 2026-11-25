@@ -16,12 +16,13 @@ from cassandra.bytesio cimport BytesIOReader
 from cassandra.deserializers cimport Deserializer
 
 cdef class ParseDesc:
-    cdef public object colnames
-    cdef public object coltypes
-    cdef public object column_encryption_policy
-    cdef public list coldescs
-    cdef Deserializer[::1] deserializers
-    cdef public int protocol_version
+    # Read-only from Python: a ParseDesc may be cached and shared between responses.
+    cdef readonly tuple colnames
+    cdef readonly tuple coltypes
+    cdef readonly object column_encryption_policy
+    cdef readonly tuple coldescs
+    cdef tuple deserializers
+    cdef readonly int protocol_version
     cdef Py_ssize_t rowsize
 
 cdef class ColumnParser:
@@ -29,4 +30,6 @@ cdef class ColumnParser:
 
 cdef class RowParser:
     cpdef unpack_row(self, BytesIOReader reader, ParseDesc desc)
+    cpdef unpack_plain_row(self, BytesIOReader reader, ParseDesc desc)
+    cpdef unpack_col_encrypted_row(self, BytesIOReader reader, ParseDesc desc)
 
