@@ -5603,7 +5603,8 @@ class ControlConnection(object):
         self._application_requests_in_flight = 0
         self._application_orphaned_requests = set()
         self._application_keyspace_change = None
-        self._application_internal_keyspace_changes = set()
+        # Stream IDs can be reused before an older send finishes unwinding.
+        self._application_internal_keyspace_changes = {}
         self._application_keyspace_waiters = []
 
     def connect(self):
@@ -5744,10 +5745,13 @@ class ControlConnection(object):
             if change is not None and change[:2] == (connection, request_id):
                 self._application_keyspace_change = None
 
-    def _finish_internal_keyspace_change(self, connection, request_id):
+    def _finish_internal_keyspace_change(self, connection, request_id, change):
         with self._application_query_lock:
-            self._application_internal_keyspace_changes.discard(
-                (connection, request_id))
+            key = (connection, request_id)
+            if (change is None or
+                    self._application_internal_keyspace_changes.get(key) is not change):
+                return
+            del self._application_internal_keyspace_changes[key]
             if self._application_internal_keyspace_changes:
                 return
             waiters = self._application_keyspace_waiters
@@ -7734,11 +7738,13 @@ class ResponseFuture(object):
             self._control_connection_requests.pop(orphan_key, None)
             control_connection._application_requests_in_flight -= 1
             control_connection._application_orphaned_requests.add(orphan_key)
-            if orphan_key in control_connection._application_internal_keyspace_changes:
+            internal_change = control_connection._application_internal_keyspace_changes.get(
+                orphan_key)
+            if internal_change is not None:
                 connection.defunct(ConnectionException(
                     "Timed out setting control-connection keyspace", connection.endpoint))
                 control_connection._finish_internal_keyspace_change(
-                    connection, request_id)
+                    connection, request_id, internal_change)
             if control_connection._application_keyspace_change is not None and \
                     control_connection._application_keyspace_change[:2] == orphan_key:
                 control_connection._application_keyspace_change = None
@@ -7766,7 +7772,7 @@ class ResponseFuture(object):
 
     def _set_control_connection_keyspace(self, connection, host, keyspace,
                                          message=None, cb=None, request_id=_NOT_SET,
-                                         provisional_session=None):
+                                         provisional_session=None, keyspace_change=None):
         use_message = QueryMessage(
             query='USE %s' % protect_name(keyspace),
             consistency_level=ConsistencyLevel.ONE)
@@ -7776,17 +7782,17 @@ class ResponseFuture(object):
             if isinstance(response, ResultMessage) and response.kind == RESULT_KIND_SET_KEYSPACE:
                 connection.keyspace = response.new_keyspace
                 control_connection._finish_internal_keyspace_change(
-                    connection, request_id)
+                    connection, request_id, keyspace_change)
                 if self._send_control_connection_message(
                         message=message, cb=cb, connection=connection, host=host) is None:
                     self._control_connection_failed()
             elif isinstance(response, ErrorMessage):
                 control_connection._finish_internal_keyspace_change(
-                    connection, request_id)
+                    connection, request_id, keyspace_change)
                 self._set_final_exception(response.to_exception())
             elif isinstance(response, ConnectionException):
                 control_connection._finish_internal_keyspace_change(
-                    connection, request_id)
+                    connection, request_id, keyspace_change)
                 self._errors[host] = response
                 # Known limitation: this retry goes around the RetryPolicy and
                 # _query_retries, because both are keyed to the user's statement
@@ -7797,11 +7803,11 @@ class ResponseFuture(object):
                 self.session.submit(self._retry_task, False, host)
             elif isinstance(response, Exception):
                 control_connection._finish_internal_keyspace_change(
-                    connection, request_id)
+                    connection, request_id, keyspace_change)
                 self._set_final_exception(response)
             else:
                 control_connection._finish_internal_keyspace_change(
-                    connection, request_id)
+                    connection, request_id, keyspace_change)
                 self._set_final_exception(ConnectionException(
                     "Unexpected response while setting the control-connection keyspace: %r" %
                     (response,), connection.endpoint))
@@ -7815,7 +7821,7 @@ class ResponseFuture(object):
             provisional_session=provisional_session)
         if sent is None:
             control_connection._finish_internal_keyspace_change(
-                connection, request_id)
+                connection, request_id, keyspace_change)
             if not self._timeout_before_send and \
                     not isinstance(self._errors.get(host),
                                    (ConnectionBusy, NoConnectionsAvailable)):
@@ -7999,8 +8005,9 @@ class ResponseFuture(object):
                 control_connection._begin_application_keyspace_change(
                     connection, request_id, self.session)
             elif needs_internal_use:
-                control_connection._application_internal_keyspace_changes.add(
-                    (connection, request_id))
+                keyspace_change = object()
+                control_connection._application_internal_keyspace_changes[
+                    (connection, request_id)] = keyspace_change
 
         if changing_keyspace:
             def keyspace_changed(response):
@@ -8058,7 +8065,7 @@ class ResponseFuture(object):
             return self._set_control_connection_keyspace(
                 connection, host, keyspace, message=message, cb=cb,
                 request_id=request_id,
-                provisional_session=provisional_session)
+                provisional_session=provisional_session, keyspace_change=keyspace_change)
 
         return self._send_control_connection_message(
             message=message, cb=cb, connection=connection, host=host,
