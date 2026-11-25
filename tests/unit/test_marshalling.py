@@ -18,6 +18,7 @@ import unittest
 
 import platform
 from datetime import datetime, date
+import pytest
 from decimal import Decimal
 from uuid import UUID
 
@@ -41,6 +42,7 @@ marshalled_value_pairs = (
     (b'', 'DateType', None),
     (b'\x00\x00\x00\r\nJ\x04"^\x91\x04\x8a\xb1\x18\xfe', 'DecimalType', Decimal('1243878957943.1234124191998')),
     (b'\x00\x00\x00\x06\xe5\xde]\x98Y', 'DecimalType', Decimal('-112233.441191')),
+    (b'\x00\x00\x00\x00\x00', 'DecimalType', Decimal('0')),
     (b'\x00\x00\x00\x14\x00\xfa\xce', 'DecimalType', Decimal('0.00000000000000064206')),
     (b'\x00\x00\x00\x14\xff\x052', 'DecimalType', Decimal('-0.00000000000000064206')),
     (b'\xff\xff\xff\x9c\x00\xfa\xce', 'DecimalType', Decimal('64206e100')),
@@ -134,3 +136,13 @@ class UnmarshalTest(unittest.TestCase):
             for n in converted_types:
                 expected = Decimal(n)
                 assert DecimalType.from_binary(DecimalType.to_binary(n, proto_ver), proto_ver) == expected
+
+    def test_decimal_edge_cases(self):
+        for s in ('0', '-0', '0.00', '-1.500', '123.4500', '1E+5', '1E-5',
+                  '9' * 500, '-' + '7' * 400 + 'E-300', '1E+1000'):
+            d = Decimal(s)
+            got = DecimalType.from_binary(DecimalType.to_binary(d, 4), 4)
+            assert got == d and got.as_tuple().exponent == d.as_tuple().exponent
+        for s in ('NaN', 'Infinity', '-Infinity'):
+            with pytest.raises((TypeError, ValueError)):
+                DecimalType.to_binary(Decimal(s), 4)
