@@ -27,7 +27,8 @@ import struct
 import unittest
 
 try:
-    from cassandra.cython_lz4 import lz4_compress, lz4_decompress
+    from cassandra.cython_lz4 import (lz4_compress, lz4_decompress,
+                                      _check_decompressed_size)
     HAS_CYTHON_LZ4 = True
 except ImportError:
     HAS_CYTHON_LZ4 = False
@@ -131,11 +132,42 @@ class CythonLZ4Test(unittest.TestCase):
             lz4_decompress(bad_frame)
 
     def test_decompress_oversized_header(self):
-        """Header claiming > 256 MiB should raise ValueError."""
-        # 0x10000001 = 256 MiB + 1
-        huge_header = struct.pack('>I', 0x10000001) + b"\x00" * 10
+        """Header claiming > INT32_MAX should raise ValueError."""
+        # 0x80000000 = INT32_MAX + 1 (high bit set, would overflow int)
+        too_big = struct.pack('>I', 0x80000000) + b"\x00" * 10
         with self.assertRaises(ValueError):
-            lz4_decompress(huge_header)
+            lz4_decompress(too_big)
+        # 0xFFFFFFFF = UINT32_MAX, also too large for signed int
+        max_u32 = struct.pack('>I', 0xFFFFFFFF) + b"\x00" * 10
+        with self.assertRaises(ValueError):
+            lz4_decompress(max_u32)
+
+    def test_size_check_accepts_int32_max(self):
+        """A declared size of exactly INT32_MAX passes validation.
+
+        The native protocol permits uncompressed frame sizes up to the
+        signed 32-bit limit (~2 GiB), and operators configure frame sizes
+        above the 256 MiB server default (issue #1000).  The check is
+        exercised directly so the test does not allocate 2 GiB.
+        """
+        _check_decompressed_size(0x7FFFFFFF, 0x7FFFFFFF // 255 + 1)
+
+    def test_size_check_accepts_512mb(self):
+        """A 512 MiB declared size passes validation (issue #1000)."""
+        declared = 512 * 1024 * 1024
+        _check_decompressed_size(declared, declared // 255 + 1)
+
+    def test_size_check_rejects_impossible_expansion(self):
+        """A declared size beyond 255x the payload is rejected."""
+        _check_decompressed_size(255 * 1000, 1000)
+        with self.assertRaises(ValueError):
+            _check_decompressed_size(255 * 1000 + 1, 1000)
+
+    def test_decompress_rejects_tiny_frame_with_huge_header(self):
+        """A short frame cannot trigger a large output allocation."""
+        frame = struct.pack('>I', 0x7FFFFFFF) + b"\x00" * 4
+        with self.assertRaises(ValueError):
+            lz4_decompress(frame)
 
     def test_round_trip_all_zeros(self):
         """All-zero payloads compress extremely well; verify correctness."""
@@ -173,7 +205,7 @@ class CythonLZ4Test(unittest.TestCase):
     def test_decompress_header_only_nonzero(self):
         """A 4-byte header claiming non-zero size with no payload should fail."""
         header_only = struct.pack('>I', 10)  # claims 10 bytes, but no data
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(ValueError):
             lz4_decompress(header_only)
 
 
