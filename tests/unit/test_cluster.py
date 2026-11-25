@@ -311,11 +311,11 @@ class ClusterTest(unittest.TestCase):
         second_future = Future()
         reconciliation_future = Future()
 
-        def add_first_pool(pool_host, is_host_addition):
+        def add_first_pool(pool_host, is_host_addition, **kwargs):
             first_session._pools[pool_host] = first_pool
             return first_future
 
-        def add_second_pool(pool_host, is_host_addition):
+        def add_second_pool(pool_host, is_host_addition, **kwargs):
             return second_future if is_host_addition else reconciliation_future
 
         first_session.add_or_renew_pool = Mock(side_effect=add_first_pool)
@@ -328,9 +328,9 @@ class ClusterTest(unittest.TestCase):
         cluster.on_add(host, refresh_nodes=False)
 
         first_session.add_or_renew_pool.assert_called_once_with(
-            host, is_host_addition=True)
+            host, is_host_addition=True, _on_pool_recovered=ANY)
         second_session.add_or_renew_pool.assert_called_once_with(
-            host, is_host_addition=True)
+            host, is_host_addition=True, _on_pool_recovered=ANY)
         listener.on_add.assert_not_called()
         assert host.is_up is None
 
@@ -4129,9 +4129,9 @@ class SessionPoolRaceTest(unittest.TestCase):
 
         def shutdown_before_submit(fn, *args, **kwargs):
             completions.append(session._pool_intents[host].completion)
-            # Reconciliation can complete the shared intent after detachment.
-            assert session.update_created_pools(hosts=(host,)) == set()
-            assert completions[0].result(timeout=5) is True
+            # A no-op still waits for the detached pool's owning cleanup.
+            assert len(session.update_created_pools(hosts=(host,))) == 1
+            assert not completions[0].done()
             session.shutdown()
             return real_submit(fn, *args, **kwargs)
 
@@ -4161,9 +4161,9 @@ class SessionPoolRaceTest(unittest.TestCase):
         assert session.is_shutdown
         assert session._pools == {}
         pool.shutdown.assert_called_once_with()
-        assert completions[0].result(timeout=5) is True
+        assert completions[0].exception(timeout=5) is shutdown_error
         live_session.add_or_renew_pool.assert_called_once_with(
-            host, is_host_addition=True)
+            host, is_host_addition=True, _on_pool_recovered=ANY)
         cluster._lifecycle.collect_futures.assert_called_once()
         futures = cluster._lifecycle.collect_futures.call_args.args[0]
         assert len(futures) == 2
@@ -4188,8 +4188,9 @@ class SessionPoolRaceTest(unittest.TestCase):
 
                 def supersede_before_submit(fn, *args, **kwargs):
                     completions.append(session._pool_intents[host].completion)
-                    assert session.update_created_pools(hosts=(host,)) == set()
-                    assert completions[0].result(timeout=5) is True
+                    ignored = session.update_created_pools(hosts=(host,))
+                    assert len(ignored) == 1
+                    assert not completions[0].done()
                     session.shutdown()
                     if submission_fails:
                         raise submission_error
@@ -4204,7 +4205,7 @@ class SessionPoolRaceTest(unittest.TestCase):
                 expected_error = (submission_error if submission_fails
                                   else shutdown_error)
                 assert failure.exception(timeout=5) is expected_error
-                assert completions[0].result(timeout=5) is True
+                assert completions[0].exception(timeout=5) is expected_error
                 assert session._pools == {}
                 pool.shutdown.assert_called_once_with()
 

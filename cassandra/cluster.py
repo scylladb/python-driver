@@ -186,6 +186,10 @@ class _PoolIntentCompletion(object):
         with self._lock:
             return not self._done and self._owner is owner
 
+    def is_pending(self):
+        with self._lock:
+            return not self._done
+
     def new_waiter(self):
         with self._lock:
             completion = Future()
@@ -280,11 +284,18 @@ class _PoolIntent(object):
     """
     __slots__ = ('host', 'pool_lifecycle_token', 'distance',
                  'completion', '_completion', '_completion_owner',
-                 '_creation_generation', '_creation_pool')
+                 '_creation_generation', '_creation_pool', 'on_pool_recovered',
+                 '_ignored_cleanup', '_creation_work', '_recovery_generation')
 
-    def __init__(self, host, pool_lifecycle_token, completion=None):
+    def __init__(self, host, pool_lifecycle_token, completion=None,
+                 on_pool_recovered=None, ignored_cleanup=None,
+                 creation_work=None, recovery_generation=None):
         self.host = host
         self.pool_lifecycle_token = pool_lifecycle_token
+        self.on_pool_recovered = on_pool_recovered
+        self._ignored_cleanup = ignored_cleanup
+        self._creation_work = creation_work
+        self._recovery_generation = recovery_generation
         self.distance = _NOT_SET
         self._creation_generation = _NOT_SET
         self._creation_pool = _NOT_SET
@@ -293,6 +304,9 @@ class _PoolIntent(object):
             completion = _PoolIntentCompletion()
         completion_future = completion.claim(self._completion_owner)
         if completion_future is None:
+            if (ignored_cleanup is not None and
+                    not ignored_cleanup.is_pending()):
+                self._ignored_cleanup = None
             completion = _PoolIntentCompletion()
             completion_future = completion.claim(self._completion_owner)
         self._completion = completion
@@ -317,12 +331,52 @@ class _PoolIntent(object):
                 self._completion.is_owner_pending(
                     self._completion_owner))
 
+    def reserve_ignored_cleanup(self):
+        # Reserve under Session/Host guards before submitting detached work.
+        # Its fixed owner survives transfers of the current intent completion.
+        cleanup = _PoolIntentCompletion()
+        owner = object()
+        cleanup.claim(owner)
+        self._ignored_cleanup = cleanup
+        return cleanup, owner
+
     def complete_result(self, result):
-        self._completion.complete_result(self._completion_owner, result)
+        if (result is True and self.distance == HostDistance.IGNORED and
+                self._ignored_cleanup is not None):
+            self._ignored_cleanup.new_waiter().add_done_callback(
+                self.complete_success_from_work)
+        else:
+            self._completion.complete_result(self._completion_owner, result)
 
     def complete_exception(self, exception):
         self._completion.complete_exception(
             self._completion_owner, exception)
+
+
+class _PoolAdditionCallback(object):
+    """Retain the ADD authority that requested a session pool."""
+
+    def __init__(self, lifecycle, host, generation, addition_token, callback):
+        self.lifecycle = lifecycle
+        self.host = host
+        self.generation = generation
+        self.addition_token = addition_token
+        self.callback = callback
+
+    def is_current(self):
+        return (self.lifecycle.readiness_is_current(
+                    self.host, self.generation) and
+                self.lifecycle.addition_is_current(
+                    self.host, self.addition_token))
+
+    def is_completed_current(self):
+        return (self.lifecycle.readiness_is_current(
+                    self.host, self.generation) and
+                getattr(self.host, '_ready_addition_token', None) is
+                self.addition_token)
+
+    def __call__(self, recovery):
+        self.callback(recovery)
 
 
 class _PoolCreationAttempt(object):
@@ -2686,12 +2740,67 @@ class Cluster(object):
             return
 
         futures = set()
+        pool_futures = {}
+        recovered_slots = {}
+        closed_slots = set()
+        failed_slots = None
+
+        def finish_recovered_add():
+            if failed_slots is not None:
+                required_slots = failed_slots - closed_slots
+                if not required_slots.issubset(recovered_slots):
+                    return
+                recoveries = tuple(recovered_slots[slot]
+                                   for slot in sorted(required_slots))
+                self._finalize_add(host, generation=generation,
+                                   addition_token=addition_token,
+                                   advance_health=False,
+                                   pool_recoveries=recoveries)
+
+        def pool_recovered(slot, recovery):
+            # Initial aggregation and recovery completions share the FIFO.
+            with host.lock:
+                if (not host._pending_host_addition or
+                        not self._lifecycle.readiness_is_current(
+                            host, generation) or
+                        not self._lifecycle.addition_is_current(
+                            host, addition_token)):
+                    return
+            if recovery is None:
+                if slot in closed_slots:
+                    return
+                closed_slots.add(slot)
+                recovered_slots.pop(slot, None)
+                future = pool_futures.get(slot)
+                if future is not None:
+                    _cancel_and_notify(future)
+            else:
+                if slot in closed_slots:
+                    return
+                previous = recovered_slots.get(slot)
+                if (previous is not None and
+                        previous.pool is recovery.pool and
+                        previous.generation is recovery.generation and
+                        previous.intent is recovery.intent):
+                    return
+                recovered_slots[slot] = recovery
+            finish_recovered_add()
 
         def pools_completed(futures_results):
+            nonlocal failed_slots
             if not self._lifecycle.addition_is_current(host, addition_token):
                 return
             log.debug('All futures have completed for added host %s', host)
 
+            if closed_slots:
+                futures_results = []
+                for slot, future in pool_futures.items():
+                    if slot in closed_slots:
+                        continue
+                    try:
+                        futures_results.append(future.result())
+                    except Exception as exc:
+                        futures_results.append(exc)
             failures = [f for f in futures_results if isinstance(f, Exception)]
             if failures:
                 for exc in failures:
@@ -2709,6 +2818,15 @@ class Cluster(object):
                 # ADD has failed it no longer owns ordinary pool creation;
                 # let that session reconcile without tearing down live pools.
                 self._lifecycle.release_addition(host, addition_token)
+                failed_slots = set()
+                for slot, future in pool_futures.items():
+                    try:
+                        succeeded = bool(future.result())
+                    except Exception:
+                        succeeded = False
+                    if not succeeded:
+                        failed_slots.add(slot)
+                finish_recovered_add()
                 return
 
             # A same-endpoint replacement removes its predecessor without
@@ -2816,16 +2934,20 @@ class Cluster(object):
                         else:
                             pending_reconnector.cancel()
 
-        for session in tuple(self.sessions):
+        for slot, session in enumerate(tuple(self.sessions)):
             if on_add_reconnection is None:
                 future = session.add_or_renew_pool(
-                    host, is_host_addition=True)
+                    host, is_host_addition=True,
+                    _on_pool_recovered=_PoolAdditionCallback(
+                        self._lifecycle, host, generation, addition_token,
+                        partial(pool_recovered, slot)))
             else:
                 future = session.add_or_renew_pool(
                     host, is_host_addition=True,
                     on_add_reconnection=on_add_reconnection)
             if future is not None:
                 futures.add(future)
+                pool_futures[slot] = future
 
         if not futures:
             self._finalize_add(host, generation=generation,
@@ -2836,10 +2958,12 @@ class Cluster(object):
 
     @_lifecycle.event
     def _finalize_add(self, host, set_up=True, generation=None,
-                      addition_token=None, advance_health=True):
+                      addition_token=None, advance_health=True,
+                      pool_recoveries=()):
         if not self._lifecycle.mark_ready(
                 host, set_up, readiness_generation=generation,
-                addition_token=addition_token, advance_health=advance_health):
+                addition_token=addition_token, advance_health=advance_health,
+                pool_recoveries=pool_recoveries):
             return
 
         self._notify_pending_add(host, generation)
@@ -4212,7 +4336,11 @@ class Session(object):
                 if pool_generations is not None:
                     pool_generations.clear()
                 pool_intents = self._pool_intents
+                add_completions = ()
                 if pool_intents is not None:
+                    add_completions = tuple(
+                        getattr(intent, 'on_pool_recovered', None)
+                        for intent in pool_intents.values())
                     pool_intents.clear()
                 initial_connect_futures = tuple(
                     getattr(self, '_initial_connect_futures', ()))
@@ -4221,6 +4349,21 @@ class Session(object):
                     pool_creation_work[future]
                     for future in initial_connect_futures
                     if future in pool_creation_work)
+
+        for completed in add_completions:
+            if completed is not None:
+                try:
+                    # Queue before handing off so pool completion cannot
+                    # overtake the closed-slot marker in the lifecycle FIFO.
+                    submitted = self.cluster._lifecycle.submit_async(
+                        self.cluster.executor, completed, None)
+                    if submitted is None:
+                        # Rejected admission must still close the slot before
+                        # cancellation can deliver its pool completion.
+                        self.cluster._lifecycle.submit(completed, None)
+                except Exception:
+                    log.exception(
+                        "Error scheduling closed-session ADD completion")
 
         # PYTHON-673. If shutdown was called shortly after session init, avoid
         # a race by cancelling any initial connection attempts haven't started,
@@ -4272,10 +4415,11 @@ class Session(object):
             pool_intents = self._pool_intents = {}
         return pool_intents
 
-    def _submit_pool_creation_work(self, completion, fn, *args, **kwargs):
-        """Submit pool creation and retain its work behind its public proxy."""
+    def _submit_pool_creation_work(self, intent, creation, owner, fn):
+        """Submit reserved creation work and retain its executor future."""
+        completion = intent.completion
         with self._lock:
-            work_future = self.submit(fn, *args, **kwargs)
+            work_future = self.submit(fn)
             add_done_callback = (
                 getattr(work_future, 'add_done_callback', None)
                 if work_future is not None else None)
@@ -4288,6 +4432,9 @@ class Session(object):
         if callable(add_done_callback):
             add_done_callback(partial(
                 self._pool_creation_work_done, completion))
+            add_done_callback(partial(creation.complete_from_work, owner))
+        else:
+            creation.complete_result(owner, work_future)
         return work_future
 
     def _pool_creation_work_done(self, completion, work_future):
@@ -4306,10 +4453,48 @@ class Session(object):
             current_intent.pool_lifecycle_token
             if same_host else object())
         completion = current_intent._completion if same_host else None
+        retain_add_recovery = same_host and host._pending_host_addition
+        if same_host and not retain_add_recovery:
+            generation, pool = self._pool_state_locked(host)
+            # Keep an active missing-slot chain through its own ADD completion.
+            # Unrelated later claims still drop the completed callback.
+            retain_add_recovery = (
+                generation is not None and pool is None and
+                current_intent._recovery_generation is generation and
+                self._owns_add_recovery_locked(
+                    host, current_intent, current_intent.on_pool_recovered))
+        on_pool_recovered = (
+            current_intent.on_pool_recovered
+            if retain_add_recovery else None)
+        ignored_cleanup = (
+            current_intent._ignored_cleanup if same_host else None)
+        creation_work = current_intent._creation_work if same_host else None
+        # Pending ADD still needs the raw outcome before FIFO delivery.
+        if (creation_work is not None and creation_work.done() and
+                not host._pending_host_addition):
+            creation_work = None
+        recovery_generation = (current_intent._recovery_generation
+                               if retain_add_recovery else None)
         intent = _PoolIntent(
-            host, pool_lifecycle_token, completion=completion)
+            host, pool_lifecycle_token, completion=completion,
+            on_pool_recovered=on_pool_recovered,
+            ignored_cleanup=ignored_cleanup,
+            creation_work=creation_work,
+            recovery_generation=recovery_generation)
         pool_intents[host] = intent
         return intent
+
+    def _owns_add_recovery_locked(self, host, intent, addition):
+        return (isinstance(addition, _PoolAdditionCallback) and
+                addition.host is host and
+                addition.lifecycle is self.cluster._lifecycle and
+                intent is not None and
+                ((host._pending_host_addition and
+                  intent.on_pool_recovered is addition and
+                  addition.is_current()) or
+                 (not host._pending_host_addition and
+                  host.is_up in (True, None) and
+                  addition.is_completed_current())))
 
     def _owns_pool_generation_locked(self, host, generation,
                                      expected_pool, endpoint=_NOT_SET):
@@ -4350,28 +4535,74 @@ class Session(object):
                     ignored_intent_owns_cleanup)
 
     def _handle_pool_creation_failure(self, attempt, dispatch_failure,
-                                      owning_result):
+                                      owning_result, retryable=True):
         host = attempt.host
         with self._lock:
             with host.lock, self.cluster.metadata._host_ownership_guard(host):
-                owns_intent = (
-                    self._pool_intents_locked().get(host) is attempt.intent)
-                if not owns_intent or not attempt.owns_locked(self):
+                intent = self._pool_intents_locked().get(host)
+                compatible_work = (
+                    intent is not None and
+                    intent.pool_lifecycle_token is
+                    attempt.intent.pool_lifecycle_token and
+                    intent._creation_work is not None and
+                    intent._creation_work is attempt.intent._creation_work and
+                    intent.on_pool_recovered is
+                    attempt.intent.on_pool_recovered and
+                    self._owns_add_recovery_locked(
+                        host, intent, intent.on_pool_recovered))
+                if ((intent is not attempt.intent and not compatible_work) or
+                        not attempt.owns_locked(self)):
                     return self._stale_pool_creation_result_locked(attempt)
                 failure_generation = object()
                 self._pool_generations[host] = failure_generation
+                intent._recovery_generation = (
+                    failure_generation if retryable else None)
                 reservation = _lifecycle.PoolFailureReservation(
                     self, host, failure_generation, attempt.expected_pool,
-                    attempt.intent, attempt.endpoint)
+                    intent, attempt.endpoint)
         # Conviction/distance callbacks can refresh topology. Retain ownership
         # in a token and recheck it atomically with DOWN admission instead of
         # holding session/host locks through arbitrary policy code.
         dispatch_failure(reservation)
         return owning_result
 
+    def _handle_pool_intent_policy_error(self, host, intent, error):
+        intent.complete_exception(error)
+        # A policy error cannot discard the original creation outcome.
+        if (intent.on_pool_recovered is not None and
+                intent._creation_work is not None):
+            self._observe_pool_creation_for_add(
+                host, intent, _work_completed=intent._creation_work)
+        with self._lock, host.lock:
+            generation, pool = self._pool_state_locked(host)
+            owns_add = (self._pool_intents.get(host) is intent and
+                        self._owns_add_recovery_locked(
+                            host, intent, intent.on_pool_recovered))
+            if (generation is None and pool is None and owns_add and
+                    intent._recovery_generation is not None):
+                generation = object()
+                self._pool_generations[host] = generation
+                intent._recovery_generation = generation
+            retry_add = (generation is not None and pool is None and
+                         intent._recovery_generation is generation and
+                         self._pool_intents.get(host) is intent and
+                         self._owns_add_recovery_locked(
+                             host, intent, intent.on_pool_recovered))
+            if retry_add:
+                failure = _lifecycle.PoolFailureReservation(
+                    self, host, generation, None, intent, host.endpoint)
+        if retry_add:
+            work_completed = (intent._ignored_cleanup.new_waiter()
+                              if intent._ignored_cleanup is not None
+                              else intent._creation_work)
+            self._recover_failed_pool_creation(
+                failure, True, _work_completed=work_completed)
+
     def add_or_renew_pool(self, host, is_host_addition,
                           on_add_reconnection=None, _expected_state=None,
-                          _expected_intent=_NOT_SET, _distance=_NOT_SET):
+                          _expected_intent=_NOT_SET, _distance=_NOT_SET,
+                          _recovery_schedule=None, _on_pool_recovered=None,
+                          _add_recovery=None):
         """
         For internal use only.
         """
@@ -4393,15 +4624,25 @@ class Session(object):
                             removed_future.set_result(False)
                             return removed_future
                         intent = self._claim_pool_intent_locked(host)
+                        if _on_pool_recovered is not None:
+                            if (intent.on_pool_recovered is not
+                                    _on_pool_recovered):
+                                intent._recovery_generation = None
+                            intent.on_pool_recovered = _on_pool_recovered
                         if claimed_pool is _NOT_SET:
                             claimed_pool = self._pools.get(host)
                 try:
                     distance = self._profile_manager.distance(host)
                 except Exception as exc:
-                    intent.complete_exception(exc)
+                    self._handle_pool_intent_policy_error(host, intent, exc)
                     raise
             else:
                 intent = _expected_intent
+                if _on_pool_recovered is not None:
+                    with self._lock:
+                        if intent.on_pool_recovered is not _on_pool_recovered:
+                            intent._recovery_generation = None
+                        intent.on_pool_recovered = _on_pool_recovered
                 try:
                     if _distance is _NOT_SET:
                         distance = self._profile_manager.distance(host)
@@ -4410,6 +4651,9 @@ class Session(object):
                 except Exception as exc:
                     intent.complete_exception(exc)
                     raise
+
+            if intent.on_pool_recovered is not None:
+                self._observe_pool_creation_for_add(host, intent)
 
             terminal_result = _NOT_SET
             superseding_intent = None
@@ -4451,6 +4695,7 @@ class Session(object):
                                 self._pool_matches_host(host, current_pool))
                             if distance == HostDistance.IGNORED:
                                 intent.distance = distance
+                                intent._recovery_generation = object()
                                 pool_host = getattr(
                                     current_pool, 'host', host)
                                 pool_belongs_to_lifecycle = (
@@ -4461,6 +4706,9 @@ class Session(object):
                                     self._pool_generations.pop(host, None)
                                     pool_to_shutdown = \
                                         self._pools.pop(host, None)
+                                    if pool_to_shutdown is not None:
+                                        cleanup, cleanup_owner = \
+                                            intent.reserve_ignored_cleanup()
                                 terminal_result = True
                                 return_none = True
                             elif newer_pool_is_live:
@@ -4483,7 +4731,9 @@ class Session(object):
                                         current_pool.host_distance = distance
                                     terminal_result = bool(live_pool)
                                     return_none = True
-                                elif host.is_up not in (True, None):
+                                elif (host.is_up not in (True, None) and
+                                      not self._owns_add_recovery_locked(
+                                          host, intent, _add_recovery)):
                                     self._pool_generations.pop(host, None)
                                     if pool_intents.get(host) is intent:
                                         pool_intents.pop(host, None)
@@ -4499,6 +4749,13 @@ class Session(object):
                                     self._pool_generations[host] = generation
                                 intent._creation_generation = generation
                                 intent._creation_pool = expected_pool
+                                creation = _PoolIntentCompletion()
+                                creation_owner = object()
+                                intent._creation_work = creation.claim(
+                                    creation_owner)
+                                # Required creation replaces the current
+                                # cleanup dependency, not its older waiters.
+                                intent._ignored_cleanup = None
                                 attempt = _PoolCreationAttempt(
                                     host, generation, expected_pool, intent,
                                     distance)
@@ -4507,6 +4764,7 @@ class Session(object):
                 cleanup_failure = Future()
 
                 def complete_shutdown_error(exc):
+                    cleanup.complete_exception(cleanup_owner, exc)
                     intent.complete_exception(exc)
                     cleanup_failure.set_exception(exc)
                     return cleanup_failure
@@ -4516,10 +4774,19 @@ class Session(object):
                         pool_to_shutdown,
                         on_shutdown_error=complete_shutdown_error)
                 except Exception as exc:
+                    cleanup.complete_exception(cleanup_owner, exc)
                     intent.complete_exception(exc)
                     raise
                 if shutdown_future is cleanup_failure:
                     return shutdown_future
+                add_done_callback = getattr(
+                    shutdown_future, 'add_done_callback', None)
+                if callable(add_done_callback):
+                    add_done_callback(partial(
+                        cleanup.complete_from_work, cleanup_owner,
+                        successful_result=True))
+                else:
+                    cleanup.complete_result(cleanup_owner, True)
             if terminal_result is not _NOT_SET:
                 intent.complete_result(terminal_result)
             if return_live_success:
@@ -4549,6 +4816,13 @@ class Session(object):
 
             connection_errors = []
 
+            def recover_if_down_discounted(reservation, dispatched):
+                if (not dispatched and attempt.expected_pool is None and
+                        on_add_reconnection is None):
+                    self._recover_failed_pool_creation(
+                        reservation, is_host_addition, _recovery_schedule,
+                        _add_recovery=_add_recovery)
+
             def dispatch_connection_failure(reservation):
                 connection_exc = connection_errors[0]
                 log.warning(
@@ -4556,16 +4830,21 @@ class Session(object):
                     host, exc_info=connection_exc)
                 # The host itself will still be marked down, so pass a
                 # special flag to make sure the reconnector is created.
-                if on_add_reconnection is None:
-                    self.cluster.signal_connection_failure(
-                        host, connection_exc, is_host_addition,
-                        expect_host_to_be_down=True, _pool_failure=reservation)
-                else:
-                    self.cluster.signal_connection_failure(
-                        host, connection_exc, is_host_addition,
-                        expect_host_to_be_down=True,
-                        on_add_reconnection=on_add_reconnection,
-                        _pool_failure=reservation)
+                dispatched = False
+                try:
+                    if on_add_reconnection is None:
+                        dispatched = self.cluster.signal_connection_failure(
+                            host, connection_exc, is_host_addition,
+                            expect_host_to_be_down=True,
+                            _pool_failure=reservation)
+                    else:
+                        dispatched = self.cluster.signal_connection_failure(
+                            host, connection_exc, is_host_addition,
+                            expect_host_to_be_down=True,
+                            on_add_reconnection=on_add_reconnection,
+                            _pool_failure=reservation)
+                finally:
+                    recover_if_down_discounted(reservation, dispatched)
 
             # Share the creation generation with background socket work;
             # publication below switches it to exact installed pool identity.
@@ -4596,7 +4875,8 @@ class Session(object):
                 owning_result = (
                     None if on_add_reconnection is not None else False)
                 return self._handle_pool_creation_failure(
-                    attempt, dispatch_authentication_failure, owning_result)
+                    attempt, dispatch_authentication_failure, owning_result,
+                    retryable=False)
             except Exception as conn_exc:
                 connection_errors.append(conn_exc)
                 return self._handle_pool_creation_failure(
@@ -4618,8 +4898,14 @@ class Session(object):
                         with host.lock:
                             with new_pool._lock_usable_connection() as connected:
                                 with self.cluster.metadata._host_ownership_guard(host):
-                                    if (not ownership.owns_locked(new_pool) or
-                                            not attempt.owns_locked(self)):
+                                    if (
+                                        not ownership.owns_locked(new_pool) or
+                                        not attempt.owns_locked(self) or
+                                        (_add_recovery is not None and
+                                         not self._owns_add_recovery_locked(
+                                             host, attempt.intent,
+                                             _add_recovery))
+                                    ):
                                         stale_candidate = True
                                         stale_result = \
                                             self._stale_pool_creation_result_locked(
@@ -4627,12 +4913,7 @@ class Session(object):
                                                 ignored_intent_is_success=True)
                                     else:
                                         keyspace = self.keyspace
-                                        expected_pool = attempt.expected_pool
-                                        renewing_retired_pool = (
-                                            expected_pool is not None and
-                                            expected_pool.is_shutdown)
-                                        if (renewing_retired_pool and
-                                                connection_required and
+                                        if (connection_required and
                                                 not connected):
                                             unusable_candidate = True
                                         elif new_pool._keyspace == keyspace:
@@ -4646,6 +4927,10 @@ class Session(object):
                                                     previous.host_distance
                                             self._pools[host] = new_pool
                                             self._pool_generations[host] = object()
+                                            if not host._pending_host_addition:
+                                                (
+                                                  attempt.intent._creation_work
+                                                ) = None
                                             ownership.published = True
                                             ownership.expected_pool = None
                                             if connected:
@@ -4690,15 +4975,20 @@ class Session(object):
                             "Failed setting keyspace for pool after "
                             "keyspace changed during connect: %s",
                             errors_returned)
-                        if on_add_reconnection is None:
-                            self.cluster.on_down(
-                                host, is_host_addition, _pool_failure=reservation)
-                        else:
-                            self.cluster.on_down(
-                                host, is_host_addition,
-                                expect_host_to_be_down=True,
-                                on_add_reconnection=on_add_reconnection,
-                                _pool_failure=reservation)
+                        dispatched = False
+                        try:
+                            if on_add_reconnection is None:
+                                dispatched = self.cluster.on_down(
+                                    host, is_host_addition,
+                                    _pool_failure=reservation)
+                            else:
+                                dispatched = self.cluster.on_down(
+                                    host, is_host_addition,
+                                    expect_host_to_be_down=True,
+                                    on_add_reconnection=on_add_reconnection,
+                                    _pool_failure=reservation)
+                        finally:
+                            recover_if_down_discounted(reservation, dispatched)
 
                     try:
                         return self._handle_pool_creation_failure(
@@ -4708,8 +4998,10 @@ class Session(object):
 
         try:
             work_future = self._submit_pool_creation_work(
-                attempt.intent.completion, run_add_or_renew_pool)
+                attempt.intent, creation, creation_owner,
+                run_add_or_renew_pool)
         except Exception as exc:
+            creation.complete_exception(creation_owner, exc)
             attempt.intent.complete_exception(exc)
             raise
         if work_future is None:
@@ -4722,6 +5014,174 @@ class Session(object):
             return work_future
         add_done_callback(attempt.intent.complete_from_work)
         return attempt.intent.completion
+
+    def _observe_pool_creation_for_add(self, host, intent,
+                                       _work_completed=None):
+        """Complete the original ADD slot after its current work succeeds."""
+        session_ref = weakref.ref(self)
+        lifecycle = self.cluster._lifecycle
+        pool_lifecycle_token = intent.pool_lifecycle_token
+        observed_completion = intent._completion
+        on_recovered = intent.on_pool_recovered
+
+        def completed(completion):
+            try:
+                if completion.result() is not True:
+                    return
+            except Exception:
+                return
+            session = session_ref()
+            if session is None:
+                return
+            with session._lock:
+                current_intent = session._pool_intents.get(host)
+                if (session.is_shutdown or current_intent is None or
+                        current_intent.pool_lifecycle_token is not
+                        pool_lifecycle_token or
+                        current_intent._completion is not
+                        observed_completion or
+                        current_intent.on_pool_recovered is not on_recovered):
+                    return
+                pool = session._pools.get(host)
+                generation = session._pool_generations.get(host)
+                ignored = current_intent.distance == HostDistance.IGNORED
+                if ignored:
+                    if current_intent._completion.is_pending():
+                        return
+                    try:
+                        ignored_completion = (
+                            current_intent.new_completion_waiter())
+                        if ignored_completion.result() is not True:
+                            return
+                    except Exception:
+                        return
+            if pool is not None or ignored:
+                on_recovered(_lifecycle.PoolRecoveryReservation(
+                    session, pool, generation, current_intent))
+
+        completion = (intent.new_completion_waiter()
+                      if _work_completed is None else _work_completed)
+        completion.add_done_callback(partial(lifecycle.submit, completed))
+
+    def _recover_failed_pool_creation(self, reservation, is_host_addition,
+                                      schedule=None, _work_completed=None,
+                                      _add_recovery=None):
+        """Retry a missing pool while the failed creation owns its slot."""
+        session_ref = weakref.ref(self)
+        lifecycle = self.cluster._lifecycle
+        host = reservation.host
+        generation = reservation.generation
+        failed_intent = reservation.intent
+        endpoint = reservation.endpoint
+        addition = (_add_recovery if _add_recovery is not None
+                    else failed_intent.on_pool_recovered)
+        with reservation.locked():
+            if (not reservation.owns_locked() or
+                    (isinstance(addition, _PoolAdditionCallback) and
+                     not self._owns_add_recovery_locked(
+                         host, failed_intent, addition))):
+                return
+            failed_intent._recovery_generation = generation
+        if schedule is None:
+            schedule = iter(self.cluster.reconnection_policy.new_schedule())
+
+        def can_recover_locked(session):
+            if isinstance(addition, _PoolAdditionCallback):
+                if not session._owns_add_recovery_locked(
+                        host, failed_intent, addition):
+                    return False
+                if is_host_addition and host._pending_host_addition:
+                    return True
+            return host.is_up in (True, None)
+
+        def recover():
+            session = session_ref()
+            if session is None:
+                return
+            failure = _lifecycle.PoolFailureReservation(
+                session, host, generation, None, failed_intent, endpoint)
+            with (session._lock, host.lock,
+                  session.cluster.metadata._host_ownership_guard(host)):
+                if (session.cluster.is_shutdown or
+                        not can_recover_locked(session) or
+                        not failure.owns_locked()):
+                    return
+                intent = session._claim_pool_intent_locked(host)
+                # A current ordinary ADD may still own a down host. Its
+                # intent fences creation without the up-host state gate.
+                expected_state = ((generation, None)
+                                  if host.is_up in (True, None) else None)
+            pending = _lifecycle.PoolFailureReservation(
+                session, host, generation, None, intent, endpoint)
+            try:
+                completion = session.add_or_renew_pool(
+                    host, is_host_addition,
+                    _expected_state=expected_state,
+                    _expected_intent=intent, _recovery_schedule=schedule,
+                    **({'_add_recovery': addition}
+                       if isinstance(addition, _PoolAdditionCallback) else {}))
+            except Exception:
+                log.exception("Error recovering session pool for %s", host)
+                session._recover_failed_pool_creation(
+                    pending, is_host_addition, schedule,
+                    _add_recovery=addition)
+                return
+            # Unstarted work never reaches its failure dispatcher.
+            # Retryable failures admit recovery for their new token.
+            if completion is None:
+                session._recover_failed_pool_creation(
+                    pending, is_host_addition, schedule,
+                    _add_recovery=addition)
+            else:
+                def retry_completed(completed):
+                    try:
+                        succeeded = completed.result() is True
+                    except Exception:
+                        succeeded = False
+                    if succeeded:
+                        return
+                    session._recover_failed_pool_creation(
+                        pending, is_host_addition, schedule,
+                        _add_recovery=addition)
+
+                intent.new_completion_waiter().add_done_callback(
+                    lambda completed: lifecycle.submit(
+                        retry_completed, completed))
+
+        def schedule_retry(completed):
+            session = session_ref()
+            if session is None:
+                return
+            failure = _lifecycle.PoolFailureReservation(
+                session, host, generation, None, failed_intent, endpoint)
+            if not failure.is_current():
+                return
+            with host.lock:
+                if (session.cluster.is_shutdown or
+                        not can_recover_locked(session)):
+                    return
+            try:
+                delay = next(schedule)
+            except StopIteration:
+                with failure.locked():
+                    if (failure.owns_locked() and
+                            failed_intent._recovery_generation is generation):
+                        failed_intent._recovery_generation = None
+                log.warning(
+                    "Session pool creation recovery schedule exhausted "
+                    "for %s", host)
+                return
+            session.cluster.scheduler.schedule(
+                delay, partial(lifecycle.submit, recover))
+
+        # Public completion can settle before owning work finishes cleanup.
+        # Wait on actual work or a private waiter before retrying.
+        if _work_completed is None:
+            _work_completed = failed_intent._creation_work
+        if _work_completed is None:
+            _work_completed = failed_intent.new_completion_waiter()
+        _work_completed.add_done_callback(
+            partial(lifecycle.submit, schedule_retry))
 
     def _recover_pool(self, failed_pool):
         """Retry a retired session pool when cluster DOWN was discounted.
@@ -4738,6 +5198,12 @@ class Session(object):
         session_ref = weakref.ref(self)
         lifecycle = self.cluster._lifecycle
         host = failed_pool.host
+        with self._lock, host.lock:
+            intent = self._pool_intents_locked().get(host)
+            addition = (intent.on_pool_recovered
+                        if intent is not None else None)
+            if not self._owns_add_recovery_locked(host, intent, addition):
+                addition = None
         schedule = iter(self.cluster.reconnection_policy.new_schedule())
 
         def current_session():
@@ -4747,7 +5213,13 @@ class Session(object):
                 return None
             with session._lock, host.lock:
                 if (session.is_shutdown or session.cluster.is_shutdown or
-                        host.is_up not in (True, None) or host._is_removed or
+                        host._is_removed or
+                        (addition is not None and
+                         not session._owns_add_recovery_locked(
+                             host, session._pool_intents.get(host),
+                             addition)) or
+                        (host.is_up not in (True, None) and
+                         addition is None) or
                         session._pools.get(host) is not failed_pool or
                         not failed_pool.is_shutdown or
                         session.cluster.metadata.get_host_by_host_id(
@@ -4782,7 +5254,8 @@ class Session(object):
                 return
             try:
                 futures = session.update_created_pools(
-                    hosts=(host,), _expected_pool=failed_pool)
+                    hosts=(host,), _expected_pool=failed_pool,
+                    _add_recovery=addition)
             except Exception:
                 log.exception("Error recovering session pool for %s", host)
                 retry()
@@ -4878,7 +5351,7 @@ class Session(object):
             return None
 
     def update_created_pools(self, excluded_host=None, hosts=None,
-                             _expected_pool=None):
+                             _expected_pool=None, _add_recovery=None):
         """
         When the set of live nodes change, the loadbalancer will change its
         mind on host distances. It might change it on the node that came/left
@@ -4893,6 +5366,7 @@ class Session(object):
         ``hosts`` may freeze the metadata snapshot used for reconciliation.
         ``_expected_pool`` confines recovery to the exact failed pool, even
         when removal or replacement occurs during distance calculation.
+        ``_add_recovery`` retains the original ADD authority for this recovery.
 
         For internal use only.
         """
@@ -4917,14 +5391,18 @@ class Session(object):
                     break
                 with (host.lock,
                       self.cluster.metadata._host_ownership_guard(host) as owns_host):
-                    if not owns_host or host._is_removed or host._lifecycle_pending:
+                    down_add = self._owns_add_recovery_locked(
+                        host, self._pool_intents_locked().get(host),
+                        _add_recovery)
+                    if (not owns_host or host._is_removed or
+                            (host._lifecycle_pending and not down_add)):
                         continue
                     if (_expected_pool is not None and
                             self._pools.get(host) is not _expected_pool):
                         continue
                     # In-flight on_add/on_up owns pool creation for a down host;
                     # superseding it would settle its result False with no retry.
-                    if host.is_up is False and (
+                    if host.is_up is False and not down_add and (
                             host._pending_host_addition or
                             host._currently_handling_node_up):
                         continue
@@ -4933,8 +5411,10 @@ class Session(object):
             try:
                 distance = self._profile_manager.distance(host)
             except Exception as exc:
-                intent.complete_exception(exc)
+                self._handle_pool_intent_policy_error(host, intent, exc)
                 raise
+            if intent.on_pool_recovered is not None:
+                self._observe_pool_creation_for_add(host, intent)
             pool_to_shutdown = None
             expected_state = None
             future = None
@@ -4955,6 +5435,10 @@ class Session(object):
                             if current_intent is intent:
                                 self._pool_intents_locked().pop(host, None)
                             terminal_result = False
+                        elif (_add_recovery is not None and
+                              not self._owns_add_recovery_locked(
+                                  host, intent, _add_recovery)):
+                            terminal_result = False
                         elif current_intent is not intent:
                             if (current_intent is not None and
                                     current_intent.pool_lifecycle_token is
@@ -4973,14 +5457,20 @@ class Session(object):
                             # hosts. None allows attempts when an ignored host
                             # becomes eligible for a pool.
                             if distance == HostDistance.IGNORED:
+                                intent._recovery_generation = object()
                                 self._pool_generations.pop(host, None)
                                 pool_to_shutdown = self._pools.pop(host, None)
                                 if pool_to_shutdown is None:
                                     terminal_result = True
+                                else:
+                                    cleanup, cleanup_owner = \
+                                        intent.reserve_ignored_cleanup()
                             elif pool is not None and not pool.is_shutdown:
                                 pool.host_distance = distance
                                 terminal_result = True
-                            elif host.is_up not in (True, None):
+                            elif (host.is_up not in (True, None) and
+                                  not self._owns_add_recovery_locked(
+                                      host, intent, _add_recovery)):
                                 self._pool_generations.pop(host, None)
                                 if current_intent is intent:
                                     self._pool_intents_locked().pop(
@@ -4990,6 +5480,9 @@ class Session(object):
 
             if terminal_result is not _NOT_SET:
                 intent.complete_result(terminal_result)
+                if (distance == HostDistance.IGNORED and
+                        intent._ignored_cleanup is not None):
+                    future = intent.completion
             if superseding_intent is not None:
                 superseding_completion = \
                     superseding_intent.new_completion_waiter()
@@ -5002,6 +5495,7 @@ class Session(object):
                     work_future = self._shutdown_detached_pool(
                         pool_to_shutdown)
                 except Exception as exc:
+                    cleanup.complete_exception(cleanup_owner, exc)
                     intent.complete_exception(exc)
                     log.exception(
                         "Error scheduling or running ignored-pool shutdown "
@@ -5010,25 +5504,26 @@ class Session(object):
                     cleanup_failure.set_exception(exc)
                     futures.add(cleanup_failure)
                     continue
-                if work_future is None:
-                    intent.complete_result(True)
-                    future = None
+                add_done_callback = getattr(
+                    work_future, 'add_done_callback', None)
+                if callable(add_done_callback):
+                    add_done_callback(partial(
+                        cleanup.complete_from_work, cleanup_owner,
+                        successful_result=True))
+                    future = intent.completion
                 else:
-                    add_done_callback = getattr(
-                        work_future, 'add_done_callback', None)
-                    if not callable(add_done_callback):
-                        intent.complete_result(True)
-                        future = work_future
-                    else:
-                        add_done_callback(intent.complete_success_from_work)
-                        future = intent.completion
+                    cleanup.complete_result(cleanup_owner, True)
+                    future = work_future
+                intent.complete_result(True)
             elif (distance != HostDistance.IGNORED and
                   expected_state is not None and
                   (expected_state[1] is None or
                    expected_state[1].is_shutdown)):
                 future = self.add_or_renew_pool(
                     host, False, _expected_state=expected_state,
-                    _expected_intent=intent, _distance=distance)
+                    _expected_intent=intent, _distance=distance,
+                    **({'_add_recovery': _add_recovery}
+                       if _add_recovery is not None else {}))
 
             if future:
                 futures.add(future)
