@@ -7356,6 +7356,9 @@ class ResponseFuture(object):
         self._routing_token = routing_token
         self._control_connection_query_attempted = False
         self._page_generation = 0
+        # One policy decision per failed connection and page. Weak references
+        # let retired transports be reclaimed while the future is pending.
+        self._connection_error_claims = None
         # A coalesced failure may be owned by a speculative attempt. Exhausting
         # its plan is terminal only after every request and queued retry ends.
         self._pending_attempts = set()
@@ -8464,6 +8467,7 @@ class ResponseFuture(object):
         request_sent = False
         replace_failed_connection = False
         send_error = None
+        handle_send_error = False
         expected_generation = page_generation
         timed_out = False
         request_token = None
@@ -8543,12 +8547,18 @@ class ResponseFuture(object):
                             self._request_pool = pool
                             self._req_id = request_id
                             self._request_callback = cb
-                        self.request_encoded_size = connection.send_msg(
-                            message, request_id, cb=cb,
-                            encoder=self._protocol_handler.encode_message,
-                            decoder=self._protocol_handler.decode_message,
-                            result_metadata=result_meta)
-                        request_sent = True
+                        try:
+                            self.request_encoded_size = connection.send_msg(
+                                message, request_id, cb=cb,
+                                encoder=self._protocol_handler.encode_message,
+                                decoder=self._protocol_handler.decode_message,
+                                result_metadata=result_meta)
+                            request_sent = True
+                        except ConnectionSendError:
+                            if use_retry_policy:
+                                handle_send_error = self._claim_connection_error(
+                                    connection, page_generation)
+                            raise
                 finally:
                     connection.lock.release()
             self.attempted_hosts.append(host)
@@ -8616,7 +8626,7 @@ class ResponseFuture(object):
                     remaining = self._time_remaining
                     if remaining is not None and remaining <= 0:
                         self._on_timeout(page_generation=page_generation)
-                    else:
+                    elif handle_send_error:
                         self._handle_request_error(
                             send_error, host, getattr(message, 'consistency_level', None),
                             page_generation=page_generation,
@@ -8706,6 +8716,7 @@ class ResponseFuture(object):
             self.query_plan = query_plan
             self._query_plan_lock = Lock()
             self._start_time = time.time()
+            self._connection_error_claims = None
             self._pending_attempts.clear()
             self._plan_exhausted = False
             self.message.paging_state = self._paging_state
@@ -8763,6 +8774,18 @@ class ResponseFuture(object):
         table = self.query.table
         if tablet and keyspace and table:
             self.session.cluster.metadata._tablets.add_tablet(keyspace, table, tablet)
+
+    def _claim_connection_error(self, connection, page_generation):
+        with self._callback_lock:
+            if not self._is_active_page(page_generation):
+                return False
+            if connection is not None:
+                if self._connection_error_claims is None:
+                    self._connection_error_claims = WeakSet()
+                elif connection in self._connection_error_claims:
+                    return False
+                self._connection_error_claims.add(connection)
+            return True
 
     def _set_result(self, host, connection, pool, response, page_generation=None,
                     consistency_level=_NOT_SET, error_no_hosts=True,
@@ -8972,6 +8995,8 @@ class ResponseFuture(object):
                 if self._metrics is not None:
                     self._metrics.on_connection_error()
                 failed_connection = connection if connection is not None else self._connection
+                if not self._claim_connection_error(failed_connection, page_generation):
+                    return
                 if not isinstance(response, ConnectionShutdown):
                     failed_connection.defunct(response)
                 self._handle_request_error(

@@ -1451,6 +1451,37 @@ class ResponseFutureTests(unittest.TestCase):
         assert not failures
         first.push.assert_called_once()
 
+    def test_coalesced_speculative_failure_completes_exhausted_page(self):
+        for healthy_attempt in (False, True):
+            with self.subTest(healthy_attempt=healthy_attempt):
+                policy = Mock(wraps=RetryPolicy())
+                rf, (shared, healthy), _ = self.make_failed_push_future(policy)
+                rf.timeout = None
+                shared.push.side_effect = None
+                rf.query_plan = iter([self.host1, self.host1] +
+                                     ([self.host2] if healthy_attempt else []))
+                assert rf.send_request()
+                assert rf.send_request(error_no_hosts=False, is_speculative=True)
+                if healthy_attempt:
+                    assert rf.send_request(error_no_hosts=False, is_speculative=True)
+                # error_all_requests invokes the newest callback first: the
+                # speculative stream owns this shared connection's failure.
+                shared.defunct(ConnectionShutdown('shared connection lost'))
+                policy.on_request_error.assert_called_once()
+                scheduler = rf.session.cluster.scheduler.schedule_with_shutdown
+                args = scheduler.call_args.args
+                args[2](*args[3:])
+                assert shared.in_flight == 0
+                if healthy_attempt:
+                    assert not rf._is_final()
+                    callback = healthy._requests.pop(rf._req_id)[0]
+                    callback(ResultMessage(kind=RESULT_KIND_VOID))
+                    assert rf._final_result is None
+                    assert rf._final_exception is None
+                else:
+                    assert isinstance(rf._final_exception, NoHostAvailable)
+                assert rf._event.is_set()
+
     def test_exhausted_primary_retry_waits_for_speculative_response(self):
         for healthy_attempt in (False, True):
             with self.subTest(healthy_attempt=healthy_attempt):
@@ -1562,6 +1593,25 @@ class ResponseFutureTests(unittest.TestCase):
             args[0](*args[1:], **kwargs)
         assert rf._final_result is None
         assert rf._final_exception is None
+
+    def test_coalesced_exhaustion_waits_for_other_queued_retries(self):
+        rf, (shared, other), _ = self.make_failed_push_future(RetryPolicy())
+        rf.timeout = None
+        shared.push.side_effect = None
+        rf.query_plan = iter([self.host1, self.host1, self.host2])
+        assert rf.send_request()
+        assert rf.send_request(error_no_hosts=False, is_speculative=True)
+        assert rf.send_request(error_no_hosts=False, is_speculative=True)
+        shared.defunct(ConnectionShutdown('shared connection lost'))
+        other.defunct(ConnectionShutdown('other connection lost'))
+        calls = rf.session.cluster.scheduler.schedule_with_shutdown.call_args_list
+        assert len(calls) == 2
+        args = calls[0].args
+        args[2](*args[3:])
+        assert not rf._is_final()
+        args = calls[1].args
+        args[2](*args[3:])
+        assert isinstance(rf._final_exception, NoHostAvailable)
 
     def test_scheduled_retries_keep_their_selected_consistency(self):
         rf, (_, second), _ = self.make_failed_push_future(RetryPolicy())
@@ -2964,6 +3014,125 @@ class ResponseFutureTests(unittest.TestCase):
                 scheduler.schedule_with_shutdown.assert_not_called()
                 assert rf._req_id is None
 
+    def test_failed_push_coalesces_shared_connection_retry(self):
+        for deferred_callbacks in (False, True):
+            with self.subTest(deferred_callbacks=deferred_callbacks):
+                policy = Mock(spec=RetryPolicy)
+                policy.on_request_error.return_value = (
+                    RetryPolicy.RETRY_NEXT_HOST, ConsistencyLevel.QUORUM, 0.5)
+                rf, (first, second), queued = self.make_failed_push_future(
+                    policy, is_idempotent=True)
+                failed_push = first.push.side_effect
+                first.push.side_effect = None
+                assert rf._query(self.host1) is not None
+                first.push.side_effect = failed_push
+                rf.query_plan = iter((self.host1, self.host2))
+
+                with patch('cassandra.connection.Thread') as callback_thread:
+                    if deferred_callbacks:
+                        # Process another request first, leaving this future's
+                        # outstanding attempt for the background batch.
+                        first._requests[100] = (Mock(), None, None)
+                    with patch.object(Connection, 'CALLBACK_ERR_THREAD_THRESHOLD', 0):
+                        assert rf.send_request()
+                    if deferred_callbacks:
+                        callback_thread.assert_called_once()
+                        callback_thread.call_args.kwargs['target']()
+                    else:
+                        callback_thread.assert_not_called()
+
+                assert queued
+                assert first.in_flight == 0
+                assert not first._requests
+                assert not first.orphaned_request_ids
+                policy.on_request_error.assert_called_once_with(
+                    rf.query, ConsistencyLevel.ONE,
+                    error=first.last_error, retry_num=0)
+                scheduler = rf.session.cluster.scheduler.schedule_with_shutdown
+                scheduler.assert_called_once_with(
+                    0.5, ANY, rf._run_attempt, ANY, rf._retry_task, False,
+                    self.host1, rf._page_generation, True,
+                    rf.message.consistency_level)
+                assert rf._query_retries == 1
+                second.push.assert_not_called()
+                args = scheduler.call_args.args
+                args[2](*args[3:])
+                second.push.assert_called_once()
+                assert rf.message.consistency_level == ConsistencyLevel.QUORUM
+
+    def test_connection_shutdown_coalesces_outstanding_attempts(self):
+        policy = Mock(wraps=RetryPolicy())
+        rf, (first, second), _ = self.make_failed_push_future(policy)
+        first.push.side_effect = None
+        assert rf._query(self.host1) is not None
+        assert rf._query(self.host1) is not None
+
+        first.defunct(ConnectionShutdown('connection lost'))
+
+        policy.on_request_error.assert_called_once()
+        rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once()
+        assert rf._query_retries == 1
+        assert first.in_flight == 0
+        assert not first._requests
+        second.push.assert_not_called()
+
+    def test_failed_push_preserves_another_attempts_connection_claim(self):
+        policy = Mock(wraps=RetryPolicy())
+        rf, (first, second), queued = self.make_failed_push_future(policy)
+        failed_push = first.push.side_effect
+        first.push.side_effect = None
+        request_id = rf._query(self.host1)
+        callback = first._requests.pop(request_id)[0]
+
+        # A sibling callback has already won ownership when this push fails.
+        # Deliver it after borrowing the second stream, before raising the
+        # push error, to keep the ordering deterministic.
+        def fail_after_sibling_callback(data):
+            callback(ConnectionShutdown('connection lost'))
+            failed_push(data)
+
+        first.push.side_effect = fail_after_sibling_callback
+        assert rf._query(self.host1) is _NOT_SET
+
+        assert queued
+        policy.on_request_error.assert_called_once()
+        assert isinstance(policy.on_request_error.call_args.kwargs['error'],
+                          ConnectionShutdown)
+        rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once()
+        assert rf._query_retries == 1
+        assert first.in_flight == 0
+        assert not first._requests
+        second.push.assert_not_called()
+
+    def test_concurrent_connection_errors_schedule_one_retry(self):
+        policy = Mock(wraps=RetryPolicy())
+        rf, (first, _), _ = self.make_failed_push_future(policy)
+        first.push.side_effect = None
+        assert rf._query(self.host1) is not None
+        assert rf._query(self.host1) is not None
+        callbacks = [request[0] for request in first._requests.values()]
+        first._requests.clear()
+        barrier = Barrier(3)
+
+        def fail(callback):
+            barrier.wait(5)
+            callback(ConnectionShutdown('connection lost'))
+
+        threads = [Thread(target=fail, args=(callback,), daemon=True)
+                   for callback in callbacks]
+        for thread in threads:
+            thread.start()
+        try:
+            barrier.wait(5)
+        finally:
+            for thread in threads:
+                thread.join(5)
+        assert all(not thread.is_alive() for thread in threads)
+
+        policy.on_request_error.assert_called_once()
+        rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once()
+        assert first.in_flight == 0
+
     def test_connection_error_retires_callback_connection(self):
         policy = Mock(wraps=RetryPolicy())
         rf, (first, second), _ = self.make_failed_push_future(policy)
@@ -3044,6 +3213,58 @@ class ResponseFutureTests(unittest.TestCase):
         assert rf.session.cluster.scheduler.schedule_with_shutdown.call_count == 2
         assert rf._query_retries == 2
         assert first.in_flight == second.in_flight == 0
+
+    def test_connection_error_claim_resets_on_next_page(self):
+        policy = Mock(wraps=RetryPolicy())
+        rf, (first, second), _ = self.make_failed_push_future(policy)
+        first.push.side_effect = None
+        request_id = rf._query(self.host1)
+        callback = first._requests.pop(request_id)[0]
+        # Inject the error callback without closing the transport so the same
+        # connection object can exercise ownership on both pages.
+        callback(ConnectionShutdown('first-page error'))
+        policy.on_request_error.assert_called_once()
+
+        request_id = rf._query(self.host2)
+        callback = second._requests.pop(request_id)[0]
+        callback(ResultMessage(kind=RESULT_KIND_VOID))
+        rf._paging_state = b'next-page'
+        rf._load_balancer.make_query_plan.return_value = [self.host1]
+        rf.start_fetching_next_page()
+        callback = next(iter(first._requests.values()))[0]
+        first._requests.clear()
+        callback(ConnectionShutdown('second-page error'))
+
+        assert policy.on_request_error.call_count == 2
+        assert rf.session.cluster.scheduler.schedule_with_shutdown.call_count == 2
+        assert rf._query_retries == 2
+        assert first.in_flight == second.in_flight == 0
+
+    def test_stale_failed_push_does_not_claim_current_page(self):
+        policy = Mock(wraps=RetryPolicy())
+        rf, (first, second), queued = self.make_failed_push_future(policy)
+        failed_push = first.push.side_effect
+
+        def fail_after_page_advance(data):
+            rf._set_final_result(None)
+            rf._paging_state = b'next-page'
+            rf._load_balancer.make_query_plan.return_value = [self.host2]
+            rf.start_fetching_next_page()
+            failed_push(data)
+
+        first.push.side_effect = fail_after_page_advance
+        assert rf._query(self.host1) is _NOT_SET
+
+        assert queued
+        policy.on_request_error.assert_not_called()
+        rf.session.cluster.scheduler.schedule_with_shutdown.assert_not_called()
+        assert rf._query_retries == 0
+        assert rf._connection is second
+        assert rf._req_id in second._requests
+        assert first.in_flight == 0
+        assert second.in_flight == 1
+        # A stale push must not consume this connection's current-page claim.
+        assert rf._claim_connection_error(first, rf._page_generation)
 
     def test_query_binds_current_page_after_borrowing_connection(self):
         rf, (first, second), _ = self.make_failed_push_future(RetryPolicy())
