@@ -13,12 +13,16 @@
 # limitations under the License.
 
 import time
+import gc
+import platform
+import weakref
+from functools import partial
 import unittest
 import uuid
 
 from collections import deque
 from io import BytesIO
-from threading import Barrier, Event, RLock, Thread, current_thread
+from threading import Barrier, Event, Lock, RLock, Thread, current_thread
 from unittest.mock import Mock, MagicMock, ANY, patch
 
 from cassandra import (ConsistencyLevel, DriverException, InvalidRequest, Unavailable,
@@ -37,7 +41,7 @@ from cassandra.protocol import (ReadTimeoutErrorMessage, WriteTimeoutErrorMessag
                                 OverloadedErrorMessage, IsBootstrappingErrorMessage,
                                 PreparedQueryNotFound, PrepareMessage, ServerError,
                                 InvalidRequestException,
-                                RESULT_KIND_ROWS, RESULT_KIND_SET_KEYSPACE,
+                                RESULT_KIND_ROWS, RESULT_KIND_SET_KEYSPACE, RESULT_KIND_VOID,
                                 RESULT_KIND_SCHEMA_CHANGE, RESULT_KIND_PREPARED,
                                 ProtocolHandler)
 from cassandra.policies import (RetryPolicy, ExponentialBackoffRetryPolicy,
@@ -63,6 +67,23 @@ class ResponseFutureTests(unittest.TestCase):
     @staticmethod
     def make_host(endpoint):
         return Host(endpoint, SimpleConvictionPolicy, host_id=uuid.uuid4())
+
+    @staticmethod
+    def record_request(connection, message, request_id, cb, **kwargs):
+        connection._requests[request_id] = (cb, None, None)
+        return 128
+
+    @staticmethod
+    def make_worker(fn, failures, completed=None, daemon=False):
+        def run():
+            try:
+                fn()
+            except Exception as exc:
+                failures.append(exc)
+            finally:
+                if completed is not None:
+                    completed.set()
+        return Thread(target=run, daemon=daemon)
 
     def setUp(self):
         self.host1 = self.make_host('ip1')
@@ -95,11 +116,7 @@ class ResponseFutureTests(unittest.TestCase):
             if not stream_was_orphaned:
                 conn.in_flight -= 1
 
-        def send_msg(message, stream_id, cb, **kwargs):
-            connection._requests[stream_id] = cb
-            return 128
-
-        connection.send_msg.side_effect = send_msg
+        connection.send_msg.side_effect = partial(self.record_request, connection)
         pool = Mock(host=host, endpoint=host.endpoint, is_shutdown=False)
         pool.borrow_connection.side_effect = borrow_connection
         pool.return_connection.side_effect = return_connection
@@ -157,7 +174,7 @@ class ResponseFutureTests(unittest.TestCase):
         response.column_names = ['value']
         response.column_types = []
         response.parsed_rows = [(42,)]
-        connection._requests.pop(1)(response)
+        connection._requests.pop(1)[0](response)
 
         assert rf._event.is_set()
         assert rf.result().one() == (['value'], [(42,)])
@@ -329,7 +346,7 @@ class ResponseFutureTests(unittest.TestCase):
             assert not change_done.wait(0.01)
             assert host.endpoint == old_endpoint
             assert not host._is_removed
-            connection._requests[stream_id] = cb
+            connection._requests[stream_id] = (cb, None, None)
             return 128
 
         connection.send_msg.side_effect = send_msg
@@ -357,7 +374,7 @@ class ResponseFutureTests(unittest.TestCase):
         def slow_send(message, stream_id, cb, **kwargs):
             first_send_started.set()
             assert release_first_send.wait(2)
-            first_connection._requests[stream_id] = cb
+            first_connection._requests[stream_id] = (cb, None, None)
             return 128
 
         first_connection.send_msg.side_effect = slow_send
@@ -398,7 +415,7 @@ class ResponseFutureTests(unittest.TestCase):
             thread.start()
             assert timeout_started.wait(1)
             assert not timeout_done.wait(0.01)
-            connection._requests[stream_id] = cb
+            connection._requests[stream_id] = (cb, None, None)
             return 128
 
         connection.send_msg.side_effect = send_msg
@@ -725,6 +742,12 @@ class ResponseFutureTests(unittest.TestCase):
         connection.orphaned_threshold = 75
         connection.orphaned_threshold_reached = False
         connection.is_control_connection = True
+        connection.is_defunct = False
+        connection.is_closed = False
+        connection._socket_writable = True
+        connection.protocol_version = ProtocolVersion.V4
+        connection.compressor = None
+        connection.allow_beta_protocol_version = False
         connection.keyspace = None
         connection.get_request_id.return_value = 7
         connection.send_msg.return_value = 128
@@ -743,7 +766,7 @@ class ResponseFutureTests(unittest.TestCase):
 
     def make_response_future(self, session, host=None):
         query = SimpleStatement("SELECT * FROM foo")
-        message = QueryMessage(query=query, consistency_level=ConsistencyLevel.ONE)
+        message = QueryMessage(query=query.query_string, consistency_level=ConsistencyLevel.ONE)
         return ResponseFuture(session, message, query, 1, host=host)
 
     def test_invalid_query_plan_entry_completes_future(self):
@@ -786,6 +809,7 @@ class ResponseFutureTests(unittest.TestCase):
                 session = self.make_session()
                 pool = session._pools[self.host1]
                 connection = Connection(DefaultEndPoint('127.0.0.1'))
+                connection.close = Mock()
                 initial_request_ids = set(connection.request_ids)
                 connection.orphaned_threshold_reached = True
                 connection._socket_writable = True
@@ -807,13 +831,24 @@ class ResponseFutureTests(unittest.TestCase):
                 pool.return_connection.side_effect = return_connection
 
                 rf = self.make_response_future(session)
-                assert rf._query(self.host1) is None
+                rf.message.query = rf.query.query_string
+                rf._retry_policy = RetryPolicy()
+                result = rf._query(self.host1)
+                if isinstance(failure, ConnectionBusy):
+                    assert result is None
+                    assert set(connection.request_ids) == initial_request_ids
+                    pool.return_connection.assert_called_once_with(connection)
+                else:
+                    assert result is _NOT_SET
+                    assert set(connection.request_ids) == \
+                        initial_request_ids - {0}
+                    pool.return_connection.assert_called_once_with(
+                        connection, replace_only=True)
                 assert connection.in_flight == 0
-                assert set(connection.request_ids) == initial_request_ids
-                assert len(connection.request_ids) == len(initial_request_ids)
+                ids = connection.request_ids
+                assert len(ids) == len(set(ids))
                 assert not connection._requests
                 assert connection.orphaned_threshold_reached
-                pool.return_connection.assert_called_once_with(connection)
 
     def test_query_send_failure_retires_timed_out_stream(self):
         session = self.make_session()
@@ -945,7 +980,11 @@ class ResponseFutureTests(unittest.TestCase):
         rf.session._pools.get.assert_any_call(self.host1)
         pool.borrow_connection.assert_called_once_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY, routing_token=ANY)
 
-        connection.send_msg.assert_called_once_with(rf.message, 1, cb=ANY, encoder=ProtocolHandler.encode_message, decoder=ProtocolHandler.decode_message, result_metadata=[])
+        sent_message = connection.send_msg.call_args.args[0]
+        assert vars(sent_message) == vars(rf.message)
+        connection.send_msg.assert_called_once_with(
+            sent_message, 1, cb=ANY, encoder=ProtocolHandler.encode_message,
+            decoder=ProtocolHandler.decode_message, result_metadata=[])
 
         expected_result = (object(), object())
         rf._set_result(None, None, None, self.make_mock_response(expected_result[0], expected_result[1]))
@@ -978,9 +1017,11 @@ class ResponseFutureTests(unittest.TestCase):
                     connection.in_flight += 1
                     return connection, connection.get_request_id()
 
-            def give_back(connection, replace_only=False):
+            def give_back(connection, replace_only=False,
+                          stream_was_orphaned=False):
                 with connection.lock:
-                    connection.in_flight -= 1
+                    if not stream_was_orphaned:
+                        connection.in_flight -= 1
 
             pool.borrow_connection.side_effect = borrow
             pool.return_connection.side_effect = give_back
@@ -1002,6 +1043,1910 @@ class ResponseFutureTests(unittest.TestCase):
                             retry_policy=retry_policy)
         return rf, connections, queued
 
+    def test_scoped_completion_preserves_next_page_timer_and_event(self):
+        for exceptional in (False, True):
+            with self.subTest(exceptional=exceptional):
+                rf, (_, second), _ = self.make_failed_push_future(RetryPolicy())
+                previous_timer, next_timer = Mock(), Mock()
+                rf._timer = previous_timer
+                advanced = []
+
+                def advance_after_publication():
+                    if advanced:
+                        return
+                    advanced.append(True)
+                    rf._paging_state = b'next'
+                    rf._load_balancer.make_query_plan.return_value = [self.host2]
+                    rf.start_fetching_next_page()
+                    rf._timer = next_timer
+
+                previous_timer.cancel.side_effect = advance_after_publication
+                if exceptional:
+                    rf._set_final_exception(ValueError('old page'), page_generation=0)
+                else:
+                    rf._set_final_result(None, page_generation=0)
+                previous_timer.cancel.assert_called_once()
+                next_timer.cancel.assert_not_called()
+                assert not rf._event.is_set()
+                assert not rf._is_final()
+                assert rf._connection is second
+
+    def test_ignore_clears_only_winning_pages_continuation(self):
+        for generation in (0, 1):
+            with self.subTest(generation=generation):
+                rf, _, _ = self.make_failed_push_future(RetryPolicy())
+                rf._paging_state = b'next'
+                rf._handle_retry_decision((RetryPolicy.IGNORE, None),
+                                         ConnectionShutdown('lost'), self.host1,
+                                         page_generation=generation)
+                assert rf._is_final() == (generation == 0)
+                assert rf.has_more_pages == (generation != 0)
+
+    def test_losing_rows_cannot_restore_ignored_page_metadata(self):
+        rf, (connection, _), _ = self.make_failed_push_future(RetryPolicy())
+        response = self.make_mock_response(['loser'], [(1,)])
+        response.paging_state = b'losing-continuation'
+        response.column_types = [Int32Type]
+        original_names, original_types = rf._col_names, rf._col_types
+
+        def ignore_while_returning_stream(*args):
+            rf._handle_retry_decision((RetryPolicy.IGNORE, None),
+                                     ConnectionShutdown('lost'), self.host1,
+                                     page_generation=0)
+
+        pool = rf.session._pools[self.host1]
+        pool.return_connection.side_effect = ignore_while_returning_stream
+        rf._set_result(self.host1, connection, pool, response, page_generation=0)
+
+        assert rf._final_result is None
+        assert not rf.has_more_pages
+        assert rf._col_names is original_names
+        assert rf._col_types is original_types
+
+    def test_response_policy_exception_respects_deadline(self):
+        for expired in (False, True):
+            with self.subTest(expired=expired):
+                policy = Mock(spec=RetryPolicy)
+                rf, (connection, _), _ = self.make_failed_push_future(policy)
+                connection.push.side_effect = None
+                request_id = rf._query(self.host1)
+                callback = connection._requests.pop(request_id)[0]
+                clock = [rf._start_time]
+                failure = ValueError('policy failed')
+
+                def fail_policy(*args, **kwargs):
+                    if expired:
+                        clock[0] += rf.timeout + 1
+                    raise failure
+
+                policy.on_request_error.side_effect = fail_policy
+                with patch('cassandra.cluster.time.time', side_effect=lambda: clock[0]):
+                    callback(Mock(spec=OverloadedErrorMessage, info={}))
+                if expired:
+                    assert isinstance(rf._final_exception, OperationTimedOut)
+                else:
+                    assert rf._final_exception is failure
+
+    def test_blocked_query_plan_does_not_block_timeout(self):
+        rf, (connection, _), _ = self.make_failed_push_future(RetryPolicy())
+        entered, release, timed_out = Event(), Event(), Event()
+        failures = []
+
+        def plan():
+            entered.set()
+            if not release.wait(5):
+                raise RuntimeError('query plan was not released')
+            yield self.host1
+
+        rf.query_plan = plan()
+        sending = self.make_worker(rf.send_request, failures)
+        timing_out = self.make_worker(
+            partial(rf._on_timeout, _attempts=3), failures, completed=timed_out)
+        sending.start()
+        try:
+            assert entered.wait(5)
+            timing_out.start()
+            assert timed_out.wait(2)
+            assert isinstance(rf._final_exception, OperationTimedOut)
+        finally:
+            release.set()
+            sending.join(5)
+            if timing_out.ident is not None:
+                timing_out.join(5)
+        assert not sending.is_alive() and not timing_out.is_alive()
+        assert not failures
+        connection.push.assert_not_called()
+
+    def test_speculative_timer_does_not_wait_for_busy_query_plan(self):
+        rf, (connection, _), _ = self.make_failed_push_future(RetryPolicy())
+        connection.push.side_effect = None
+        rf._query(self.host1)
+        rf._timer = None
+        rf._spec_execution_plan = Mock()
+        rf._spec_execution_plan.next_execution.side_effect = [0.1, -1]
+        rf._start_timer()
+        speculative_timer = rf.session.cluster.connection_class.create_timer.call_args.args[1]
+        entered, release, serviced = Event(), Event(), Event()
+        failures = []
+
+        def plan():
+            entered.set()
+            if not release.wait(5):
+                raise RuntimeError('query plan was not released')
+            yield self.host2
+
+        def service_timers():
+            speculative_timer()
+            deadline = rf.session.cluster.connection_class.create_timer.call_args.args
+            assert deadline[0] > 0
+            assert deadline[1].func == rf._on_timeout
+            deadline[1]()
+
+        rf.query_plan = plan()
+        sender = self.make_worker(
+            partial(rf.send_request, error_no_hosts=False, page_generation=0), failures)
+        reactor = self.make_worker(service_timers, failures, completed=serviced)
+        sender.start()
+        try:
+            assert entered.wait(5)
+            reactor.start()
+            assert serviced.wait(2)
+            assert isinstance(rf._final_exception, OperationTimedOut)
+        finally:
+            release.set()
+            sender.join(5)
+            if reactor.ident is not None:
+                reactor.join(5)
+        assert not sender.is_alive() and not reactor.is_alive()
+        assert not failures
+        connection.push.assert_called_once()
+        assert isinstance(rf._final_exception, OperationTimedOut)
+
+    def test_stale_speculative_send_does_not_count_as_new_page_work(self):
+        rf, (primary, current), _ = self.make_failed_push_future(RetryPolicy())
+        primary.push.side_effect = None
+        rf.timeout = None
+        rf.send_request()
+        primary_callback = primary._requests.pop(rf._req_id)[0]
+        send_request = rf.send_request
+
+        def advance_before_send(*args, **kwargs):
+            response = self.make_mock_response(['value'], [(1,)])
+            response.paging_state = b'next'
+            primary_callback(response)
+            rf._load_balancer.make_query_plan.return_value = [self.host2]
+            with patch.object(rf, 'send_request', send_request):
+                rf.start_fetching_next_page()
+            timer = rf._timer
+            send_request(*args, **kwargs)
+            assert rf._timer is timer
+
+        with patch.object(rf, 'send_request', side_effect=advance_before_send):
+            rf._on_speculative_execute()
+        assert rf._page_generation == 1
+        current.defunct(ConnectionShutdown('new page failed'))
+        args = rf.session.cluster.scheduler.schedule_with_shutdown.call_args.args
+        args[2](*args[3:])
+        assert isinstance(rf._final_exception, NoHostAvailable)
+        rf.session.submit.assert_not_called()
+
+    def test_speculation_runs_while_metadata_workers_are_busy(self):
+        rf, (primary, healthy), _ = self.make_failed_push_future(RetryPolicy())
+        primary.push.side_effect = None
+        rf.send_request()
+        release = Event()
+        entered = [Event(), Event()]
+
+        def metadata_work(started):
+            started.set()
+            if not release.wait(5):
+                raise RuntimeError('metadata worker was not released')
+
+        with Cluster(contact_points=[], executor_threads=2) as cluster:
+            rf.session.cluster.executor = cluster.executor
+            workers = [cluster.executor.submit(metadata_work, event) for event in entered]
+            sent = Event()
+            healthy.push.side_effect = lambda data: sent.set()
+            try:
+                assert all(event.wait(2) for event in entered)
+                rf._on_speculative_execute(page_generation=0)
+                assert sent.wait(2)
+                assert all(not worker.done() for worker in workers)
+                healthy._requests.pop(rf._req_id)[0](ResultMessage(kind=RESULT_KIND_VOID))
+                assert rf._final_result is None
+                assert rf._final_exception is None
+            finally:
+                release.set()
+                for worker in workers:
+                    worker.result(5)
+
+    def test_speculative_plan_exception_keeps_error_diagnostic(self):
+        rf, (primary, _), _ = self.make_failed_push_future(RetryPolicy())
+        primary.push.side_effect = None
+
+        def plan():
+            yield self.host1
+            raise ValueError('query plan failed')
+
+        rf.query_plan = plan()
+        rf.send_request()
+        with self.assertLogs('cassandra.cluster', level='ERROR') as logs:
+            rf._on_speculative_execute(page_generation=0)
+        assert 'query plan failed' in logs.output[0]
+        assert not rf._is_final()
+        assert len(rf._pending_attempts) == 1
+
+    def test_query_plan_waiter_exits_on_completion_or_shutdown(self):
+        for terminal in ('completion', 'shutdown'):
+            with self.subTest(terminal=terminal):
+                rf, (primary, _), _ = self.make_failed_push_future(RetryPolicy())
+                primary.push.side_effect = None
+                rf.send_request()
+                waiting, finished = Event(), Event()
+                lock = Lock()
+
+                class ObservedLock:
+                    def acquire(self, *args, **kwargs):
+                        waiting.set()
+                        return lock.acquire(*args, **kwargs)
+
+                    def release(self):
+                        lock.release()
+
+                    def __enter__(self):
+                        self.acquire()
+                        return self
+
+                    def __exit__(self, *exc):
+                        self.release()
+
+                rf._query_plan_lock = ObservedLock()
+                lock.acquire()
+                with Cluster(contact_points=[]) as cluster:
+                    rf.session.cluster.executor = cluster.executor
+                    cluster.sessions.add(rf.session)
+                    rf.session.shutdown.side_effect = lambda: setattr(
+                        rf.session, 'is_shutdown', True)
+                    retry = cluster.executor.submit(rf.send_request,
+                                                    page_generation=0)
+                    shutdown = Thread(target=lambda: (cluster.shutdown(), finished.set()))
+                    try:
+                        assert waiting.wait(2)
+                        if terminal == 'completion':
+                            rf._set_final_result(None)
+                            assert retry.result(2)
+                        shutdown.start()
+                        assert finished.wait(2)
+                        assert retry.result(2)
+                        assert lock.locked()
+                    finally:
+                        lock.release()
+                        retry.result(5)
+                        if shutdown.ident is not None:
+                            shutdown.join(5)
+                    assert not shutdown.is_alive()
+
+    def test_blocked_speculative_plan_does_not_prevent_interpreter_exit(self):
+        import subprocess
+        import sys
+        import textwrap
+        from pathlib import Path
+        import cassandra.cluster as cluster_module
+
+        script = textwrap.dedent("""
+            import importlib.util
+            import sys
+            from threading import Event
+            from unittest.mock import Mock
+            import cassandra
+
+            spec = importlib.util.spec_from_file_location('cassandra.cluster', sys.argv[1])
+            module = importlib.util.module_from_spec(spec)
+            sys.modules['cassandra.cluster'] = module
+            cassandra.cluster = module
+            spec.loader.exec_module(module)
+            from cassandra.cluster import Cluster, Session
+            from cassandra.io.asyncioreactor import AsyncioConnection
+            from cassandra.policies import RetryPolicy
+            from tests.unit.test_response_future import ResponseFutureTests
+
+            fixture = ResponseFutureTests()
+            fixture.setUp()
+            rf, (primary, _), _ = fixture.make_failed_push_future(RetryPolicy())
+            primary.push.side_effect = None
+            rf.send_request()
+            cluster = Cluster(contact_points=[])
+            cluster.connection_class = AsyncioConnection
+            AsyncioConnection.initialize_reactor()
+            session = Session.__new__(Session)
+            session.cluster = cluster
+            session.is_shutdown = False
+            session.shutdown = lambda: None
+            rf.session = session
+            entered = Event()
+            release = Event()
+            def plan():
+                entered.set()
+                release.wait()
+                yield fixture.host2
+            rf.query_plan = plan()
+            rf._timer = None
+            rf._spec_execution_plan = Mock()
+            rf._spec_execution_plan.next_execution.return_value = 0.01
+            rf._start_timer()
+            assert entered.wait(5), 'speculative iterator did not start'
+            rf._set_final_result(None)
+            cluster.shutdown()
+        """)
+        subprocess.run([sys.executable, '-c', script, cluster_module.__file__],
+                       cwd=Path(__file__).resolve().parents[2],
+                       check=True, capture_output=True, text=True, timeout=10)
+
+    def test_late_speculative_rows_cannot_mutate_next_page(self):
+        rf, (primary, speculative), _ = self.make_failed_push_future(RetryPolicy())
+        primary.push.side_effect = None
+        rf.session.cluster.connection_class.create_timer.side_effect = lambda *args: Mock()
+        rf.send_request()
+        primary_callback = primary._requests.pop(rf._req_id)[0]
+        rf.send_request(error_no_hosts=False, is_speculative=True)
+        speculative_callback = speculative._requests.pop(rf._req_id)[0]
+        response = self.make_mock_response(['value'], [(1,)])
+        response.paging_state = b'next'
+        primary_callback(response)
+        rf._load_balancer.make_query_plan.return_value = [self.host1]
+        rf.start_fetching_next_page()
+        timer, callback = rf._timer, rf._request_callback
+        metadata = rf._paging_state, rf._col_names, rf._col_types
+        late = self.make_mock_response(['stale'], [(2,)])
+        late.paging_state = b'wrong'
+        speculative_callback(late)
+        assert rf._page_generation == 1
+        assert rf._final_result is _NOT_SET
+        assert rf._final_exception is None
+        assert not rf._event.is_set()
+        assert (rf._paging_state, rf._col_names, rf._col_types) == metadata
+        assert rf._timer is timer
+        assert rf._request_callback is callback
+        timer.cancel.assert_not_called()
+        assert speculative.in_flight == 0
+        primary._requests.pop(rf._req_id)[0](ResultMessage(kind=RESULT_KIND_VOID))
+
+    def test_blocked_old_query_plan_does_not_block_next_page(self):
+        rf, (first, second), _ = self.make_failed_push_future(RetryPolicy())
+        first.push.side_effect = None
+        rf._query(self.host1)
+        primary = first._requests.pop(rf._req_id)[0]
+        entered, release, advanced = Event(), Event(), Event()
+        failures = []
+
+        def old_plan():
+            entered.set()
+            if not release.wait(5):
+                raise RuntimeError('old query plan was not released')
+            yield self.host1
+
+        rf.query_plan = old_plan()
+        old_sender = self.make_worker(
+            partial(rf.send_request, error_no_hosts=False, page_generation=0), failures)
+        page_sender = self.make_worker(
+            rf.start_fetching_next_page, failures, completed=advanced)
+        old_sender.start()
+        try:
+            assert entered.wait(5)
+            response = self.make_mock_response(['value'], [(1,)])
+            response.paging_state = b'next'
+            primary(response)
+            rf._load_balancer.make_query_plan.return_value = [self.host2]
+            page_sender.start()
+            assert advanced.wait(2)
+            second.push.assert_called_once()
+            assert rf._page_generation == 1
+            assert not rf._is_final()
+        finally:
+            release.set()
+            old_sender.join(5)
+            if page_sender.ident is not None:
+                page_sender.join(5)
+        assert not old_sender.is_alive() and not page_sender.is_alive()
+        assert not failures
+        first.push.assert_called_once()
+
+    def test_exhausted_primary_retry_waits_for_speculative_response(self):
+        for healthy_attempt in (False, True):
+            with self.subTest(healthy_attempt=healthy_attempt):
+                rf, (primary, healthy), _ = self.make_failed_push_future(RetryPolicy())
+                primary.push.side_effect = None
+                rf.timeout = None
+                rf.query_plan = iter([self.host1] +
+                                     ([self.host2] if healthy_attempt else []))
+                assert rf.send_request()
+                if healthy_attempt:
+                    assert rf.send_request(error_no_hosts=False, is_speculative=True)
+                    healthy_callback = healthy._requests.pop(rf._req_id)[0]
+                primary.defunct(ConnectionShutdown('primary connection lost'))
+                args = rf.session.cluster.scheduler.schedule_with_shutdown.call_args.args
+                args[2](*args[3:])
+                if healthy_attempt:
+                    assert not rf._is_final()
+                    healthy_callback(ResultMessage(kind=RESULT_KIND_VOID))
+                    assert rf._final_result is None
+                    assert rf._final_exception is None
+                else:
+                    assert isinstance(rf._final_exception, NoHostAvailable)
+                assert primary.in_flight == healthy.in_flight == 0
+                assert rf._event.is_set()
+
+    def test_primary_exhaustion_keeps_late_failure_and_timeout_semantics(self):
+        for outcome in ('late_error', 'timeout', 'no_timeout'):
+            with self.subTest(outcome=outcome):
+                policy = Mock(spec=RetryPolicy)
+                policy.on_request_error.side_effect = [
+                    (RetryPolicy.RETRY_NEXT_HOST, None), (RetryPolicy.RETHROW, None)]
+                rf, (primary, healthy), _ = self.make_failed_push_future(policy)
+                primary.push.side_effect = None
+                if outcome == 'no_timeout':
+                    rf.timeout = None
+                rf.query_plan = iter([self.host1, self.host2])
+                rf.send_request()
+                rf.send_request(error_no_hosts=False, is_speculative=True)
+                healthy_id = rf._req_id
+                primary.defunct(ConnectionShutdown('primary failed'))
+                args = rf.session.cluster.scheduler.schedule_with_shutdown.call_args.args
+                args[2](*args[3:])
+                assert not rf._is_final()
+
+                if outcome == 'late_error':
+                    healthy.defunct(ConnectionShutdown('speculative failed'))
+                    assert isinstance(rf._final_exception, ConnectionShutdown)
+                    assert str(rf._final_exception) == 'speculative failed'
+                elif outcome == 'timeout':
+                    rf._on_timeout(_attempts=3)
+                    assert isinstance(rf._final_exception, OperationTimedOut)
+                    assert healthy_id in healthy.orphaned_request_ids
+                else:
+                    waiting, done = Event(), Event()
+                    failures, results = [], []
+                    event = rf._event
+
+                    class ObservedEvent:
+                        def wait(self, *args, **kwargs):
+                            waiting.set()
+                            return event.wait(*args, **kwargs)
+
+                        def __getattr__(self, name):
+                            return getattr(event, name)
+
+                    rf._event = ObservedEvent()
+
+                    def result():
+                        results.append(rf.result())
+
+                    consumer = self.make_worker(
+                        result, failures, completed=done, daemon=True)
+                    consumer.start()
+                    try:
+                        assert waiting.wait(5)
+                        assert not done.wait(0.02)
+                    finally:
+                        try:
+                            healthy._requests.pop(healthy_id)[0](
+                                ResultMessage(kind=RESULT_KIND_VOID))
+                            consumer.join(5)
+                            assert not consumer.is_alive()
+                        finally:
+                            # Also release the consumer if completion regresses.
+                            rf._event.set()
+                            consumer.join(5)
+                    assert done.is_set()
+                    assert not failures
+                    assert len(results) == 1 and not results[0]
+                    assert rf._final_exception is None
+
+    def test_exhausted_speculative_plan_waits_for_queued_schema_work(self):
+        rf, (connection, _), _ = self.make_failed_push_future(RetryPolicy())
+        connection.push.side_effect = None
+        rf.query_plan = iter([self.host1])
+        assert rf.send_request()
+        callback = connection._requests.pop(rf._req_id)[0]
+        assert not rf.send_request(error_no_hosts=False, is_speculative=True)
+
+        def finish_schema(control, future, connection, **kwargs):
+            future._set_final_result(None)
+
+        with patch('cassandra.cluster.refresh_schema_and_set_result',
+                   side_effect=finish_schema):
+            callback(Mock(spec=ResultMessage, kind=RESULT_KIND_SCHEMA_CHANGE,
+                          schema_change_event={}))
+            assert not rf._is_final()
+            args, kwargs = rf.session.submit.call_args
+            args[0](*args[1:], **kwargs)
+        assert rf._final_result is None
+        assert rf._final_exception is None
+
+    def test_scheduled_retries_keep_their_selected_consistency(self):
+        rf, (_, second), _ = self.make_failed_push_future(RetryPolicy())
+        rf._retry(False, ConsistencyLevel.QUORUM, self.host1, 0)
+        rf._retry(False, ConsistencyLevel.ONE, self.host1, 0)
+        scheduled = rf.session.cluster.scheduler.schedule_with_shutdown.call_args_list
+        rf.query_plan = iter([self.host2])
+        encoded = []
+
+        def encode(message, *args, **kwargs):
+            encoded.append(message.consistency_level)
+            return ProtocolHandler.encode_message(message, *args, **kwargs)
+
+        rf._protocol_handler = Mock(wraps=ProtocolHandler)
+        rf._protocol_handler.encode_message.side_effect = encode
+        args = scheduled[0].args
+        args[2](*args[3:])
+        assert encoded == [ConsistencyLevel.QUORUM]
+        second.push.assert_called_once()
+        assert rf.message.consistency_level == ConsistencyLevel.ONE
+
+    def test_stale_query_preserves_next_page_fallback_cleanup(self):
+        session = self._make_fallback_session()
+        connection = self.make_control_connection()
+        connection.get_request_id.side_effect = [7, 8]
+        control = session.cluster.control_connection
+        control._connection = connection
+
+        connection.send_msg.side_effect = partial(self.record_request, connection)
+        rf = self.make_response_future(session)
+        rf.send_request()
+        query_attempt = rf._query_attempt
+
+        def advance_then_query(*args, **kwargs):
+            connection._requests.pop(7)[0](
+                self.make_mock_response(['v'], [(1,)]))
+            rf._paging_state = b'next'
+            rf.start_fetching_next_page()
+            return query_attempt(*args, **kwargs)
+
+        with patch.object(rf, '_query_attempt', side_effect=advance_then_query):
+            rf._query(self.host1, page_generation=0)
+        assert rf._page_generation == 1
+        assert rf._control_connection_query_attempted
+        rf._on_timeout()
+        assert isinstance(rf._final_exception, OperationTimedOut)
+        assert control._application_requests_in_flight == 0
+        assert not rf._control_connection_requests
+        assert (connection, 8) in control._application_orphaned_requests
+
+    def test_fallback_deadline_does_not_wait_for_custom_encoding(self):
+        session = self._make_fallback_session()
+        connection = Connection(DefaultEndPoint('127.0.0.3'),
+                                is_control_connection=True)
+        connection.push = Mock()
+        control = session.cluster.control_connection
+        control._connection = connection
+        rf = self.make_response_future(session)
+        encoding, release, timed_out = Event(), Event(), Event()
+        failures = []
+
+        def encode(message, *args, **kwargs):
+            encoding.set()
+            if not release.wait(5):
+                raise RuntimeError('fallback encoder was not released')
+            return ProtocolHandler.encode_message(message, *args, **kwargs)
+
+        rf._protocol_handler = Mock(wraps=ProtocolHandler)
+        rf._protocol_handler.encode_message.side_effect = encode
+        rf._retry(False, None, self.host1, 0, page_generation=0)
+        scheduled = session.cluster.scheduler.schedule_with_shutdown.call_args.args
+
+        sending = self.make_worker(
+            partial(scheduled[2], *scheduled[3:]), failures, daemon=True)
+        timer = self.make_worker(
+            partial(rf._on_timeout, _attempts=3), failures, completed=timed_out, daemon=True)
+        sending.start()
+        try:
+            assert encoding.wait(5)
+            timer.start()
+            assert timed_out.wait(1), 'deadline blocked on fallback encoding'
+            assert isinstance(rf._final_exception, OperationTimedOut)
+            assert rf._event.is_set()
+        finally:
+            release.set()
+            sending.join(5)
+            if timer.ident is not None:
+                timer.join(5)
+        assert not sending.is_alive() and not timer.is_alive()
+        assert not failures
+        connection.push.assert_not_called()
+        rf._protocol_handler.encode_message.assert_called_once()
+        assert connection.in_flight == control._application_requests_in_flight == 0
+        assert not connection._requests
+        assert not rf._control_connection_requests
+        assert not control._application_orphaned_requests
+
+    @unittest.skipUnless(platform.python_implementation() == 'CPython',
+                         'Requires immediate reference-count reclamation')
+    def test_completed_request_releases_future_without_cyclic_collection(self):
+        def complete(fallback, exceptional):
+            rf, (connection, _), _ = self.make_failed_push_future(RetryPolicy())
+            rf = ResponseFuture(rf.session, rf.message, rf.query, None,
+                                retry_policy=RetryPolicy())
+            connection.push.side_effect = None
+            if fallback:
+                connection.is_control_connection = True
+                request_id = rf._query_control_connection(
+                    connection=connection, host=self.host1)
+            else:
+                request_id = rf._query(self.host1)
+            response = (ValueError('completed') if exceptional else
+                        self.make_mock_response(['v'], [(b'payload',)]))
+            connection._requests.pop(request_id)[0](response)
+            if exceptional:
+                assert rf._final_exception is response
+            else:
+                assert rf.result().current_rows == [(['v'], [(b'payload',)])]
+            return weakref.ref(rf)
+
+        enabled = gc.isenabled()
+        gc.disable()
+        try:
+            for fallback in (False, True):
+                for exceptional in (False, True):
+                    with self.subTest(fallback=fallback, exceptional=exceptional):
+                        reference = complete(fallback, exceptional)
+                        assert reference() is None
+        finally:
+            if enabled:
+                gc.enable()
+
+    def test_fallback_rechecks_page_after_custom_encoding(self):
+        session = self._make_fallback_session()
+        connection = Connection(DefaultEndPoint('127.0.0.3'),
+                                is_control_connection=True)
+        connection.push = Mock()
+        control = session.cluster.control_connection
+        control._connection = connection
+        rf = self.make_response_future(session)
+        encoding, release = Event(), Event()
+        failures = []
+
+        def encode(message, *args, **kwargs):
+            if not encoding.is_set():
+                encoding.set()
+                if not release.wait(5):
+                    error = RuntimeError('page advance blocked on fallback encoding')
+                    failures.append(error)
+                    raise error
+            return ProtocolHandler.encode_message(message, *args, **kwargs)
+
+        rf._protocol_handler = Mock(wraps=ProtocolHandler)
+        rf._protocol_handler.encode_message.side_effect = encode
+
+        sending = self.make_worker(
+            partial(rf._query_control_connection, page_generation=0), failures, daemon=True)
+        sending.start()
+        try:
+            assert encoding.wait(5)
+            rf._set_final_result(None)
+            rf._paging_state = b'next'
+            rf.start_fetching_next_page()
+        finally:
+            release.set()
+            sending.join(5)
+        assert not sending.is_alive()
+        assert not failures
+        connection.push.assert_called_once()
+        assert rf._page_generation == 1
+        assert not rf._is_final()
+        assert connection.in_flight == control._application_requests_in_flight == 1
+        assert len(connection._requests) == len(rf._control_connection_requests) == 1
+        connection._requests.pop(rf._req_id)[0](ResultMessage(kind=RESULT_KIND_VOID))
+        assert connection.in_flight == control._application_requests_in_flight == 0
+        assert not rf._control_connection_requests
+
+    def test_retry_cannot_cross_page_while_borrowing(self):
+        for reuse in (False, True):
+            with self.subTest(reuse=reuse):
+                rf, (first, second), _ = self.make_failed_push_future(RetryPolicy())
+                first.push.side_effect = None
+                target_host = self.host1 if reuse else self.host2
+                page_host = self.host2 if reuse else self.host1
+                target = first if reuse else second
+                pool = rf.session._pools[target_host]
+                borrow = pool.borrow_connection.side_effect
+                rf._retry(reuse, None, self.host1, 0)
+                args = rf.session.cluster.scheduler.schedule_with_shutdown.call_args.args
+                rf.query_plan = iter([target_host])
+
+                def advance_during_borrow(**kwargs):
+                    rf._set_final_result(None)
+                    rf._paging_state = b'next'
+                    rf._load_balancer.make_query_plan.return_value = [page_host]
+                    rf.start_fetching_next_page()
+                    return borrow(**kwargs)
+
+                pool.borrow_connection.side_effect = advance_during_borrow
+                args[2](*args[3:])
+                target.push.assert_not_called()
+                assert target.in_flight == 0
+                assert not target._requests
+                assert rf._page_generation == 1
+                assert not rf._is_final()
+                assert rf._current_host is page_host
+
+    def test_retry_enforces_deadline_after_borrow(self):
+        for reuse in (False, True):
+            with self.subTest(reuse=reuse):
+                rf, (first, second), _ = self.make_failed_push_future(RetryPolicy())
+                first.push.side_effect = None
+                rf._retry(reuse, None, self.host1, 0)
+                args = rf.session.cluster.scheduler.schedule_with_shutdown.call_args.args
+                target_host = self.host1 if reuse else self.host2
+                target = first if reuse else second
+                pool = rf.session._pools[target_host]
+                borrow = pool.borrow_connection.side_effect
+                rf.query_plan = iter([target_host])
+                clock = [rf._start_time]
+
+                def expire_during_borrow(**kwargs):
+                    clock[0] += rf.timeout + 1
+                    return borrow(**kwargs)
+
+                pool.borrow_connection.side_effect = expire_during_borrow
+                with patch('cassandra.cluster.time.time', side_effect=lambda: clock[0]):
+                    args[2](*args[3:])
+                target.push.assert_not_called()
+                assert target.in_flight == 0
+                assert not target._requests
+                assert isinstance(rf._final_exception, OperationTimedOut)
+
+    def test_next_page_primary_does_not_send_after_borrow_timeout(self):
+        rf, (first, second), _ = self.make_failed_push_future(RetryPolicy())
+        first.push.side_effect = None
+        rf._query(self.host1)
+        response = self.make_mock_response(['value'], [(1,)])
+        response.paging_state = b'next'
+        first._requests.pop(rf._req_id)[0](response)
+        rf._load_balancer.make_query_plan.return_value = [self.host2]
+        pool = rf.session._pools[self.host2]
+        borrow = pool.borrow_connection.side_effect
+
+        def expire_while_borrowing(**kwargs):
+            rf._on_timeout(_attempts=3, page_generation=1)
+            return borrow(**kwargs)
+
+        pool.borrow_connection.side_effect = expire_while_borrowing
+        rf.start_fetching_next_page()
+
+        assert isinstance(rf._final_exception, OperationTimedOut)
+        second.push.assert_not_called()
+        assert second.in_flight == 0
+        assert not second._requests
+
+    def test_running_ordinary_error_cannot_complete_next_page(self):
+        for interruption in ('return', 'conversion'):
+            with self.subTest(interruption=interruption):
+                rf, (first, second), _ = self.make_failed_push_future(RetryPolicy())
+                first.push.side_effect = None
+                rf._query(self.host1)
+                pool = rf.session._pools[self.host1]
+                give_back = pool.return_connection.side_effect
+                next_timer = []
+                rf.session.cluster.connection_class.create_timer.side_effect = \
+                    lambda *args: Mock()
+
+                def advance_page():
+                    rf._set_final_result(None, page_generation=0)
+                    rf._paging_state = b'next'
+                    rf._load_balancer.make_query_plan.return_value = [self.host2]
+                    rf.start_fetching_next_page()
+                    next_timer.append(rf._timer)
+                    return InvalidRequest('old page error')
+
+                error = InvalidRequestException(
+                    code=0x2200, message='old page error', info={})
+                if interruption == 'return':
+                    def advance_while_returning_connection(connection):
+                        give_back(connection)
+                        advance_page()
+                    pool.return_connection.side_effect = advance_while_returning_connection
+                else:
+                    error.to_exception = Mock(side_effect=advance_page)
+                first._requests.pop(rf._req_id)[0](error)
+
+                assert rf._page_generation == 1
+                assert not rf._is_final()
+                assert not rf._event.is_set()
+                assert rf._connection is second
+                next_timer[0].cancel.assert_not_called()
+
+    def test_timeout_preserves_reused_streams_callback(self):
+        rf, (first, _), _ = self.make_failed_push_future(RetryPolicy())
+        first.push.side_effect = None
+        request_id = rf._query(self.host1)
+        other = ResponseFuture(rf.session, rf.message, rf.query, 10,
+                               retry_policy=RetryPolicy())
+        replacement = partial(other._set_result, self.host1, first,
+                              rf.session._pools[self.host1], page_generation=0)
+        first._requests[request_id] = (replacement, None, None)
+        rf.session._pools[self.host1].return_connection.reset_mock()
+        rf._on_timeout()
+        assert first._requests[request_id][0] is replacement
+        assert request_id not in first.orphaned_request_ids
+        assert first.in_flight == 1
+        rf.session._pools[self.host1].return_connection.assert_not_called()
+        assert isinstance(rf._final_exception, OperationTimedOut)
+
+    def test_reprepare_timeout_orphans_its_own_callback(self):
+        rf, (connection, _), _ = self.make_failed_push_future(RetryPolicy())
+        connection.push.side_effect = None
+        pool = rf.session._pools[self.host1]
+        rf._reprepare(PrepareMessage(query=rf.query.query_string),
+                      self.host1, connection, pool)
+        request_id = rf._req_id
+        callback = connection._requests[request_id][0]
+        assert callback.func == rf._complete_request
+        assert callback.args[0].func == rf._reprepare_response
+        pool.return_connection.reset_mock()
+
+        rf._on_timeout()
+
+        assert request_id not in connection._requests
+        assert request_id in connection.orphaned_request_ids
+        pool.return_connection.assert_called_once_with(
+            connection, stream_was_orphaned=True)
+        assert isinstance(rf._final_exception, OperationTimedOut)
+
+    def test_reprepare_response_returns_pool_capacity_after_completion(self):
+        for queued_before_completion in (False, True):
+            with self.subTest(queued_before_completion=queued_before_completion):
+                rf, (connection, healthy), _ = self.make_failed_push_future(RetryPolicy())
+                connection.push.side_effect = None
+                pool = rf.session._pools[self.host1]
+                rf._query(self.host2)
+                primary = healthy._requests.pop(rf._req_id)[0]
+                rf._reprepare(PrepareMessage(query=rf.query.query_string),
+                              self.host1, connection, pool)
+                callback = connection._requests.pop(rf._req_id)[0]
+                response = Mock(spec=ResultMessage, kind=RESULT_KIND_PREPARED)
+                pool.return_connection.reset_mock()
+                rf.session.submit.reset_mock()
+
+                if queued_before_completion:
+                    callback(response)
+                primary(self.make_mock_response(['value'], [(1,)]))
+                if queued_before_completion:
+                    args = rf.session.submit.call_args.args
+                    args[0](*args[1:])
+                else:
+                    callback(response)
+
+                pool.return_connection.assert_called_once_with(connection)
+                assert connection.in_flight == 0
+                assert healthy.in_flight == 0
+                connection.push.assert_called_once()
+                healthy.push.assert_called_once()
+                assert rf._final_exception is None
+                assert rf._final_result == [(['value'], [(1,)])]
+
+    def test_reprepare_returns_the_connection_borrowed_for_prepare(self):
+        for completed in (False, True):
+            with self.subTest(completed=completed):
+                rf, (original, borrowed), _ = self.make_failed_push_future(RetryPolicy())
+                pool = rf.session._pools[self.host1]
+
+                def borrow(**kwargs):
+                    borrowed.in_flight += 1
+                    return borrowed, borrowed.get_request_id()
+
+                pool.borrow_connection.side_effect = borrow
+                rf._reprepare(PrepareMessage(query=rf.query.query_string),
+                              self.host1, original, pool)
+                callback = borrowed._requests.pop(rf._req_id)[0]
+                if completed:
+                    rf._set_final_result(None)
+                callback(Mock(spec=ResultMessage, kind=RESULT_KIND_PREPARED,
+                              query_id=b'abc', bind_metadata=[]))
+                pool.return_connection.assert_called_once_with(borrowed)
+                assert original.in_flight == borrowed.in_flight == 0
+                if not completed:
+                    args = rf.session.submit.call_args.args
+                    args[0](*args[1:])
+                    borrowed._requests.pop(rf._req_id)[0](
+                        ResultMessage(kind=RESULT_KIND_VOID))
+                    assert original.in_flight == borrowed.in_flight == 0
+                assert rf._final_result is None
+
+    def test_scoped_completion_releases_keyspace_change_before_event(self):
+        for exceptional in (False, True):
+            with self.subTest(exceptional=exceptional):
+                session = self._make_fallback_session()
+                connection = self.make_control_connection()
+                control = session.cluster.control_connection
+                control._connection = connection
+                query = SimpleStatement('USE ks2')
+                rf = ResponseFuture(session, QueryMessage(query='USE ks2',
+                                    consistency_level=ConsistencyLevel.ONE), query, 10)
+                rf.send_request()
+                connection.send_msg.call_args.kwargs['cb'](Mock(
+                    spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                    new_keyspace='ks2'))
+                assert control._application_keyspace_change is not None
+
+                class CompletionEvent(Event):
+                    def set(self):
+                        assert control._application_keyspace_change is None
+                        super().set()
+
+                rf._event = CompletionEvent()
+                if exceptional:
+                    rf._on_timeout(_attempts=3)
+                    assert isinstance(rf._final_exception, OperationTimedOut)
+                else:
+                    rf._set_final_result(None, page_generation=0)
+                    assert rf._final_result is None
+                assert rf._event.is_set()
+
+    def test_failed_push_restores_the_target_published_during_borrow(self):
+        rf, (_, primary), _ = self.make_failed_push_future(RetryPolicy())
+        pool = rf.session._pools[self.host1]
+        borrow = pool.borrow_connection.side_effect
+        primary_ids = []
+
+        def borrow_after_primary_send(**kwargs):
+            primary_ids.append(rf._query(self.host2))
+            return borrow(**kwargs)
+
+        pool.borrow_connection.side_effect = borrow_after_primary_send
+        rf._query(self.host1)
+        assert rf._connection is primary
+        assert rf._req_id == primary_ids[0]
+        rf._on_timeout(_attempts=3)
+        assert primary_ids[0] not in primary._requests
+        assert primary_ids[0] in primary.orphaned_request_ids
+
+    def test_failed_push_rollback_preserves_live_timeout_target(self):
+        restored, inspected, timed_out = Event(), Event(), Event()
+        acquired, failures = [], []
+        primary = None
+
+        class ObservedFuture(ResponseFuture):
+            def __setattr__(self, name, value):
+                super().__setattr__(name, value)
+                if (name == '_connection' and value is primary and
+                        getattr(self, 'observe_restore', False)):
+                    self.observe_restore = False
+                    restored.set()
+                    if not inspected.wait(5):
+                        raise RuntimeError('timeout did not inspect admission')
+                    if acquired[-1] and not timed_out.wait(5):
+                        raise RuntimeError('unlocked timeout did not finish')
+
+        with patch(__name__ + '.ResponseFuture', ObservedFuture):
+            rf, (_, primary), _ = self.make_failed_push_future(RetryPolicy())
+        primary_id = rf._query(self.host2)
+        real_callback_lock = rf._callback_lock
+
+        class ObservedCallbackLock:
+            def __enter__(self):
+                if current_thread() is timer:
+                    held = real_callback_lock.acquire(False)
+                    acquired.append(held)
+                    inspected.set()
+                    if not held:
+                        real_callback_lock.acquire()
+                else:
+                    real_callback_lock.acquire()
+                return self
+
+            def __exit__(self, *exc):
+                real_callback_lock.release()
+
+        def timeout():
+            if not restored.wait(5):
+                raise RuntimeError('rollback was not reached')
+            rf._on_timeout(_attempts=3)
+
+        timer = self.make_worker(timeout, failures, completed=timed_out)
+        rf._callback_lock = ObservedCallbackLock()
+        rf.observe_restore = True
+        timer.start()
+        try:
+            rf._query(self.host1)
+        finally:
+            timer.join(5)
+        assert not timer.is_alive()
+        assert not failures
+        assert acquired[0] is False
+        assert primary_id not in primary._requests
+        assert primary_id in primary.orphaned_request_ids
+        assert isinstance(rf._final_exception, OperationTimedOut)
+
+    def test_next_page_gets_a_fresh_client_deadline(self):
+        session = self.make_session()
+        session._pools[self.host1], _ = self.make_owned_pool(self.host1)
+        session._pools[self.host2], second = self.make_owned_pool(self.host2)
+        rf = self.make_response_future(session)
+        clock = [rf._start_time]
+        rf._query(self.host1)
+        rf._set_final_result(None)
+        rf._paging_state = b'next'
+        rf._load_balancer.make_query_plan.return_value = [self.host2]
+        clock[0] += rf.timeout + 1
+        timer_factory = rf.session.cluster.connection_class.create_timer
+        timer_factory.reset_mock()
+        with patch('cassandra.cluster.time.time', side_effect=lambda: clock[0]):
+            rf.start_fetching_next_page()
+            assert rf._time_remaining == rf.timeout
+        assert timer_factory.call_args.args[0] == rf.timeout
+        assert rf._connection is second
+        assert not rf._is_final()
+
+    def make_blocked_speculative_timer(self):
+        rf = self.make_response_future(self.make_session())
+        rf._timer = None
+        factory = rf.session.cluster.connection_class.create_timer
+        factory.reset_mock()
+        factory.side_effect = lambda *args: Mock()
+        entered, release = Event(), Event()
+        failures = []
+
+        def next_execution(host):
+            if not entered.is_set():
+                entered.set()
+                assert release.wait(5), 'speculative plan was not released'
+            return 0.5
+
+        rf._spec_execution_plan = Mock()
+        rf._spec_execution_plan.next_execution.side_effect = next_execution
+
+        worker = self.make_worker(
+            partial(rf._start_timer, page_generation=0), failures, daemon=True)
+        return rf, entered, release, failures, worker
+
+    def test_speculative_plan_can_register_callback(self):
+        rf = self.make_response_future(self.make_session())
+        rf._timer = None
+        callback = Mock()
+        lock = Lock()
+
+        class BoundedCallbackLock:
+            def __enter__(self):
+                assert lock.acquire(timeout=0.2), 'callback lock reentry blocked'
+
+            def __exit__(self, *exc):
+                lock.release()
+
+        rf._callback_lock = BoundedCallbackLock()
+        rf._spec_execution_plan = Mock()
+
+        def next_execution(host):
+            rf.add_callback(callback)
+            return 0.5
+
+        rf._spec_execution_plan.next_execution.side_effect = next_execution
+        rf._start_timer()
+        rf._set_final_result(None)
+        callback.assert_called_once_with(None)
+
+    def test_slow_speculative_plan_does_not_block_completion(self):
+        rf, entered, release, failures, worker = self.make_blocked_speculative_timer()
+        completed = Event()
+
+        completion = self.make_worker(
+            partial(rf._set_final_result, None, page_generation=0), failures,
+            completed=completed, daemon=True)
+        try:
+            worker.start()
+            assert entered.wait(1)
+            completion.start()
+            assert completed.wait(1), 'completion waited for speculative plan'
+            assert rf._event.is_set()
+        finally:
+            release.set()
+            worker.join(5)
+            if completion.ident is not None:
+                completion.join(5)
+        assert not worker.is_alive() and not completion.is_alive()
+        assert not failures
+        rf.session.cluster.connection_class.create_timer.assert_not_called()
+
+    def test_competing_timer_starts_do_not_wait_or_consume_another_plan_slot(self):
+        rf, entered, release, failures, worker = self.make_blocked_speculative_timer()
+        completed = Event()
+
+        contender = self.make_worker(
+            partial(rf._start_timer, page_generation=0), failures,
+            completed=completed, daemon=True)
+        try:
+            worker.start()
+            assert entered.wait(1)
+            contender.start()
+            assert completed.wait(1), 'timer start waited for speculative plan'
+            rf._spec_execution_plan.next_execution.assert_called_once()
+        finally:
+            release.set()
+            worker.join(5)
+            if contender.ident is not None:
+                contender.join(5)
+        assert not worker.is_alive() and not contender.is_alive()
+        assert not failures
+        rf.session.cluster.connection_class.create_timer.assert_called_once()
+
+    def test_timeout_timer_is_preserved_when_speculative_plan_returns(self):
+        rf, entered, release, failures, worker = self.make_blocked_speculative_timer()
+        completed = Event()
+
+        deadline = self.make_worker(
+            partial(rf._on_timeout, page_generation=0), failures,
+            completed=completed, daemon=True)
+        try:
+            worker.start()
+            assert entered.wait(1)
+            deadline.start()
+            assert completed.wait(1), 'timeout waited for speculative plan'
+            assert rf._timeout_before_send
+            timer = rf._timer
+        finally:
+            release.set()
+            worker.join(5)
+            if deadline.ident is not None:
+                deadline.join(5)
+        assert not worker.is_alive() and not deadline.is_alive()
+        assert not failures
+        assert rf._timer is timer
+        rf.session.cluster.connection_class.create_timer.assert_called_once()
+
+    def test_timer_plan_wait_uses_current_page_deadline(self):
+        rf = self.make_response_future(self.make_session())
+        rf._timer = None
+        rf._timer_plan_generation = 0
+        rf._page_generation = 1
+        rf._spec_execution_plan = Mock()
+        factory = rf.session.cluster.connection_class.create_timer
+        factory.reset_mock()
+        clock = [rf._start_time + rf.timeout - 0.005]
+        with patch('cassandra.cluster.time.time', side_effect=lambda: clock[0]):
+            rf._start_timer(page_generation=1)
+            delay, deadline = factory.call_args.args
+            assert delay == pytest.approx(0.005, abs=1e-6)
+            clock[0] += 0.006
+            # The transport normally has a request by the time its deadline
+            # expires; bypass the separate pre-send timeout backstop here.
+            deadline(_attempts=3)
+        assert isinstance(rf._final_exception, OperationTimedOut)
+        factory.assert_called_once()
+        rf._spec_execution_plan.next_execution.assert_not_called()
+
+    def test_new_page_waits_for_speculative_plan_without_blocking_or_losing_deadline(self):
+        rf, entered, release, failures, worker = self.make_blocked_speculative_timer()
+        completed = Event()
+        rf.send_request = Mock()
+
+        def next_page():
+            rf._set_final_result(None, page_generation=0)
+            rf._paging_state = b'next'
+            rf.start_fetching_next_page()
+
+        paging = self.make_worker(next_page, failures, completed=completed, daemon=True)
+        factory = rf.session.cluster.connection_class.create_timer
+        try:
+            worker.start()
+            assert entered.wait(1)
+            paging.start()
+            assert completed.wait(1), 'new page waited for speculative plan'
+            assert rf._page_generation == 1
+            rf._spec_execution_plan.next_execution.assert_called_once()
+            factory.assert_called_once()
+            delay, deadline = factory.call_args.args
+            assert delay > 0.01
+            assert delay <= rf.timeout
+            assert deadline.func == rf._on_timeout
+            waiting_timer = rf._timer
+            rf._start_timer(page_generation=1)
+            factory.assert_called_once()
+        finally:
+            release.set()
+            worker.join(5)
+            if paging.ident is not None:
+                paging.join(5)
+        assert not worker.is_alive() and not paging.is_alive()
+        assert not failures
+        waiting_timer.cancel.assert_called_once()
+        assert rf._timer is not waiting_timer
+        assert rf._spec_execution_plan.next_execution.call_count == 2
+        assert factory.call_count == 2
+        assert factory.call_args.args[0] == 0.5
+
+    def test_speculative_plan_exception_releases_timer_selection(self):
+        rf = self.make_response_future(self.make_session())
+        rf._timer = None
+        factory = rf.session.cluster.connection_class.create_timer
+        factory.reset_mock()
+        rf._spec_execution_plan = Mock()
+        rf._spec_execution_plan.next_execution.side_effect = [ValueError('plan failed'), 0.5]
+        with pytest.raises(ValueError, match='plan failed'):
+            rf._start_timer()
+        rf._start_timer()
+        factory.assert_called_once()
+        assert rf._spec_execution_plan.next_execution.call_count == 2
+
+    def test_no_deadline_page_waits_without_polling_then_selects_its_timer(self):
+        for plan_fails in (False, True):
+            with self.subTest(plan_fails=plan_fails):
+                rf, entered, release, failures, worker = self.make_blocked_speculative_timer()
+                rf.timeout = None
+                rf.send_request = Mock()
+                factory = rf.session.cluster.connection_class.create_timer
+                next_execution = rf._spec_execution_plan.next_execution.side_effect
+
+                def select_timer(host):
+                    delay = next_execution(host)
+                    if plan_fails and rf._spec_execution_plan.next_execution.call_count == 1:
+                        raise ValueError('old page plan failed')
+                    return delay
+
+                rf._spec_execution_plan.next_execution.side_effect = select_timer
+                try:
+                    worker.start()
+                    assert entered.wait(1)
+                    rf._set_final_result(None, page_generation=0)
+                    rf._paging_state = b'next'
+                    rf.start_fetching_next_page()
+                    assert rf._page_generation == 1
+                    # Repeated contenders must neither allocate polling timers
+                    # nor consume the custom plan while its old call is active.
+                    rf._start_timer(page_generation=1)
+                    rf._start_timer(page_generation=1)
+                    factory.assert_not_called()
+                    rf._spec_execution_plan.next_execution.assert_called_once()
+                finally:
+                    release.set()
+                    worker.join(5)
+                assert not worker.is_alive()
+                assert len(failures) == int(plan_fails)
+                if plan_fails:
+                    assert str(failures[0]) == 'old page plan failed'
+                assert rf._timer_plan_generation is None
+                assert rf._spec_execution_plan.next_execution.call_count == 2
+                factory.assert_called_once()
+                delay, callback = factory.call_args.args
+                assert delay == 0.5
+                assert callback.keywords['page_generation'] == 1
+
+    def test_no_deadline_plan_release_preserves_completion_or_competing_timer(self):
+        for completed in (False, True):
+            with self.subTest(completed=completed):
+                rf, entered, release, failures, worker = self.make_blocked_speculative_timer()
+                rf.timeout = None
+                rf.send_request = Mock()
+                factory = rf.session.cluster.connection_class.create_timer
+                timer = Mock()
+                try:
+                    worker.start()
+                    assert entered.wait(1)
+                    rf._set_final_result(None, page_generation=0)
+                    rf._paging_state = b'next'
+                    rf.start_fetching_next_page()
+                    factory.assert_not_called()
+                    if completed:
+                        rf._set_final_result(None, page_generation=1)
+                    else:
+                        with rf._callback_lock:
+                            rf._timer = timer
+                finally:
+                    release.set()
+                    worker.join(5)
+                assert not worker.is_alive()
+                assert not failures
+                assert rf._timer_plan_generation is None
+                rf._spec_execution_plan.next_execution.assert_called_once()
+                factory.assert_not_called()
+                if not completed:
+                    assert rf._timer is timer
+
+    def test_previous_page_timer_cannot_touch_next_page(self):
+        for speculative in (False, True):
+            with self.subTest(speculative=speculative):
+                rf, (first, _), _ = self.make_failed_push_future(RetryPolicy())
+                first.push.side_effect = None
+                factory = rf.session.cluster.connection_class.create_timer
+                if speculative:
+                    rf._spec_execution_plan = Mock()
+                    rf._spec_execution_plan.next_execution.return_value = 0.1
+                    rf._timer = None
+                    rf._start_timer()
+                old_callback = factory.call_args.args[1]
+                rf._query(self.host1)
+                rf._set_final_result(None)
+                rf._paging_state = b'next'
+                rf._load_balancer.make_query_plan.return_value = [self.host2]
+                rf.start_fetching_next_page()
+                current_timer = rf._timer
+                sent = list(rf.attempted_hosts)
+                old_callback()
+                assert rf._timer is current_timer
+                assert rf.attempted_hosts == sent
+                assert not rf._is_final()
+
+    def test_prepare_overload_retries_without_a_consistency_field(self):
+        rf, (first, second), _ = self.make_failed_push_future(RetryPolicy())
+        first.push.side_effect = None
+        rf.message = PrepareMessage(query=rf.query.query_string)
+        assert rf.send_request()
+        callback = first._requests.pop(rf._req_id)[0]
+        callback(Mock(spec=OverloadedErrorMessage, info={}))
+        assert not rf._is_final()
+        scheduler = rf.session.cluster.scheduler.schedule_with_shutdown
+        args = scheduler.call_args.args
+        assert args[-1] is _NOT_SET
+        args[2](*args[3:])
+        second.push.assert_called_once()
+        assert rf._connection is second
+
+    def test_none_retry_consistency_uses_the_failed_attempt(self):
+        policy = Mock(spec=RetryPolicy)
+        policy.on_request_error.side_effect = [
+            (RetryPolicy.RETRY_NEXT_HOST, ConsistencyLevel.ONE),
+            (RetryPolicy.RETRY_NEXT_HOST, None)]
+        rf, connections, _ = self.make_failed_push_future(policy)
+        connections[0].push.side_effect = None
+        rf.message.consistency_level = ConsistencyLevel.QUORUM
+        callbacks = []
+        for host, connection in zip((self.host1, self.host2), connections):
+            request_id = rf._query(host)
+            callbacks.append(connection._requests.pop(request_id)[0])
+        for callback in callbacks:
+            callback(Mock(spec=OverloadedErrorMessage, info={}))
+        calls = rf.session.cluster.scheduler.schedule_with_shutdown.call_args_list
+        assert [c.args[-1] for c in calls] == [
+            ConsistencyLevel.ONE, ConsistencyLevel.QUORUM]
+        assert [c.args[1] for c in policy.on_request_error.call_args_list] == [
+            ConsistencyLevel.QUORUM, ConsistencyLevel.QUORUM]
+
+    def test_speculative_response_retry_keeps_main_attempt(self):
+        for response in (ConnectionShutdown('lost'),
+                         Mock(spec=OverloadedErrorMessage, info={})):
+            with self.subTest(response=type(response).__name__):
+                rf, (primary, speculative), _ = self.make_failed_push_future(
+                    RetryPolicy())
+                primary.push.side_effect = None
+                assert rf.send_request()
+                primary_id = rf._req_id
+                primary_callback = primary._requests[primary_id][0]
+                assert rf.send_request(error_no_hosts=False)
+                callback = speculative._requests.pop(rf._req_id)[0]
+                callback(response)
+                scheduler = rf.session.cluster.scheduler.schedule_with_shutdown
+                args = scheduler.call_args.args
+                assert args[-2] is False
+                args[2](*args[3:])
+                assert not rf._is_final()
+                primary._requests.pop(primary_id)
+                primary_callback(ResultMessage(kind=RESULT_KIND_VOID))
+                assert rf._final_exception is None
+                assert rf._event.is_set()
+
+    def test_speculative_response_retry_preserves_push_classification(self):
+        policy = Mock(spec=RetryPolicy)
+
+        def retry_overload(query, consistency, error, retry_num):
+            decision = (RetryPolicy.RETRY if
+                        isinstance(error, OverloadedErrorMessage) else
+                        RetryPolicy.RETHROW)
+            return decision, None
+
+        policy.on_request_error.side_effect = retry_overload
+        rf, (primary, speculative), _ = self.make_failed_push_future(policy)
+        fail_push = primary.push.side_effect
+        primary.push.side_effect = None
+        assert rf.send_request()
+        primary_id = rf._req_id
+        primary_callback = primary._requests[primary_id][0]
+        rf._on_speculative_execute()
+        callback = speculative._requests.pop(rf._req_id)[0]
+        callback(Mock(spec=OverloadedErrorMessage, info={}))
+        scheduled = rf.session.cluster.scheduler.schedule_with_shutdown
+        args = scheduled.call_args.args
+        speculative.push.side_effect = fail_push
+        args[2](*args[3:])
+
+        policy.on_request_error.assert_called_once()
+        assert not rf._is_final()
+        assert not primary.is_defunct
+        primary._requests.pop(primary_id)
+        primary_callback(ResultMessage(kind=RESULT_KIND_VOID))
+        assert rf._final_exception is None
+        assert rf._event.is_set()
+        assert primary.in_flight == speculative.in_flight == 0
+
+    def test_stale_retry_does_not_consume_next_page_hosts(self):
+        rf, (_, second), _ = self.make_failed_push_future(RetryPolicy())
+        rf._page_generation = 1
+        rf.query_plan = iter([self.host2])
+        assert rf.send_request(page_generation=0)
+        assert next(rf.query_plan) is self.host2
+        second.push.assert_not_called()
+
+    def test_old_retry_preserves_next_pages_control_timeout_ownership(self):
+        entered, release, advanced = Event(), Event(), Event()
+        failures = []
+        retry = advancing = None
+
+        class ObservedFuture(ResponseFuture):
+            def __getattribute__(self, name):
+                value = super().__getattribute__(name)
+                if (name == '_control_connection_query_attempted' and
+                        current_thread() is retry and not entered.is_set()):
+                    entered.set()
+                    if not release.wait(5):
+                        raise RuntimeError('retry flag read was not released')
+                return value
+
+        session = self._make_fallback_session()
+        connection = self.make_control_connection()
+        connection.get_request_id.side_effect = [7, 8]
+        control = session.cluster.control_connection
+        control._connection = connection
+
+        connection.send_msg.side_effect = partial(self.record_request, connection)
+        with patch(__name__ + '.ResponseFuture', ObservedFuture):
+            rf = self.make_response_future(session)
+        rf.send_request()
+        rf._retry(False, None, self.host1, 0, page_generation=0)
+        scheduled = session.cluster.scheduler.schedule_with_shutdown.call_args.args
+        callback_lock = rf._callback_lock
+        observed_advance = []
+
+        class ObservedCallbackLock:
+            def __enter__(self):
+                if current_thread() is advancing and not observed_advance:
+                    observed_advance.append(True)
+                    if callback_lock.acquire(False):
+                        return self
+                    release.set()
+                callback_lock.acquire()
+                return self
+
+            def __exit__(self, *exc):
+                callback_lock.release()
+
+        send_request = rf.send_request
+
+        def send_after_advance(*args, **kwargs):
+            if current_thread() is retry and not advanced.wait(5):
+                raise RuntimeError('next page was not admitted')
+            return send_request(*args, **kwargs)
+
+        def advance_page():
+            try:
+                response = self.make_mock_response(['value'], [(1,)])
+                response.paging_state = b'next'
+                connection._requests.pop(7)[0](response)
+                rf.start_fetching_next_page()
+            except Exception as exc:
+                failures.append(exc)
+            finally:
+                advanced.set()
+                release.set()
+
+        rf._callback_lock = ObservedCallbackLock()
+        retry = self.make_worker(partial(scheduled[2], *scheduled[3:]), failures)
+        advancing = Thread(target=advance_page)
+        with patch.object(rf, 'send_request', side_effect=send_after_advance):
+            retry.start()
+            try:
+                assert entered.wait(5)
+                advancing.start()
+                assert advanced.wait(5)
+            finally:
+                advanced.set()
+                release.set()
+                retry.join(5)
+                if advancing.ident is not None:
+                    advancing.join(5)
+        assert not retry.is_alive() and not advancing.is_alive()
+        assert not failures
+        assert rf._page_generation == 1
+        assert connection.send_msg.call_count == 2
+        assert control._application_requests_in_flight == 1
+        rf._on_timeout(_attempts=3, page_generation=1)
+        assert isinstance(rf._final_exception, OperationTimedOut)
+        assert control._application_requests_in_flight == 0
+        assert not rf._control_connection_requests
+        assert (connection, 8) in control._application_orphaned_requests
+        late_callback = connection._requests.pop(8)[0]
+        with connection.lock:
+            connection.in_flight -= 1
+            connection.orphaned_request_ids.remove(8)
+        late_callback(ResultMessage(kind=RESULT_KIND_VOID))
+        assert connection.in_flight == 0
+        assert not control._application_orphaned_requests
+
+    def test_control_retry_keeps_consistency_through_internal_use(self):
+        for keyspace in (None, 'ks'):
+            with self.subTest(keyspace=keyspace):
+                session = self._make_fallback_session(keyspace=keyspace)
+                connection = self.make_control_connection()
+                session.cluster.control_connection._connection = connection
+                rf = self.make_response_future(session)
+                rf._retry(False, ConsistencyLevel.QUORUM, self.host1, 0)
+                args = session.cluster.scheduler.schedule_with_shutdown.call_args.args
+                rf.message.consistency_level = ConsistencyLevel.ONE
+                args[2](*args[3:])
+                if keyspace:
+                    connection.send_msg.call_args.kwargs['cb'](
+                        Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                             new_keyspace=keyspace))
+                message = connection.send_msg.call_args.args[0]
+                assert message.query == rf.message.query
+                assert message.consistency_level == ConsistencyLevel.QUORUM
+
+    def test_exhausted_plan_checks_deadline_before_fallback(self):
+        session = self._make_fallback_session()
+        connection = self.make_control_connection()
+        session.cluster.control_connection._connection = connection
+        rf = self.make_response_future(session)
+        rf._start_time -= rf.timeout + 1
+        assert rf.send_request()
+        assert isinstance(rf._final_exception, OperationTimedOut)
+        connection.send_msg.assert_not_called()
+
+    def test_control_error_response_keeps_attempt_consistency(self):
+        for keyspace in (None, 'ks'):
+            for response in (ConnectionShutdown('lost'),
+                             Mock(spec=OverloadedErrorMessage, info={})):
+                with self.subTest(keyspace=keyspace, response=type(response)):
+                    session = self._make_fallback_session(keyspace=keyspace)
+                    connection = self.make_control_connection()
+                    session.cluster.control_connection._connection = connection
+                    rf = self.make_response_future(session)
+                    policy = Mock(spec=RetryPolicy)
+                    policy.on_request_error.return_value = (
+                        RetryPolicy.RETRY_NEXT_HOST, None)
+                    rf._retry_policy = policy
+                    rf.send_request(page_generation=0,
+                                    consistency_level=ConsistencyLevel.QUORUM)
+                    if keyspace:
+                        connection.send_msg.call_args.kwargs['cb'](
+                            Mock(spec=ResultMessage,
+                                 kind=RESULT_KIND_SET_KEYSPACE,
+                                 new_keyspace=keyspace))
+                    callback = connection.send_msg.call_args.kwargs['cb']
+                    callback(response)
+                    assert policy.on_request_error.call_args.args[1] == \
+                        ConsistencyLevel.QUORUM
+                    scheduler = session.cluster.scheduler
+                    scheduled = scheduler.schedule_with_shutdown
+                    assert scheduled.call_args.args[-1] == \
+                        ConsistencyLevel.QUORUM
+
+    def test_control_retry_rechecks_page_after_borrow_and_use(self):
+        for phase in ('borrow', 'use'):
+            with self.subTest(phase=phase):
+                session = self._make_fallback_session(
+                    keyspace='ks' if phase == 'use' else None)
+                connection = self.make_control_connection()
+                control = session.cluster.control_connection
+                control._connection = connection
+                rf = self.make_response_future(session)
+
+                def advance_page():
+                    rf._set_final_result(None)
+                    rf._paging_state = b'next'
+                    with patch.object(rf, 'send_request', return_value=True):
+                        rf.start_fetching_next_page()
+                    rf._req_id = 99
+
+                borrow = rf._borrow_control_connection
+
+                def borrow_then_advance(conn):
+                    request_id = borrow(conn)
+                    advance_page()
+                    return request_id
+
+                if phase == 'borrow':
+                    with patch.object(rf, '_borrow_control_connection',
+                                      side_effect=borrow_then_advance):
+                        rf.send_request(
+                            page_generation=0,
+                            consistency_level=ConsistencyLevel.QUORUM)
+                else:
+                    rf.send_request(page_generation=0,
+                                    consistency_level=ConsistencyLevel.QUORUM)
+                    callback = connection.send_msg.call_args.kwargs['cb']
+                    advance_page()
+                    callback(Mock(spec=ResultMessage,
+                                  kind=RESULT_KIND_SET_KEYSPACE,
+                                  new_keyspace='ks'))
+                assert connection.send_msg.call_count == (phase == 'use')
+                assert not rf._is_final()
+                assert not rf._event.is_set()
+                assert rf._req_id == 99
+                assert connection.in_flight == 0
+                assert control._application_requests_in_flight == 0
+                assert not control._application_internal_keyspace_changes
+
+    def test_internal_use_retry_submission_handles_shutdown(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            pass
+        for owner in ('session', 'cluster', 'active'):
+            with self.subTest(owner=owner):
+                session = self._make_fallback_session(keyspace='ks')
+                connection = self.make_control_connection()
+                control = session.cluster.control_connection
+                control._connection = connection
+                session.cluster.executor = executor
+                session.submit.side_effect = partial(Session.submit, session)
+                query = SimpleStatement('SELECT * FROM foo')
+                rf = ResponseFuture(
+                    session, QueryMessage(query.query_string, ConsistencyLevel.ONE),
+                    query, None)
+                assert rf.send_request()
+                assert not rf._plan_exhausted
+                if owner != 'active':
+                    target = session if owner == 'session' else session.cluster
+                    target.is_shutdown = True
+                callback = connection.send_msg.call_args.kwargs['cb']
+                if owner == 'active':
+                    with self.assertRaises(RuntimeError):
+                        callback(ConnectionShutdown('USE connection lost'))
+                    assert not rf._is_final()
+                else:
+                    callback(ConnectionShutdown('USE connection lost'))
+                    assert rf._event.wait(1)
+                    with self.assertRaises(ConnectionShutdown):
+                        rf.result()
+                session.submit.assert_called_once()
+                assert connection.send_msg.call_count == 1
+                assert not rf._pending_attempts
+                assert connection.in_flight == control._application_requests_in_flight == 0
+                assert not control._application_internal_keyspace_changes
+
+    def test_fallback_rejects_unusable_transport_before_encoding(self):
+        for state in ('busy', 'closed', 'defunct'):
+            with self.subTest(state=state):
+                session = self._make_fallback_session()
+                connection = Connection(DefaultEndPoint('127.0.0.3'),
+                                        is_control_connection=True)
+                connection.push = Mock()
+                if state == 'busy':
+                    connection._socket_writable = False
+                elif state == 'closed':
+                    connection.is_closed = True
+                    connection.last_error = ValueError('server closed connection')
+                else:
+                    connection.is_defunct = True
+                    connection.last_error = ValueError('retired')
+                control = session.cluster.control_connection
+                control._connection = connection
+                rf = self.make_response_future(session)
+                rf._protocol_handler = Mock(wraps=ProtocolHandler)
+                assert rf._query_control_connection(host=self.host1) is None
+                expected = ConnectionBusy if state == 'busy' else ConnectionShutdown
+                assert isinstance(rf._errors[self.host1], expected)
+                if state != 'busy':
+                    assert str(rf._errors[self.host1]).endswith(
+                        ': %s' % connection.last_error)
+                rf._protocol_handler.encode_message.assert_not_called()
+                connection.push.assert_not_called()
+                assert connection.in_flight == control._application_requests_in_flight == 0
+                assert not connection._requests
+                assert not rf._control_connection_requests
+                assert not rf._pending_attempts
+
+    def test_failed_internal_use_keeps_retry_context(self):
+        for advance in (False, True):
+            with self.subTest(advance=advance):
+                session = self._make_fallback_session(keyspace='ks')
+                connection = self.make_control_connection()
+                session.cluster.control_connection._connection = connection
+                rf = self.make_response_future(session)
+                rf.send_request(page_generation=0,
+                                consistency_level=ConsistencyLevel.QUORUM)
+                callback = connection.send_msg.call_args.kwargs['cb']
+                callback(ConnectionShutdown('USE connection lost'))
+                submitted = session.submit.call_args.args
+                assert submitted[5:] == (0, True, ConsistencyLevel.QUORUM)
+                if advance:
+                    rf._set_final_result(None)
+                    rf._paging_state = b'next'
+                    with patch.object(rf, 'send_request', return_value=True):
+                        rf.start_fetching_next_page()
+                submitted[0](*submitted[1:])
+                if advance:
+                    assert connection.send_msg.call_count == 1
+                    assert not rf._is_final()
+                else:
+                    connection.send_msg.call_args.kwargs['cb'](
+                        Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                             new_keyspace='ks'))
+                    message = connection.send_msg.call_args.args[0]
+                    assert message.consistency_level == ConsistencyLevel.QUORUM
+
+    def test_stale_internal_use_handoff_does_not_count_as_new_page_work(self):
+        session = self._make_fallback_session(keyspace='ks')
+        connection = self.make_control_connection()
+        session.cluster.control_connection._connection = connection
+        rf = self.make_response_future(session)
+        rf.timeout = None
+        rf.send_request(page_generation=0)
+        callback = connection.send_msg.call_args.kwargs['cb']
+        submit = rf._submit_attempt
+
+        def advance_before_submission(*args, **kwargs):
+            rf._set_final_result(None)
+            rf._paging_state = b'next'
+            with patch.object(rf, 'send_request', return_value=True):
+                rf.start_fetching_next_page()
+            submit(*args, **kwargs)
+
+        with patch.object(rf, '_submit_attempt', side_effect=advance_before_submission):
+            callback(ConnectionShutdown('old USE failed'))
+        session.cluster.allow_control_connection_query_fallback = \
+            ControlConnectionQueryFallback.Disabled
+        rf.query_plan = iter(())
+        rf.send_request()
+        assert rf._page_generation == 1
+        assert isinstance(rf._final_exception, NoHostAvailable)
+        session.submit.assert_not_called()
+
+    def test_completion_latency_uses_completed_pages_start_time(self):
+        for exceptional in (False, True):
+            with self.subTest(exceptional=exceptional):
+                rf = self.make_response_future(self.make_session())
+                rf._metrics = Mock()
+                clock = [100.0]
+                rf._start_time = clock[0]
+
+                def advance_page():
+                    assert rf._event.is_set()
+                    clock[0] = 110.0
+                    rf._paging_state = b'next'
+                    with patch.object(rf, 'send_request', return_value=True):
+                        rf.start_fetching_next_page()
+
+                clock[0] = 105.0
+                with patch.object(
+                        rf._timer, 'cancel',
+                        side_effect=advance_page), \
+                        patch('cassandra.cluster.time.time',
+                              side_effect=lambda: clock[0]):
+                    if exceptional:
+                        rf._set_final_exception(ValueError('old page'),
+                                                page_generation=0)
+                    else:
+                        rf._set_final_result(None, page_generation=0)
+                rf._metrics.request_timer.addValue.assert_called_once_with(5.0)
+
+    def test_control_deadline_expiring_during_internal_use(self):
+        session = self._make_fallback_session(keyspace='ks')
+        connection = self.make_control_connection()
+        session.cluster.control_connection._connection = connection
+        rf = self.make_response_future(session)
+        assert rf.send_request()
+        callback = connection.send_msg.call_args.kwargs['cb']
+        rf._start_time -= rf.timeout + 1
+        callback(Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                      new_keyspace='ks'))
+        assert connection.send_msg.call_count == 1
+        assert isinstance(rf._final_exception, OperationTimedOut)
+
+    def test_stale_timeout_does_not_orphan_control_next_page(self):
+        session = self._make_fallback_session()
+        connection = self.make_control_connection()
+        session.cluster.control_connection._connection = connection
+
+        connection.send_msg.side_effect = partial(self.record_request, connection)
+        rf = self.make_response_future(session)
+        assert rf.send_request()
+        orphan = rf._orphan_control_connection_request
+
+        def advance_then_orphan(*args, **kwargs):
+            request_id = rf._req_id
+            callback = connection._requests.pop(request_id)[0]
+            callback(self.make_mock_response(['v'], [(1,)]))
+            rf._paging_state = b'next'
+            connection.get_request_id.return_value = request_id
+            rf.start_fetching_next_page()
+            return orphan(*args, **kwargs)
+
+        with patch.object(rf, '_orphan_control_connection_request',
+                          side_effect=advance_then_orphan):
+            rf._on_timeout()
+        assert not rf._is_final()
+        assert rf._req_id not in connection.orphaned_request_ids
+        assert session.cluster.control_connection._application_requests_in_flight == 1
+        callback = connection._requests.pop(rf._req_id)[0]
+        callback(self.make_mock_response(['v'], [(2,)]))
+        assert rf._final_exception is None
+
+    def test_page_transition_waits_until_send_is_encoded(self):
+        rf, (first, second), _ = self.make_failed_push_future(RetryPolicy())
+        first.push.side_effect = None
+        encoding, release, page_contended = Event(), Event(), Event()
+        encoded_pages, failures = [], []
+        rf._protocol_handler = Mock(wraps=ProtocolHandler)
+
+        def encode(message, *args, **kwargs):
+            if not encoding.is_set():
+                encoding.set()
+                assert release.wait(5)
+            encoded_pages.append(message.paging_state)
+            return ProtocolHandler.encode_message(message, *args, **kwargs)
+
+        rf._protocol_handler.encode_message.side_effect = encode
+
+        admission = rf._send_admission_lock
+
+        class ObservedAdmission:
+            def __enter__(self):
+                if current_thread() is advancing and not page_contended.is_set():
+                    acquired = admission.acquire(blocking=False)
+                    if acquired:
+                        admission.release()
+                        raise AssertionError('page admission overtook encoding')
+                    page_contended.set()
+                admission.acquire()
+
+            def __exit__(self, *args):
+                admission.release()
+
+        rf._send_admission_lock = ObservedAdmission()
+
+        def send():
+            assert rf._query(self.host1) is not None
+
+        def advance():
+            rf._set_final_result(None)
+            rf._paging_state = b'next'
+            rf._load_balancer.make_query_plan.return_value = [self.host2]
+            rf.start_fetching_next_page()
+
+        sending = self.make_worker(send, failures, daemon=True)
+        advancing = self.make_worker(advance, failures, daemon=True)
+        sending.start()
+        try:
+            assert encoding.wait(5)
+            advancing.start()
+            assert page_contended.wait(5)
+        finally:
+            release.set()
+            sending.join(5)
+            if advancing.ident is not None:
+                advancing.join(5)
+        assert not sending.is_alive() and not advancing.is_alive()
+        assert not failures
+        assert encoded_pages == [None, b'next']
+        assert rf._connection is second
+        assert rf._req_id in second._requests
+        assert not rf._event.is_set()
+
+    def test_response_policy_cannot_affect_next_page(self):
+        for decision in (RetryPolicy.IGNORE, RetryPolicy.RETHROW,
+                         RetryPolicy.RETRY, RetryPolicy.RETRY_NEXT_HOST, 'raise'):
+            with self.subTest(decision=decision):
+                policy = Mock(spec=RetryPolicy)
+                rf, (first, second), _ = self.make_failed_push_future(policy)
+                first.push.side_effect = None
+                request_id = rf._query(self.host1)
+                callback = first._requests.pop(request_id)[0]
+
+                def advance_in_policy(*args, **kwargs):
+                    rf._set_final_result(None)
+                    rf._paging_state = b'next'
+                    rf._load_balancer.make_query_plan.return_value = [self.host2]
+                    rf.start_fetching_next_page()
+                    if decision == 'raise':
+                        raise ValueError('old policy')
+                    return decision, ConsistencyLevel.QUORUM
+
+                policy.on_request_error.side_effect = advance_in_policy
+                callback(ConnectionShutdown('old page'))
+                assert not rf._is_final()
+                assert not rf._event.is_set()
+                assert rf._connection is second
+                assert rf._query_retries == 0
+                assert rf.message.consistency_level == ConsistencyLevel.ONE
+                rf.session.cluster.scheduler.schedule_with_shutdown.assert_not_called()
+
     def test_failed_push_obeys_fallthrough_for_both_idempotency_flags(self):
         for is_idempotent in (False, True):
             with self.subTest(is_idempotent=is_idempotent):
@@ -1018,6 +2963,296 @@ class ResponseFutureTests(unittest.TestCase):
                 scheduler = rf.session.cluster.scheduler
                 scheduler.schedule_with_shutdown.assert_not_called()
                 assert rf._req_id is None
+
+    def test_connection_error_retires_callback_connection(self):
+        policy = Mock(wraps=RetryPolicy())
+        rf, (first, second), _ = self.make_failed_push_future(policy)
+        first.push.side_effect = None
+        request_id = rf._query(self.host1)
+        assert request_id is not None
+        assert rf._query(self.host2) is not None
+        callback = first._requests.pop(request_id)[0]
+
+        callback(ConnectionException('first connection failed'))
+
+        assert first.is_defunct
+        assert not second.is_defunct
+        assert first.in_flight == 0
+        assert second.in_flight == 1
+        policy.on_request_error.assert_called_once()
+        rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once()
+
+    def test_connection_failures_retry_independently(self):
+        policy = Mock(wraps=RetryPolicy())
+        rf, (first, second), _ = self.make_failed_push_future(policy)
+        first.push.side_effect = None
+        assert rf._query(self.host1) is not None
+        assert rf._query(self.host2) is not None
+
+        first.defunct(ConnectionShutdown('first connection lost'))
+        second.defunct(ConnectionShutdown('second connection lost'))
+
+        assert policy.on_request_error.call_count == 2
+        assert rf.session.cluster.scheduler.schedule_with_shutdown.call_count == 2
+        assert rf._query_retries == 2
+        assert first.in_flight == second.in_flight == 0
+
+    def test_shared_connection_failure_retries_each_future(self):
+        policy = Mock(wraps=RetryPolicy())
+        rf, (first, _), _ = self.make_failed_push_future(policy)
+        first.push.side_effect = None
+        message = QueryMessage(query=rf.query.query_string,
+                               consistency_level=ConsistencyLevel.ONE)
+        other = ResponseFuture(rf.session, message, rf.query, 10,
+                               retry_policy=policy)
+        assert rf._query(self.host1) is not None
+        assert other._query(self.host1) is not None
+
+        first.defunct(ConnectionShutdown('connection lost'))
+
+        assert policy.on_request_error.call_count == 2
+        assert rf.session.cluster.scheduler.schedule_with_shutdown.call_count == 2
+        assert rf._query_retries == other._query_retries == 1
+        assert first.in_flight == 0
+
+    def test_late_connection_error_does_not_affect_next_page(self):
+        policy = Mock(wraps=RetryPolicy())
+        rf, (first, second), _ = self.make_failed_push_future(policy)
+        first.push.side_effect = None
+        assert rf._query(self.host1) is not None
+        assert rf._query(self.host1) is not None
+        with patch('cassandra.connection.Thread') as callback_thread:
+            with patch.object(Connection, 'CALLBACK_ERR_THREAD_THRESHOLD', 0):
+                first.defunct(ConnectionShutdown('connection lost'))
+            finish_callbacks = callback_thread.call_args.kwargs['target']
+
+        assert rf._query(self.host2) is not None
+        callback = next(iter(second._requests.values()))[0]
+        second._requests.clear()
+        callback(ResultMessage(kind=RESULT_KIND_VOID))
+        rf._paging_state = b'next-page'
+        rf._load_balancer.make_query_plan.return_value = [self.host2]
+        rf.start_fetching_next_page()
+
+        finish_callbacks()
+        policy.on_request_error.assert_called_once()
+        rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once()
+        assert rf._query_retries == 1
+        second.defunct(ConnectionShutdown('current-page error'))
+
+        assert policy.on_request_error.call_count == 2
+        assert rf.session.cluster.scheduler.schedule_with_shutdown.call_count == 2
+        assert rf._query_retries == 2
+        assert first.in_flight == second.in_flight == 0
+
+    def test_query_binds_current_page_after_borrowing_connection(self):
+        rf, (first, second), _ = self.make_failed_push_future(RetryPolicy())
+        first.push.side_effect = None
+        pool = rf.session._pools[self.host1]
+        borrow = pool.borrow_connection.side_effect
+
+        def borrow_after_page_advance(**kwargs):
+            rf._set_final_result(None)
+            rf._paging_state = b'next-page'
+            rf._load_balancer.make_query_plan.return_value = [self.host2]
+            rf.start_fetching_next_page()
+            return borrow(**kwargs)
+
+        pool.borrow_connection.side_effect = borrow_after_page_advance
+        request_id = rf._query(self.host1)
+        callback = first._requests.pop(request_id)[0]
+        callback(ResultMessage(kind=RESULT_KIND_VOID))
+
+        # This attempt encoded the current page, so its response must be able
+        # to complete that page even if borrowing began on the previous page.
+        assert rf._is_final()
+        assert rf._final_exception is None
+        assert first.in_flight == 0
+        assert second.in_flight == 1
+
+    def test_failed_speculative_push_enforces_deadline(self):
+        policy = Mock(spec=RetryPolicy)
+        rf, (first, second), _ = self.make_failed_push_future(policy)
+        request_id = rf._query(self.host2)
+        failed_push = first.push.side_effect
+        clock = [rf._start_time]
+
+        def expire_during_push(data):
+            clock[0] += rf.timeout + 1
+            failed_push(data)
+
+        first.push.side_effect = expire_during_push
+        with patch('cassandra.cluster.time.time',
+                   side_effect=lambda: clock[0]):
+            rf._on_speculative_execute()
+
+        assert isinstance(rf._final_exception, OperationTimedOut)
+        policy.on_request_error.assert_not_called()
+        assert first.in_flight == 0
+        assert not first._requests
+        assert request_id not in second._requests
+        assert request_id in second.orphaned_request_ids
+
+    def test_failed_push_policy_cannot_exceed_deadline(self):
+        for decision in (RetryPolicy.IGNORE, 'raise'):
+            with self.subTest(decision=decision):
+                policy = Mock(spec=RetryPolicy)
+                rf, (first, second), _ = self.make_failed_push_future(policy)
+                request_id = rf._query(self.host2)
+                clock = [rf._start_time]
+
+                def expire_during_policy(*args, **kwargs):
+                    clock[0] += rf.timeout + 1
+                    if decision == 'raise':
+                        raise ValueError('policy failed after deadline')
+                    return decision, None
+
+                policy.on_request_error.side_effect = expire_during_policy
+                with patch('cassandra.cluster.time.time',
+                           side_effect=lambda: clock[0]):
+                    rf._query(self.host1, error_no_hosts=False)
+
+                assert isinstance(rf._final_exception, OperationTimedOut)
+                assert first.in_flight == 0
+                assert not first._requests
+                assert request_id not in second._requests
+                assert request_id in second.orphaned_request_ids
+
+    def test_failed_push_uses_encoded_consistency(self):
+        policy = Mock(spec=RetryPolicy)
+        policy.on_request_error.side_effect = [
+            (RetryPolicy.RETRY_NEXT_HOST, ConsistencyLevel.QUORUM),
+            (RetryPolicy.RETHROW, None)]
+        rf, (first, second), _ = self.make_failed_push_future(policy)
+        encoded_consistency = []
+
+        def encode(message, *args, **kwargs):
+            encoded_consistency.append(message.consistency_level)
+            return ProtocolHandler.encode_message(message, *args, **kwargs)
+
+        rf._protocol_handler = Mock(wraps=ProtocolHandler)
+        rf._protocol_handler.encode_message.side_effect = encode
+        request_id = rf._query(self.host2)
+        callback = second._requests.pop(request_id)[0]
+        failed_push = first.push.side_effect
+
+        def fail_after_other_attempt(data):
+            callback(ConnectionShutdown('other connection failed'))
+            failed_push(data)
+
+        first.push.side_effect = fail_after_other_attempt
+        assert rf._query(self.host1) is _NOT_SET
+
+        assert encoded_consistency == [ConsistencyLevel.ONE] * 2
+        assert rf.message.consistency_level == ConsistencyLevel.QUORUM
+        assert [call.args[1] for call in
+                policy.on_request_error.call_args_list] == encoded_consistency
+        assert first.in_flight == second.in_flight == 0
+
+    def test_failed_push_policy_cannot_affect_next_page(self):
+        for decision in (RetryPolicy.IGNORE, RetryPolicy.RETHROW,
+                         RetryPolicy.RETRY, RetryPolicy.RETRY_NEXT_HOST,
+                         'raise'):
+            with self.subTest(decision=decision):
+                policy = Mock(spec=RetryPolicy)
+                rf, (first, second), _ = self.make_failed_push_future(policy)
+                page_timer = Mock()
+
+                def advance_page(*args, **kwargs):
+                    rf._set_final_result(None)
+                    rf._paging_state = b'next-page'
+                    rf._load_balancer.make_query_plan.return_value = [
+                        self.host2]
+                    rf.start_fetching_next_page()
+                    rf._timer = page_timer
+                    if decision == 'raise':
+                        raise ValueError('previous-page policy failed')
+                    return decision, ConsistencyLevel.QUORUM
+
+                policy.on_request_error.side_effect = advance_page
+                assert rf._query(self.host1) is _NOT_SET
+
+                assert not rf._event.is_set()
+                assert rf._final_exception is None
+                assert rf._final_result is _NOT_SET
+                assert rf._query_retries == 0
+                assert rf.message.consistency_level == ConsistencyLevel.ONE
+                assert rf._connection is second
+                assert rf._req_id in second._requests
+                assert first.in_flight == 0
+                assert second.in_flight == 1
+                page_timer.cancel.assert_not_called()
+                scheduler = rf.session.cluster.scheduler
+                scheduler.schedule_with_shutdown.assert_not_called()
+
+    def test_failed_push_decision_rechecks_page_before_state_changes(self):
+        for decision in (RetryPolicy.IGNORE, RetryPolicy.RETHROW,
+                         RetryPolicy.RETRY, RetryPolicy.RETRY_NEXT_HOST,
+                         'raise'):
+            with self.subTest(decision=decision):
+                policy = Mock(spec=RetryPolicy)
+                if decision == 'raise':
+                    policy.on_request_error.side_effect = ValueError('policy')
+                else:
+                    policy.on_request_error.return_value = (
+                        decision, ConsistencyLevel.QUORUM)
+                rf, (first, second), _ = self.make_failed_push_future(policy)
+                finish_first_page = rf._set_final_result
+                if decision == RetryPolicy.IGNORE:
+                    method = '_set_final_result'
+                elif decision in (RetryPolicy.RETHROW, 'raise'):
+                    method = '_set_final_exception'
+                else:
+                    method = '_retry'
+                apply_decision = getattr(rf, method)
+                page_timer = Mock()
+
+                def advance_before_applying(*args, **kwargs):
+                    finish_first_page(None)
+                    rf._paging_state = b'next-page'
+                    rf._load_balancer.make_query_plan.return_value = [
+                        self.host2]
+                    rf.start_fetching_next_page()
+                    rf._timer = page_timer
+                    apply_decision(*args, **kwargs)
+
+                with patch.object(rf, method,
+                                  side_effect=advance_before_applying):
+                    assert rf._query(self.host1) is _NOT_SET
+
+                assert not rf._event.is_set()
+                assert rf._final_exception is None
+                assert rf._final_result is _NOT_SET
+                assert rf.message.consistency_level == ConsistencyLevel.ONE
+                assert rf._connection is second
+                assert rf._req_id in second._requests
+                assert first.in_flight == 0
+                assert second.in_flight == 1
+                page_timer.cancel.assert_not_called()
+                scheduler = rf.session.cluster.scheduler
+                scheduler.schedule_with_shutdown.assert_not_called()
+
+    def test_failed_speculative_push_preserves_main_attempt(self):
+        policy = Mock(wraps=RetryPolicy())
+        rf, (first, second), _ = self.make_failed_push_future(policy)
+        request_id = rf._query(self.host2)
+        callback = second._requests[request_id][0]
+        rf.query_plan = iter([self.host1])
+        rf._fallback_to_control_connection = Mock(return_value=False)
+
+        rf._on_speculative_execute()
+        scheduler = rf.session.cluster.scheduler.schedule_with_shutdown
+        scheduler.assert_not_called()
+        policy.on_request_error.assert_not_called()
+
+        assert not rf._event.is_set()
+        assert rf._final_exception is None
+        rf._fallback_to_control_connection.assert_not_called()
+        second._requests.pop(request_id)
+        callback(ResultMessage(kind=RESULT_KIND_VOID))
+        assert rf._event.is_set()
+        assert rf._final_exception is None
+        assert first.in_flight == second.in_flight == 0
 
     def test_failed_push_cleans_up_before_policy_decision(self):
         policy = Mock(spec=RetryPolicy)
@@ -1053,8 +3288,10 @@ class ResponseFutureTests(unittest.TestCase):
                 assert rf.send_request()
                 scheduler = rf.session.cluster.scheduler.schedule_with_shutdown
                 scheduler.assert_called_once_with(
-                    0.5, ANY, rf._retry_task, decision == RetryPolicy.RETRY,
-                    self.host1, rf._page_generation)
+                    0.5, ANY, rf._run_attempt, ANY, rf._retry_task,
+                    decision == RetryPolicy.RETRY,
+                    self.host1, rf._page_generation, True,
+                    rf.message.consistency_level)
                 second.push.assert_not_called()
                 assert rf.message.consistency_level == ConsistencyLevel.QUORUM
                 assert rf._query_retries == 1
@@ -1089,7 +3326,8 @@ class ResponseFutureTests(unittest.TestCase):
             rf.query, ConsistencyLevel.ONE,
             error=rf._errors[self.host1], retry_num=0)
         scheduler.assert_called_once_with(
-            0, ANY, rf._retry_task, False, self.host1, rf._page_generation)
+            0, ANY, rf._run_attempt, ANY, rf._retry_task, False,
+            self.host1, rf._page_generation, True, rf.message.consistency_level)
         second.push.assert_called_once()
         assert rf._connection is second
         assert rf._req_id == 17
@@ -1099,9 +3337,63 @@ class ResponseFutureTests(unittest.TestCase):
         rf, (first, second), queued = self.make_failed_push_future(
             RetryPolicy())
         assert rf.send_request()
+        rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
+            0, ANY, rf._run_attempt, ANY, rf._retry_task, False,
+            self.host1, rf._page_generation, True, rf.message.consistency_level)
+        second.push.assert_not_called()
+
+    def test_queued_retry_completes_when_shutdown_prevents_send(self):
+        for owner in ('session', 'cluster'):
+            for busy_plan in (False, True):
+                with self.subTest(owner=owner, busy_plan=busy_plan):
+                    rf, (first, second), _ = self.make_failed_push_future(
+                        RetryPolicy())
+                    rf.timeout = None
+                    assert rf.send_request()
+                    assert first.in_flight == 0
+                    scheduler = rf.session.cluster.scheduler.schedule_with_shutdown
+                    args = scheduler.call_args.args
+                    token = args[3]
+                    assert token[0] == rf._page_generation
+                    assert rf._pending_attempts == {token}
+                    target = rf.session if owner == 'session' else rf.session.cluster
+                    target.is_shutdown = True
+                    if busy_plan:
+                        rf._query_plan_lock.acquire()
+                    finished = Event()
+                    failures = []
+
+                    retry = self.make_worker(
+                        partial(args[2], *args[3:]), failures, completed=finished, daemon=True)
+                    retry.start()
+                    try:
+                        assert finished.wait(1), (
+                            'shutdown retry waited for query-plan lock')
+                    finally:
+                        if busy_plan:
+                            rf._query_plan_lock.release()
+                        retry.join(5)
+                    assert not retry.is_alive()
+                    assert not failures
+                    assert rf._event.wait(1)
+                    with self.assertRaises(ConnectionShutdown):
+                        rf.result()
+                    assert not rf._pending_attempts
+                    second.push.assert_not_called()
+
+    def test_rejected_retry_completes_without_retaining_pending_work(self):
+        rf, (first, second), _ = self.make_failed_push_future(RetryPolicy())
+        failure = RuntimeError('retry scheduler rejected work')
         scheduler = rf.session.cluster.scheduler.schedule_with_shutdown
-        scheduler.assert_called_once_with(
-            0, ANY, rf._retry_task, False, self.host1, rf._page_generation)
+        scheduler.side_effect = failure
+
+        assert rf.send_request()
+        assert rf._event.is_set()
+        with self.assertRaises(RuntimeError) as raised:
+            rf.result()
+        assert raised.exception is failure
+        assert not rf._pending_attempts
+        assert first.in_flight == 0
         second.push.assert_not_called()
 
     def test_failed_push_ignore_finishes_without_second_send(self):
@@ -1390,7 +3682,8 @@ class ResponseFutureTests(unittest.TestCase):
         connection.features.tablets_routing_v2 = False
         connection.features.tablets_routing_v1 = False
         rf._set_result(None, connection, None, result)
-        session.submit.assert_called_once_with(ANY, ANY, rf, connection, **event_results)
+        session.submit.assert_called_once_with(
+            rf._run_attempt, ANY, ANY, ANY, rf, connection, **event_results)
 
     def test_other_result_message_kind(self):
         session = self.make_session()
@@ -1410,6 +3703,7 @@ class ResponseFutureTests(unittest.TestCase):
         """
 
         connection = MagicMock(spec=Connection)
+        connection.is_control_connection = False
         connection._requests = {}
         connection.in_flight = 5
         connection.orphaned_request_ids = set()
@@ -1585,14 +3879,19 @@ class ResponseFutureTests(unittest.TestCase):
 
         rf.session._pools.get.assert_any_call(self.host1)
         pool.borrow_connection.assert_called_once_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY, routing_token=ANY)
-        connection.send_msg.assert_called_once_with(rf.message, 1, cb=ANY, encoder=ProtocolHandler.encode_message, decoder=ProtocolHandler.decode_message, result_metadata=[])
+        sent_message = connection.send_msg.call_args.args[0]
+        assert vars(sent_message) == vars(rf.message)
+        connection.send_msg.assert_called_once_with(
+            sent_message, 1, cb=ANY, encoder=ProtocolHandler.encode_message,
+            decoder=ProtocolHandler.decode_message, result_metadata=[])
 
         result = Mock(spec=UnavailableErrorMessage, info={})
         host = self.host1
         rf._set_result(host, None, None, result)
 
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            ANY, ANY, rf._retry_task, True, host, 0)
+            ANY, ANY, rf._run_attempt, ANY, rf._retry_task,
+            True, host, 0, True, rf.message.consistency_level)
         assert 1 == rf._query_retries
 
         connection = Mock(spec=Connection)
@@ -1605,7 +3904,11 @@ class ResponseFutureTests(unittest.TestCase):
         # an UnavailableException
         rf.session._pools.get.assert_called_with(host)
         pool.borrow_connection.assert_called_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY, routing_token=ANY)
-        connection.send_msg.assert_called_with(rf.message, 2, cb=ANY, encoder=ProtocolHandler.encode_message, decoder=ProtocolHandler.decode_message, result_metadata=[])
+        sent_message = connection.send_msg.call_args.args[0]
+        assert vars(sent_message) == vars(rf.message)
+        connection.send_msg.assert_called_with(
+            sent_message, 2, cb=ANY, encoder=ProtocolHandler.encode_message,
+            decoder=ProtocolHandler.decode_message, result_metadata=[])
 
     def test_retry_with_different_host(self):
         session = self.make_session()
@@ -1620,7 +3923,11 @@ class ResponseFutureTests(unittest.TestCase):
 
         rf.session._pools.get.assert_any_call(self.host1)
         pool.borrow_connection.assert_called_once_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY, routing_token=ANY)
-        connection.send_msg.assert_called_once_with(rf.message, 1, cb=ANY, encoder=ProtocolHandler.encode_message, decoder=ProtocolHandler.decode_message, result_metadata=[])
+        sent_message = connection.send_msg.call_args.args[0]
+        assert vars(sent_message) == vars(rf.message)
+        connection.send_msg.assert_called_once_with(
+            sent_message, 1, cb=ANY, encoder=ProtocolHandler.encode_message,
+            decoder=ProtocolHandler.decode_message, result_metadata=[])
         assert ConsistencyLevel.QUORUM == rf.message.consistency_level
 
         result = Mock(spec=OverloadedErrorMessage, info={})
@@ -1628,7 +3935,8 @@ class ResponseFutureTests(unittest.TestCase):
         rf._set_result(host, None, None, result)
 
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            ANY, ANY, rf._retry_task, False, host, 0)
+            ANY, ANY, rf._run_attempt, ANY, rf._retry_task,
+            False, host, 0, True, rf.message.consistency_level)
         # query_retries does get incremented for Overloaded/Bootstrapping errors (since 3.18)
         assert 1 == rf._query_retries
 
@@ -1641,7 +3949,11 @@ class ResponseFutureTests(unittest.TestCase):
         # it should try with a different host
         rf.session._pools.get.assert_called_with(self.host2)
         pool.borrow_connection.assert_called_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY, routing_token=ANY)
-        connection.send_msg.assert_called_with(rf.message, 2, cb=ANY, encoder=ProtocolHandler.encode_message, decoder=ProtocolHandler.decode_message, result_metadata=[])
+        sent_message = connection.send_msg.call_args.args[0]
+        assert vars(sent_message) == vars(rf.message)
+        connection.send_msg.assert_called_with(
+            sent_message, 2, cb=ANY, encoder=ProtocolHandler.encode_message,
+            decoder=ProtocolHandler.decode_message, result_metadata=[])
 
         # the consistency level should be the same
         assert ConsistencyLevel.QUORUM == rf.message.consistency_level
@@ -1656,26 +3968,31 @@ class ResponseFutureTests(unittest.TestCase):
         rf.send_request()
         rf.session._pools.get.assert_any_call(self.host1)
 
-        result = Mock(spec=IsBootstrappingErrorMessage, info={})
+        result = Mock(spec=IsBootstrappingErrorMessage, info={}, custom_payload=None)
         host = self.host1
-        rf._set_result(host, None, None, result)
+        connection.send_msg.call_args.kwargs['cb'](result)
 
         # simulate the executor running this
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            ANY, ANY, rf._retry_task, False, host, 0)
+            ANY, ANY, rf._run_attempt, ANY, rf._retry_task,
+            False, host, 0, True, rf.message.consistency_level)
 
-        rf._retry_task(False, host)
+        args = rf.session.cluster.scheduler.schedule_with_shutdown.call_args.args
+        args[2](*args[3:])
 
         # it should try with a different host
         rf.session._pools.get.assert_called_with(self.host2)
 
-        result = Mock(spec=IsBootstrappingErrorMessage, info={})
-        rf._set_result(host, None, None, result)
+        result = Mock(spec=IsBootstrappingErrorMessage, info={}, custom_payload=None)
+        second_connection = session._pools[self.host2].borrow_connection.return_value[0]
+        second_connection.send_msg.call_args.kwargs['cb'](result)
 
         # simulate the executor running this
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_with(
-            ANY, ANY, rf._retry_task, False, host, 0)
-        rf._retry_task(False, host)
+            ANY, ANY, rf._run_attempt, ANY, rf._retry_task,
+            False, self.host2, 0, True, rf.message.consistency_level)
+        args = rf.session.cluster.scheduler.schedule_with_shutdown.call_args.args
+        args[2](*args[3:])
 
         with pytest.raises(NoHostAvailable):
             rf.result()
@@ -1698,7 +4015,8 @@ class ResponseFutureTests(unittest.TestCase):
 
         # simulate the executor running this
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            ANY, ANY, rf._retry_task, False, host, 0)
+            ANY, ANY, rf._run_attempt, ANY, rf._retry_task,
+            False, host, 0, True, rf.message.consistency_level)
 
         delay = rf.session.cluster.scheduler.schedule_with_shutdown.mock_calls[-1][1][0]
         assert delay > 0.05
@@ -2017,6 +4335,111 @@ class ResponseFutureTests(unittest.TestCase):
         assert any(call.args[0].query == 'USE ks2'
                    for call in connection.send_msg.call_args_list)
 
+    def test_exhausted_retry_waits_for_control_keyspace_waiter(self):
+        session = self._make_fallback_session(keyspace='ks1')
+        connection = self.make_control_connection()
+        connection.get_request_id.side_effect = [7, 8, 9]
+        session.cluster.control_connection._connection = connection
+        first = self.make_response_future(session)
+        assert first.send_request()
+        setup_callback = connection.send_msg.call_args.kwargs['cb']
+
+        query = SimpleStatement('USE ks2')
+        changing = ResponseFuture(session, QueryMessage(query='USE ks2',
+                                  consistency_level=ConsistencyLevel.ONE), query, None)
+        changing._retry(False, ConsistencyLevel.QUORUM, self.host1, 0)
+        assert not changing.send_request(error_no_hosts=False, is_speculative=True)
+        scheduled = session.cluster.scheduler.schedule_with_shutdown.call_args.args
+        scheduled[2](*scheduled[3:])
+        assert not changing._is_final()
+        assert connection.send_msg.call_count == 1
+        token = session.cluster.control_connection._application_keyspace_waiters[0][2]
+        assert changing._pending_attempts == {token}
+        changing.message.consistency_level = ConsistencyLevel.ONE
+
+        setup_callback(Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                            new_keyspace='ks1'))
+        assert not changing._is_final()
+        args = session.submit.call_args.args
+        assert args[1] is token
+        assert changing._pending_attempts == {token}
+        args[0](*args[1:])
+        assert connection.send_msg.call_args.args[0].query == 'USE ks2'
+        assert connection.send_msg.call_args.args[0].consistency_level == ConsistencyLevel.QUORUM
+        connection.send_msg.call_args.kwargs['cb'](Mock(
+            spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE, new_keyspace='ks2'))
+        session._set_keyspace_for_all_pools.call_args.args[1]({})
+        assert changing._final_result is None
+        assert changing._final_exception is None
+
+    def test_busy_control_keyspace_handoff_waits_for_live_response(self):
+        session = self._make_fallback_session(keyspace='ks1')
+        pool, pooled_connection = self.make_owned_pool(self.host1)
+        pooled_connection.features.tablets_routing_v2 = False
+        pooled_connection.features.tablets_routing_v1 = False
+        session._pools[self.host1] = pool
+        rf = self.make_response_future(session)
+        rf.row_factory = lambda names, rows: rows
+        rf._query(self.host1, page_generation=0)
+        response_callback = pooled_connection._requests[1][0]
+        session._pools = {}
+        connection = self.make_control_connection()
+        connection.get_request_id.side_effect = [7, 8]
+        session.cluster.control_connection._connection = connection
+        assert rf.send_request(page_generation=0)
+        setup_callback = connection.send_msg.call_args.kwargs['cb']
+        connection.send_msg.side_effect = ConnectionBusy('application send refused')
+
+        setup_callback(Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                            new_keyspace='ks1'))
+
+        assert not rf._is_final()
+        assert not rf._event.is_set()
+        response_callback(self.make_mock_response(['value'], [(1,)]))
+        assert rf._event.is_set()
+        assert list(rf.result()) == [(1,)]
+        assert pooled_connection.in_flight == 0
+        assert connection.in_flight == 0
+        assert session.cluster.control_connection._application_requests_in_flight == 0
+
+    def test_control_keyspace_waiter_handles_failed_or_stale_handoff(self):
+        for outcome in ('shutdown', 'raise', 'runtime', 'shutdown_runtime', 'timeout'):
+            with self.subTest(outcome=outcome):
+                session = self._make_fallback_session(keyspace='ks1')
+                connection = self.make_control_connection()
+                connection.get_request_id.side_effect = [7, 8]
+                session.cluster.control_connection._connection = connection
+                first = self.make_response_future(session)
+                first.send_request()
+                setup_callback = connection.send_msg.call_args.kwargs['cb']
+                query = SimpleStatement('USE ks2')
+                changing = ResponseFuture(session, QueryMessage(query='USE ks2',
+                                          consistency_level=ConsistencyLevel.ONE), query, None)
+                changing._retry(False, ConsistencyLevel.ONE, self.host1, 0)
+                changing.send_request(error_no_hosts=False, is_speculative=True)
+                scheduled = session.cluster.scheduler.schedule_with_shutdown.call_args.args
+                scheduled[2](*scheduled[3:])
+                assert not changing._is_final()
+
+                if outcome == 'shutdown':
+                    session.submit.return_value = None
+                elif outcome == 'raise':
+                    session.submit.side_effect = ValueError('executor failed')
+                elif outcome in ('runtime', 'shutdown_runtime'):
+                    session.is_shutdown = outcome == 'shutdown_runtime'
+                    session.submit.side_effect = RuntimeError('executor failed')
+                else:
+                    changing._on_timeout(_attempts=3)
+                setup_callback(Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                                    new_keyspace='ks1'))
+                expected = {'shutdown': ConnectionShutdown, 'raise': ValueError,
+                            'runtime': RuntimeError, 'shutdown_runtime': RuntimeError,
+                            'timeout': OperationTimedOut}[outcome]
+                assert isinstance(changing._final_exception, expected)
+                assert not changing._pending_attempts
+                assert not any(call.args[0].query == 'USE ks2'
+                               for call in connection.send_msg.call_args_list)
+
     def test_same_keyspace_sessions_share_pending_initial_setup(self):
         session1 = self._make_fallback_session(keyspace='ks1')
         session2 = self._make_fallback_session(
@@ -2064,6 +4487,41 @@ class ResponseFutureTests(unittest.TestCase):
         assert next_futures[0]._final_exception is None
         assert connection.send_msg.call_count == 2
 
+    def test_control_connection_fallback_sequential_keyspace_changes_and_queries(self):
+        session = self._make_fallback_session(keyspace='ks1')
+        connection = self.make_control_connection()
+        connection.keyspace = 'ks1'
+        control = session.cluster.control_connection
+        control._connection = connection
+
+        def set_keyspace(keyspace, callback):
+            session.keyspace = keyspace
+            callback({})
+
+        session._set_keyspace_for_all_pools.side_effect = set_keyspace
+        for keyspace in ('ks2', 'ks3'):
+            query = SimpleStatement('USE ' + keyspace)
+            future = ResponseFuture(session, QueryMessage(query.query_string,
+                                    ConsistencyLevel.ONE), query, 1)
+            assert future.send_request()
+            connection.send_msg.call_args.kwargs['cb'](Mock(
+                spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                new_keyspace=keyspace))
+            assert future._event.is_set()
+            future.result()
+            assert session.keyspace == connection.keyspace == keyspace
+            assert control._application_keyspace_change is None
+
+            future = self.make_response_future(session)
+            assert future.send_request()
+            assert connection.send_msg.call_args.args[0].query == future.message.query
+            connection.send_msg.call_args.kwargs['cb'](
+                self.make_mock_response(['value'], [(keyspace,)]))
+            assert future._event.is_set()
+            assert future.result().one() == (['value'], [(keyspace,)])
+            assert control._application_requests_in_flight == 0
+            connection.defunct.assert_not_called()
+
     def test_control_connection_fallback_use_blocks_new_session(self):
         session = self._make_fallback_session(keyspace='ks1')
         connection = self.make_control_connection()
@@ -2077,7 +4535,8 @@ class ResponseFutureTests(unittest.TestCase):
 
         same_session_query = self.make_response_future(session)
         assert same_session_query.send_request()
-        assert connection.send_msg.call_args_list[1].args[0] is same_session_query.message
+        sent_message = connection.send_msg.call_args_list[1].args[0]
+        assert vars(sent_message) == vars(same_session_query.message)
 
         other = self._make_fallback_session(cluster=session.cluster, keyspace='ks1')
         other_query = self.make_response_future(other)
@@ -2122,6 +4581,159 @@ class ResponseFutureTests(unittest.TestCase):
             rf.result()
         connection.defunct.assert_called_once()
         assert control_connection._get_application_keyspace() == 'ks1'
+
+    def test_failed_use_cannot_clear_reused_stream_barrier(self):
+        for failure in ('response', 'send'):
+            with self.subTest(failure=failure):
+                session = self._make_fallback_session(keyspace='ks1')
+                connection = self.make_control_connection()
+                connection.keyspace = 'ks1'
+                control = session.cluster.control_connection
+                control._connection = connection
+
+                def make_use_future(keyspace):
+                    query = SimpleStatement('USE ' + keyspace)
+                    return ResponseFuture(
+                        session, QueryMessage(query.query_string, ConsistencyLevel.ONE),
+                        query, 10)
+
+                first = make_use_future('ks2')
+                if failure == 'send':
+                    connection.send_msg.side_effect = ConnectionBusy('busy')
+                    assert first._query_control_connection() is None
+                else:
+                    connection.send_msg.side_effect = partial(self.record_request, connection)
+                    assert first._query_control_connection() == 7
+                    connection._requests.pop(7)[0](Mock(
+                        spec=OverloadedErrorMessage, info={}))
+                assert not first._is_final()
+                assert control._application_keyspace_change is None
+
+                connection.send_msg.side_effect = partial(self.record_request, connection)
+                second = make_use_future('ks3')
+                assert second._query_control_connection() == 7
+                marker = control._application_keyspace_change
+                assert marker is not None
+                assert second._control_connection_keyspace_change is None
+
+                first._set_final_exception(ValueError('first request finished'))
+                assert first._control_connection_keyspace_change is None
+                assert control._application_keyspace_change is marker
+                assert not second._is_final()
+
+                connection._requests.pop(7)[0](Mock(
+                    spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                    new_keyspace='ks3'))
+                assert second._control_connection_keyspace_change is not None
+                assert control._application_keyspace_change is marker
+                second._set_final_exception(ValueError('second request finished'))
+                assert control._application_keyspace_change is None
+
+    def test_in_flight_use_barrier_survives_another_attempts_completion(self):
+        for outcome in ('success', 'error'):
+            with self.subTest(outcome=outcome):
+                session = self.make_owned_pool_session(self.host1)
+                session.keyspace = 'ks1'
+                session.cluster.allow_control_connection_query_fallback = \
+                    ControlConnectionQueryFallback.SkipPoolCreation
+                pool, pooled = self.make_owned_pool(self.host1)
+                session._pools[self.host1] = pool
+                control = session.cluster.control_connection
+                connection = self.make_control_connection()
+                connection.keyspace = 'ks1'
+                control._connection = connection
+
+                def set_keyspace(keyspace, callback):
+                    session.keyspace = keyspace
+                    callback({})
+
+                connection.send_msg.side_effect = partial(self.record_request, connection)
+                session._set_keyspace_for_all_pools.side_effect = set_keyspace
+                query = SimpleStatement('USE ks2', is_idempotent=True)
+                rf = ResponseFuture(session, QueryMessage(query.query_string,
+                                    ConsistencyLevel.ONE), query, 10)
+                assert rf.send_request()
+                pooled_callback = pooled._requests.pop(1)[0]
+                # A remaining pool attempt does not prevent SkipPoolCreation
+                # fallback when another attempt exhausts the shared plan.
+                assert rf.send_request()
+                marker = control._application_keyspace_change
+                assert marker is not None
+                assert connection._requests.get(7) is not None
+                if outcome == 'success':
+                    response = Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                                    new_keyspace='ks2')
+                else:
+                    response = InvalidRequestException(0x2200, 'other attempt failed', None)
+                pooled_callback(response)
+                assert rf._is_final()
+                assert pooled.in_flight == 0
+                assert control._application_keyspace_change is marker
+
+                newer_query = SimpleStatement('USE ks3')
+                newer = ResponseFuture(session, QueryMessage(newer_query.query_string,
+                                       ConsistencyLevel.ONE), newer_query, 10)
+                assert newer._query_control_connection() is _NOT_SET
+                assert isinstance(newer._final_exception, InvalidRequest)
+                connection.send_msg.assert_called_once()
+                previous_keyspace = session.keyspace
+                previous_calls = session._set_keyspace_for_all_pools.call_count
+
+                def retire(error):
+                    assert control._application_keyspace_change is marker
+                    assert rf._callback_lock.acquire(blocking=False)
+                    rf._callback_lock.release()
+                    connection.is_defunct = True
+
+                connection.defunct.side_effect = retire
+                connection._requests.pop(7)[0](Mock(
+                    spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+                    new_keyspace='ks2'))
+                assert session.keyspace == previous_keyspace
+                assert control._application_keyspace == 'ks1'
+                assert session._set_keyspace_for_all_pools.call_count == previous_calls
+                connection.defunct.assert_called_once()
+                assert connection.is_defunct
+                assert control._application_keyspace_change is None
+                assert rf._control_connection_keyspace_change is None
+                assert connection.in_flight == 0
+
+    def test_failed_use_cleanup_cannot_clear_reentrant_replacement_barrier(self):
+        session = self._make_fallback_session(keyspace='ks1')
+        control = session.cluster.control_connection
+        connection = self.make_control_connection()
+        connection.keyspace = 'ks1'
+        control._connection = connection
+        first_query, second_query = SimpleStatement('USE ks2'), SimpleStatement('USE ks3')
+        first = ResponseFuture(session, QueryMessage(first_query.query_string,
+                               ConsistencyLevel.ONE), first_query, 10)
+        second = ResponseFuture(session, QueryMessage(second_query.query_string,
+                                ConsistencyLevel.ONE), second_query, 10)
+        replacement = []
+
+        def send(message, request_id, cb, **kwargs):
+            if message.query == 'USE ks2':
+                cb(Mock(spec=OverloadedErrorMessage, info={}))
+                assert second._query_control_connection() == 7
+                replacement.append(control._application_keyspace_change)
+                raise ConnectionBusy('failed after immediate response')
+            connection._requests[request_id] = (cb, None, None)
+            return 128
+
+        connection.send_msg.side_effect = send
+        assert first._query_control_connection() is None
+        assert control._application_keyspace_change is replacement[0]
+        assert second._control_connection_keyspace_change is None
+        assert not second._is_final()
+        first._set_final_exception(ValueError('first request finished'))
+        assert control._application_keyspace_change is replacement[0]
+        connection._requests.pop(7)[0](Mock(
+            spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+            new_keyspace='ks3'))
+        assert second._control_connection_keyspace_change is not None
+        assert control._application_keyspace_change is replacement[0]
+        second._set_final_result(None)
+        assert control._application_keyspace_change is None
 
     def test_failed_internal_use_cleanup_preserves_reused_stream_barrier(self):
         session = self._make_fallback_session(keyspace='ks2')
@@ -2290,13 +4902,15 @@ class ResponseFutureTests(unittest.TestCase):
         connection.send_msg.call_args_list[0][1]['cb'](
             Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE, new_keyspace='ks1'))
         assert connection.send_msg.call_count == 2
-        assert connection.send_msg.call_args_list[1][0][0] is rf1.message
+        assert vars(connection.send_msg.call_args_list[1][0][0]) == \
+            vars(rf1.message)
 
         connection.send_msg.call_args_list[1][1]['cb'](
             self.make_mock_response(['value'], [('one',)]))
         assert rf2.send_request()
         assert connection.send_msg.call_count == 3
-        assert connection.send_msg.call_args_list[2][0][0] is rf2.message
+        assert vars(connection.send_msg.call_args_list[2][0][0]) == \
+            vars(rf2.message)
         connection.send_msg.call_args_list[2][1]['cb'](
             self.make_mock_response(['value'], [('two',)]))
 
@@ -2320,8 +4934,10 @@ class ResponseFutureTests(unittest.TestCase):
         assert rf2.send_request()
 
         assert connection.send_msg.call_count == 2
-        assert connection.send_msg.call_args_list[0][0][0] is rf1.message
-        assert connection.send_msg.call_args_list[1][0][0] is rf2.message
+        assert vars(connection.send_msg.call_args_list[0][0][0]) == \
+            vars(rf1.message)
+        assert vars(connection.send_msg.call_args_list[1][0][0]) == \
+            vars(rf2.message)
         assert connection.keyspace is None
         assert session1.cluster.control_connection._get_application_keyspace() is None
 
@@ -2575,7 +5191,8 @@ class ResponseFutureTests(unittest.TestCase):
 
         rf3 = self.make_response_future(session)
         assert rf3.send_request()
-        assert connection.send_msg.call_args_list[2][0][0] is rf3.message
+        assert vars(connection.send_msg.call_args_list[2][0][0]) == \
+            vars(rf3.message)
 
     def test_speculative_execute_honours_expired_deadline_without_attempts(self):
         session = self.make_basic_session()
@@ -2593,7 +5210,7 @@ class ResponseFutureTests(unittest.TestCase):
         # already-expired client timeout: the driver's own USE is sent with
         # record_attempt=False, so a retrying USE would otherwise reschedule
         # this callback every 10ms forever and the request would never time out
-        rf._on_timeout.assert_called_once_with()
+        rf._on_timeout.assert_called_once_with(page_generation=0)
         session.cluster.connection_class.create_timer.assert_not_called()
 
     def test_speculative_timeout_during_first_send_orphans_real_stream(self):
@@ -2736,7 +5353,8 @@ class ResponseFutureTests(unittest.TestCase):
 
         connection.send_msg.call_args_list[0][1]['cb'](
             Mock(spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE, new_keyspace='ks1'))
-        assert connection.send_msg.call_args_list[1][0][0] is rf1.message
+        assert vars(connection.send_msg.call_args_list[1][0][0]) == \
+            vars(rf1.message)
 
         # USE drained, but application query remains in flight and keeps the
         # shutdown owner bound.
@@ -2843,7 +5461,8 @@ class ResponseFutureTests(unittest.TestCase):
         assert rf2.send_request()
 
         assert rf2._final_exception is None
-        assert reconnected.send_msg.call_args_list[0][0][0] is rf2.message
+        assert vars(reconnected.send_msg.call_args_list[0][0][0]) == \
+            vars(rf2.message)
         assert session1.cluster.control_connection._get_application_keyspace() is None
 
     def test_control_connection_fallback_when_no_usable_pools(self):
@@ -2860,8 +5479,11 @@ class ResponseFutureTests(unittest.TestCase):
         rf = self.make_response_future(session)
         assert rf.send_request()
 
+        sent_message = connection.send_msg.call_args.args[0]
+        assert sent_message is not rf.message
+        assert vars(sent_message) == vars(rf.message)
         connection.send_msg.assert_called_once_with(
-            rf.message, 7, cb=ANY, encoder=ProtocolHandler.encode_message,
+            sent_message, 7, cb=ANY, encoder=ANY,
             decoder=ProtocolHandler.decode_message, result_metadata=[])
         assert connection.in_flight == 1
         assert rf.attempted_hosts == [control_host]
@@ -2894,15 +5516,20 @@ class ResponseFutureTests(unittest.TestCase):
         connection.send_msg.call_args[1]['cb'](first_response)
 
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            ANY, ANY, rf._retry_task, False, control_host, 0)
+            ANY, ANY, rf._run_attempt, ANY, rf._retry_task,
+            False, control_host, 0, True,
+            rf.message.consistency_level)
 
         # The retry decision must come from the future state, not the live connection reference.
         rf._connection = Mock(is_control_connection=False)
 
-        rf._retry_task(False, control_host)
+        scheduled = rf.session.cluster.scheduler.schedule_with_shutdown
+        args = scheduled.call_args.args
+        args[2](*args[3:])
 
         assert connection.send_msg.call_count == 2
-        assert connection.send_msg.call_args_list[1][0][0] is rf.message
+        assert vars(connection.send_msg.call_args_list[1][0][0]) == \
+            vars(rf.message)
         assert connection.send_msg.call_args_list[1][0][1] == 8
         assert rf.attempted_hosts == [control_host, control_host]
 
@@ -2938,7 +5565,8 @@ class ResponseFutureTests(unittest.TestCase):
         rf.start_fetching_next_page()
 
         assert connection.send_msg.call_count == 2
-        assert connection.send_msg.call_args_list[1][0][0] is rf.message
+        assert vars(connection.send_msg.call_args_list[1][0][0]) == \
+            vars(rf.message)
         assert connection.send_msg.call_args_list[1][0][1] == 8
         assert rf.message.paging_state == b'next-page'
 
@@ -2996,7 +5624,8 @@ class ResponseFutureTests(unittest.TestCase):
         connection.send_msg.call_args_list[1][1]['cb'](prepared_response)
 
         assert connection.send_msg.call_count == 3
-        assert connection.send_msg.call_args_list[2][0][0] is rf.message
+        assert vars(connection.send_msg.call_args_list[2][0][0]) == \
+            vars(rf.message)
         assert connection.send_msg.call_args_list[2][0][1] == 9
 
         expected_result = (['col'], [(1,)])
@@ -3105,7 +5734,8 @@ class ResponseFutureTests(unittest.TestCase):
         prepared_response = Mock(spec=ResultMessage, kind=RESULT_KIND_PREPARED)
         connection.send_msg.call_args_list[1][1]['cb'](prepared_response)
         session.submit.assert_called_once_with(
-            rf._execute_after_prepare, host, connection, None, prepared_response,
+            rf._run_attempt, ANY, rf._execute_after_prepare,
+            host, connection, None, prepared_response,
             expected_query_id=None)
 
     def test_control_connection_fallback_not_used_when_pool_can_serve(self):
@@ -3159,6 +5789,55 @@ class ResponseFutureTests(unittest.TestCase):
         data_pool.return_connection.assert_not_called()
         with pytest.raises(OperationTimedOut):
             rf.result()
+
+    def test_failed_same_page_pool_attempt_preserves_fallback_timeout_cleanup(self):
+        session = self._make_fallback_session(keyspace='ks1')
+        control = session.cluster.control_connection
+        connection = self.make_control_connection()
+        connection.keyspace = 'ks1'
+        connection.get_request_id.side_effect = [7, 8, 9]
+        control._connection = connection
+
+        connection.send_msg.side_effect = partial(self.record_request, connection)
+        future = self.make_response_future(session)
+        assert future.send_request()
+        assert control._application_requests_in_flight == 1
+
+        # A speculative sender selected this host before fallback admission,
+        # but reaches its missing pool after the fallback query was sent.
+        assert future._query(
+            self.host1, page_generation=future._page_generation,
+            is_speculative=True, error_no_hosts=False) is None
+        assert not future._control_connection_query_attempted
+        assert future._connection is connection
+        future._on_timeout()
+        assert future._event.is_set()
+        with pytest.raises(OperationTimedOut):
+            future.result()
+        assert control._application_requests_in_flight == 0
+        assert (connection, 7) in control._application_orphaned_requests
+
+        late_callback = connection._requests.pop(7)[0]
+        with connection.lock:
+            connection.in_flight -= 1
+            connection.orphaned_request_ids.remove(7)
+        late_callback(self.make_mock_response(['value'], [(1,)]))
+        assert not control._application_orphaned_requests
+
+        # A later keyspace change through a recovered pool has completed.
+        # The next fallback query can now update the shared connection.
+        session.keyspace = 'ks2'
+        next_future = self.make_response_future(session)
+        assert next_future.send_request()
+        assert connection.send_msg.call_args.args[0].query == 'USE ks2'
+        connection._requests.pop(8)[0](Mock(
+            spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+            new_keyspace='ks2'))
+        connection._requests.pop(9)[0](
+            self.make_mock_response(['value'], [(2,)]))
+        assert next_future._event.is_set()
+        next_future.result()
+        assert control._application_requests_in_flight == connection.in_flight == 0
 
     def test_control_connection_timeout_does_not_orphan_reused_stream(self):
         session = self._make_fallback_session()
@@ -3643,7 +6322,8 @@ class ResponseFutureTests(unittest.TestCase):
             return
 
         assert connection.send_msg.call_count == 3
-        assert connection.send_msg.call_args_list[2][0][0] is message
+        assert vars(connection.send_msg.call_args_list[2][0][0]) == \
+            vars(message)
         refreshed = cached if batch else prepared
         # Named metadata is equal by value; identity proves it was replaced too.
         assert refreshed.column_metadata is response.bind_metadata
@@ -3767,7 +6447,8 @@ class ResponseFutureTests(unittest.TestCase):
         rf = self.make_response_future(session)
         rf.send_request()
 
-        connection._requests[1] = (connection._handle_options_response, ProtocolHandler.decode_message, [])
+        connection._requests[1] = (connection.send_msg.call_args.kwargs['cb'],
+                                   ProtocolHandler.decode_message, [])
 
         rf._on_timeout()
         pool.return_connection.assert_called_once_with(connection, stream_was_orphaned=True)
@@ -3808,16 +6489,22 @@ class ResponseFutureTests(unittest.TestCase):
         # Verify initial request was sent
         rf.session._pools.get.assert_any_call(specific_host)
         pool.borrow_connection.assert_called_once_with(timeout=ANY, routing_key=ANY, keyspace=ANY, table=ANY, routing_token=ANY)
-        connection.send_msg.assert_called_once_with(rf.message, 1, cb=ANY, encoder=ProtocolHandler.encode_message, decoder=ProtocolHandler.decode_message, result_metadata=[])
+        sent_message = connection.send_msg.call_args.args[0]
+        assert vars(sent_message) == vars(rf.message)
+        connection.send_msg.assert_called_once_with(
+            sent_message, 1, cb=ANY, encoder=ProtocolHandler.encode_message,
+            decoder=ProtocolHandler.decode_message, result_metadata=[])
         
         # Simulate a ServerError response (which triggers RETRY_NEXT_HOST by default)
-        result = Mock(spec=ServerError, info={})
+        result = Mock(spec=ServerError, info={}, custom_payload=None)
         result.to_exception.return_value = result
-        rf._set_result(specific_host, None, None, result)
+        connection.send_msg.call_args.kwargs['cb'](result)
         
         # The retry should be scheduled
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            ANY, ANY, rf._retry_task, False, specific_host, 0)
+            ANY, ANY, rf._run_attempt, ANY, rf._retry_task,
+            False, specific_host, 0, True,
+            rf.message.consistency_level)
         assert 1 == rf._query_retries
         
         # Reset mocks to track next calls
@@ -3827,7 +6514,8 @@ class ResponseFutureTests(unittest.TestCase):
         # Now simulate the retry task executing
         # The bug would cause this to succeed and retry again infinitely
         # The fix ensures the iterator is exhausted after the first try
-        rf._retry_task(False, specific_host)
+        args = rf.session.cluster.scheduler.schedule_with_shutdown.call_args.args
+        args[2](*args[3:])
         
         # After the retry, send_request should be called but the query_plan iterator
         # should be exhausted, so no new request should be sent
@@ -4301,7 +6989,8 @@ class ResponseFutureTests(unittest.TestCase):
 
         connection.send_msg.assert_called_once()
         sent_message = connection.send_msg.call_args[0][0]
-        assert sent_message is rf.message
+        assert sent_message is not rf.message
+        assert vars(sent_message) == vars(rf.message)
         assert rf.message.skip_meta is original_skip_meta
         assert rf.message.result_metadata_id is original_id
         assert not hasattr(rf.message, 'use_metadata_id')

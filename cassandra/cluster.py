@@ -25,6 +25,7 @@ from collections import defaultdict
 from collections.abc import Mapping
 from concurrent.futures import (Future, InvalidStateError, ThreadPoolExecutor,
                                 FIRST_COMPLETED, wait as wait_futures)
+from contextlib import contextmanager
 from copy import copy
 from functools import partial, reduce, wraps
 from itertools import groupby, count, chain
@@ -5756,18 +5757,10 @@ class ControlConnection(object):
                 return
             waiters = self._application_keyspace_waiters
             self._application_keyspace_waiters = []
-        for future, host in waiters:
-            if future._is_final():
-                continue
-            try:
-                submitted = future.session.submit(
-                    future._retry_task, False, host)
-            except Exception as exc:
-                future._set_final_exception(exc)
-            else:
-                if submitted is None:
-                    future._set_final_exception(ConnectionShutdown(
-                        "Session shut down before changing keyspace"))
+        for future, host, token, consistency_level in waiters:
+            future._submit_attempt(
+                future._retry_task, False, host, token[0], True,
+                consistency_level, token=token)
 
     def _discard_application_session(self, session):
         """Undo an attachment when its first fallback request was not sent."""
@@ -7348,17 +7341,26 @@ class ResponseFuture(object):
         # between. Defaults to [] for unprepared statements (no cached metadata).
         self._bound_result_metadata = [] if bound_result_metadata is _NOT_SET else bound_result_metadata
         self._callback_lock = Lock()
-        # Makes the timeout's "no connection yet" decision and send admission
-        # (flag check + _connection assignment) atomic. Taken in three places:
-        # _on_timeout() takes it alone, _query() inside connection.lock, and
-        # _send_control_connection_message() inside the control connection's
-        # _application_query_lock. Nothing is acquired while it is held.
-        self._send_admission_lock = Lock()
+        self._timer_plan_generation = None
+        self._timer_plan_deadline = None
+        # Order pooled sends against page transitions. The lock order is
+        # host -> connection -> admission -> callback; page transitions take
+        # only admission -> callback. Reentrancy permits synchronous transport
+        # hooks to complete an attempt on the sending thread.
+        self._send_admission_lock = RLock()
+        # Custom query-plan iterators may block. Serialize their advancement
+        # without holding the lock needed by response and timeout callbacks.
+        self._query_plan_lock = Lock()
         self._start_time = start_time or time.time()
         self._host = host
         self._routing_token = routing_token
         self._control_connection_query_attempted = False
         self._page_generation = 0
+        # A coalesced failure may be owned by a speculative attempt. Exhausting
+        # its plan is terminal only after every request and queued retry ends.
+        self._pending_attempts = set()
+        self._plan_exhausted = False
+        self._request_callback = None
         self._retry_aborted = False
         self._spec_execution_plan = speculative_execution_plan or self._spec_execution_plan
         self._make_query_plan()
@@ -7384,21 +7386,60 @@ class ResponseFuture(object):
             return None
         return (self._start_time + self.timeout) - time.time()
 
-    def _start_timer(self):
-        if self._timer is None:
-            spec_delay = self._spec_execution_plan.next_execution(self._current_host)
-            if spec_delay >= 0:
-                if self._time_remaining is None or self._time_remaining > spec_delay:
-                    self._timer = self.session.cluster.connection_class.create_timer(spec_delay, self._on_speculative_execute)
-                    return
-            if self._time_remaining is not None:
-                self._timer = self.session.cluster.connection_class.create_timer(self._time_remaining, self._on_timeout)
+    def _start_timer(self, page_generation=None):
+        with self._callback_lock:
+            if self._timer is not None or not self._is_active_page(page_generation):
+                return
+            generation = self._page_generation
+            if self._timer_plan_generation is not None:
+                if self._timer_plan_generation != generation:
+                    # A previous page is still inside the custom plan. Keep
+                    # this page's deadline live without waiting or advancing
+                    # that stateful plan concurrently.
+                    remaining = self._time_remaining
+                    if remaining is not None:
+                        self._timer = self._timer_plan_deadline = \
+                            self.session.cluster.connection_class.create_timer(
+                                max(0, remaining), partial(
+                                    self._on_timeout, page_generation=generation))
+                    # The old plan's finally block wakes this page when it
+                    # releases the reservation. No polling is needed.
+                return
+            self._timer_plan_generation = generation
+            host = self._current_host
+
+        spec_delay = _NOT_SET
+        try:
+            spec_delay = self._spec_execution_plan.next_execution(host)
+        finally:
+            next_generation = None
+            with self._callback_lock:
+                self._timer_plan_generation = None
+                if (spec_delay is not _NOT_SET and self._timer is None and
+                        self._is_active_page(generation)):
+                    remaining = self._time_remaining
+                    if spec_delay >= 0 and (remaining is None or remaining > spec_delay):
+                        self._timer = self.session.cluster.connection_class.create_timer(
+                            spec_delay, partial(self._on_speculative_execute,
+                                                page_generation=generation))
+                    elif remaining is not None:
+                        self._timer = self.session.cluster.connection_class.create_timer(
+                            remaining, partial(self._on_timeout,
+                                               page_generation=generation))
+                elif self._page_generation != generation and self._is_active_page():
+                    if self._timer is not None and self._timer is self._timer_plan_deadline:
+                        self._timer.cancel()
+                        self._timer = self._timer_plan_deadline = None
+                    if self._timer is None:
+                        next_generation = self._page_generation
+            if next_generation is not None:
+                self._start_timer(page_generation=next_generation)
 
     def _cancel_timer(self):
         if self._timer:
             self._timer.cancel()
 
-    def _on_timeout(self, _attempts=0):
+    def _on_timeout(self, _attempts=0, page_generation=None):
         """
         Called when the request associated with this ResponseFuture times out.
 
@@ -7406,6 +7447,10 @@ class ResponseFuture(object):
         the number of times this has happened. This parameter should only be
         set in those cases, where ``_on_timeout`` reschedules itself.
         """
+        with self._callback_lock:
+            if not self._is_active_page(page_generation):
+                return
+            page_generation = self._page_generation
         # PYTHON-853: for short timeouts, we sometimes race with our __init__
         # and fire before any send has set _connection. Record that the
         # timeout fired (_timeout_before_send). Send admission checks the flag
@@ -7415,28 +7460,31 @@ class ResponseFuture(object):
         # call is only a backstop that times the request out if nothing else
         # has; it no longer waits for a connection to orphan. If admission
         # won the lock first, _connection is set and this branch is skipped.
-        with self._send_admission_lock:
+        with self._send_admission_lock, self._callback_lock:
+            if not self._is_active_page(page_generation):
+                return
             defer = self._connection is None and _attempts < 3 and \
                 not self._timeout_before_send
             if defer:
                 self._timeout_before_send = True
-        if defer:
-            self._timer = self.session.cluster.connection_class.create_timer(
-                0.01,
-                partial(self._on_timeout, _attempts=_attempts + 1)
-            )
-            return
+                self._timer = self.session.cluster.connection_class.create_timer(
+                    0.01,
+                    partial(self._on_timeout, _attempts=_attempts + 1,
+                            page_generation=page_generation)
+                )
+                return
+            connection = self._connection
+            request_id = self._req_id
+            expected_callback = self._request_callback
 
         conn_in_flight = None
-        connection = self._connection
         if connection is not None:
-            control_connection_request = \
-                connection.is_control_connection and \
-                self._control_connection_query_attempted
+            control_connection_request = connection.is_control_connection
             if control_connection_request:
                 self._orphan_control_connection_request(
-                    connection, self._req_id)
+                    connection, request_id, page_generation=page_generation)
             pool = None
+            owns_request = False
             try:
                 # A completed fallback stream may already have been reused by
                 # control traffic while this future waits for follow-up work.
@@ -7448,17 +7496,23 @@ class ResponseFuture(object):
                         if self._connection is not connection:
                             retry_timeout = True
                         else:
-                            request_id = self._req_id
                             pool = self._request_pool
-                            connection._requests.pop(request_id)
-                            if (pool and not pool.is_shutdown) or \
-                                    connection.is_control_connection:
+                            with self._callback_lock:
+                                if not self._is_active_page(page_generation):
+                                    return
+                                callback = connection._requests[request_id][0]
+                                owns_request = callback is expected_callback
+                                if owns_request:
+                                    connection._requests.pop(request_id)
+                            if owns_request and ((pool and not pool.is_shutdown) or
+                                                 connection.is_control_connection):
                                 connection.orphaned_request_ids.add(request_id)
                                 if len(connection.orphaned_request_ids) >= \
                                         connection.orphaned_threshold:
                                     connection.orphaned_threshold_reached = True
                     if retry_timeout:
-                        return self._on_timeout(_attempts)
+                        self._on_timeout(_attempts, page_generation)
+                        return
             # PYTHON-1044
             # This request might have been removed from the connection after the latter was defunct by heartbeat.
             # We should still raise OperationTimedOut to reject the future so that the main event thread will not
@@ -7474,7 +7528,8 @@ class ResponseFuture(object):
                     errors = {key: "Client request timeout. See Session.execute[_async](timeout)"}
                 self._set_final_exception(OperationTimedOut(errors, self._current_host,
                                                             timeout=self.timeout,
-                                                            in_flight=connection.in_flight))
+                                                            in_flight=connection.in_flight),
+                                          page_generation=page_generation)
                 return
 
             # Capture connection stats before pool.return_connection() can alter state
@@ -7483,7 +7538,7 @@ class ResponseFuture(object):
             # Fallback requests never belong to a Session pool. A pool may
             # recover while the future waits for retry/schema work, but the
             # completed fallback stream must not be returned through that pool.
-            if pool and not pool.is_shutdown:
+            if pool and not pool.is_shutdown and owns_request:
                 # Do not return the stream ID to the pool yet. We cannot reuse it
                 # because the node might still be processing the query and will
                 # return a late response to that query - if we used such stream
@@ -7510,15 +7565,20 @@ class ResponseFuture(object):
 
         self._set_final_exception(OperationTimedOut(errors, self._current_host,
                                                     timeout=self.timeout,
-                                                    in_flight=conn_in_flight))
+                                                    in_flight=conn_in_flight),
+                                  page_generation=page_generation)
 
     def _schema_agreement_timeout_errors(self):
         connection = self.session.cluster.control_connection._connection
         host = str(connection.endpoint) if connection else 'unknown'
         return {host: "Request timed out while waiting for schema agreement. See Session.execute[_async](timeout) and Cluster.max_schema_agreement_wait."}
 
-    def _on_speculative_execute(self):
-        self._timer = None
+    def _on_speculative_execute(self, page_generation=None):
+        with self._callback_lock:
+            if not self._is_active_page(page_generation):
+                return
+            page_generation = self._page_generation
+            self._timer = None
         if not self._event.is_set():
 
             # Check the deadline before the PYTHON-836 guard below. That guard
@@ -7530,7 +7590,7 @@ class ResponseFuture(object):
             # retrying, the 0.01s reschedule below would spin forever instead of
             # ever timing the request out.
             if self._time_remaining is not None and self._time_remaining <= 0:
-                self._on_timeout()
+                self._on_timeout(page_generation=page_generation)
                 return
 
             # PYTHON-836, the speculative queries must be after
@@ -7541,29 +7601,174 @@ class ResponseFuture(object):
             # We reschedule this call until the main thread has succeeded
             # making a query
             if not self.attempted_hosts:
-                self._timer = self.session.cluster.connection_class.create_timer(0.01, self._on_speculative_execute)
+                with self._callback_lock:
+                    if not self._is_active_page(page_generation):
+                        return
+                    self._timer = self.session.cluster.connection_class.create_timer(
+                        0.01, partial(self._on_speculative_execute,
+                                      page_generation=page_generation))
                 return
 
-            self.send_request(error_no_hosts=False, is_speculative=True)
-            self._start_timer()
+            try:
+                self.send_request(error_no_hosts=False, is_speculative=True,
+                                  page_generation=page_generation)
+            except Exception:
+                log.exception("Exception while executing speculative query")
+            finally:
+                self._start_timer(page_generation=page_generation)
 
-    def _make_query_plan(self):
+    def _make_query_plan(self, publish=True):
         # set the query_plan according to the load balancing policy,
         # or to the explicit host target if set
         if self._host:
             # returning a single value effectively disables retries
-            self.query_plan = iter([self._host])
+            query_plan = iter([self._host])
         else:
             # convert the list/generator/etc to an iterator so that subsequent
             # calls to send_request (which retries may do) will resume where
             # they last left off
-            self.query_plan = iter(self._load_balancer.make_query_plan(self.session.keyspace, self.query))
+            query_plan = iter(self._load_balancer.make_query_plan(self.session.keyspace, self.query))
+        if publish:
+            self.query_plan = query_plan
+        return query_plan
 
-    def send_request(self, error_no_hosts=True, is_speculative=False):
+    def _begin_attempt(self, page_generation=None):
+        # Every request or accepted continuation owns one token until its
+        # callback/worker finishes or submission fails. Transfer queued work
+        # with the same token: an ownership gap can finish an exhausted page.
+        # Other connections remain independent when a failure is coalesced.
+        with self._callback_lock:
+            if not self._is_active_page(page_generation):
+                return None
+            token = (self._page_generation, object())
+            self._pending_attempts.add(token)
+            return token
+
+    def _finish_attempt(self, token=None):
+        with self._callback_lock:
+            if token is not None:
+                if token[0] != self._page_generation:
+                    return
+                self._pending_attempts.discard(token)
+            generation = self._page_generation
+            exhausted = self._plan_exhausted and not self._pending_attempts
+        if exhausted:
+            self._set_final_exception(NoHostAvailable(
+                "Unable to complete the operation against any hosts", self._errors),
+                page_generation=generation, require_no_pending=True)
+
+    def _complete_request(self, cb, token, response):
+        try:
+            cb(response)
+        finally:
+            self._finish_attempt(token)
+
+    def _submit_attempt(self, fn, *args, page_generation=None, token=None, **kwargs):
+        resuming = token is not None
+        if not resuming:
+            token = self._begin_attempt(page_generation)
+        if token is None:
+            return
+        submitted = None
+        try:
+            with self._callback_lock:
+                if not self._is_active_page(token[0]):
+                    return
+            try:
+                submitted = self.session.submit(self._run_attempt, token, fn, *args, **kwargs)
+            except RuntimeError:
+                if resuming or not (self.session.is_shutdown or self.session.cluster.is_shutdown):
+                    raise
+            if submitted is None and (resuming or self.session.is_shutdown or
+                                      self.session.cluster.is_shutdown):
+                self._set_final_exception(ConnectionShutdown(
+                    "Session or cluster was shut down before request work could run"),
+                    page_generation=token[0])
+        except Exception as exc:
+            if not resuming:
+                raise
+            self._set_final_exception(exc, page_generation=token[0])
+        finally:
+            if submitted is None:
+                self._finish_attempt(token)
+
+    def _run_attempt(self, token, fn, *args, **kwargs):
+        try:
+            with self._callback_lock:
+                if not self._is_active_page(token[0]):
+                    return None
+            return fn(*args, **kwargs)
+        finally:
+            self._finish_attempt(token)
+
+    def send_request(self, error_no_hosts=True, page_generation=None,
+                     consistency_level=_NOT_SET, is_speculative=False):
+        token = self._begin_attempt(page_generation)
+        if token is None:
+            return True
+        try:
+            return self._send_request(error_no_hosts, page_generation,
+                                      consistency_level, is_speculative)
+        finally:
+            self._finish_attempt(token)
+
+    def _send_request(self, error_no_hosts=True, page_generation=None,
+                     consistency_level=_NOT_SET, is_speculative=False):
         """ Internal """
         # query_plan is an iterator, so this will resume where we last left
         # off if send_request() is called multiple times
-        for host in self.query_plan:
+        options = dict(page_generation=page_generation,
+                       consistency_level=consistency_level,
+                       error_no_hosts=error_no_hosts,
+                       is_speculative=is_speculative)
+        while True:
+            with self._callback_lock:
+                if not self._is_active_page(page_generation):
+                    return True
+                query_plan = self.query_plan
+                query_plan_lock = self._query_plan_lock
+                selected_generation = self._page_generation
+            # A speculative timer must not wait for another iterator consumer.
+            # Ordinary retries may wait, but completion and shutdown must let
+            # them leave without waiting for arbitrary custom iterator code.
+            while not query_plan_lock.acquire(blocking=False):
+                if is_speculative:
+                    return True
+                with self._callback_lock:
+                    if not self._is_active_page(selected_generation):
+                        return True
+                if self.session.is_shutdown or self.session.cluster.is_shutdown:
+                    self._set_final_exception(ConnectionShutdown(
+                        "Session or cluster shut down before the request could send"),
+                        page_generation=selected_generation)
+                    return True
+                if query_plan_lock.acquire(timeout=0.1):
+                    break
+            try:
+                with self._callback_lock:
+                    if (not self._is_active_page(selected_generation) or
+                            query_plan is not self.query_plan):
+                        return True
+                shutting_down = (self.session.is_shutdown or
+                                 self.session.cluster.is_shutdown)
+                if not shutting_down:
+                    try:
+                        host = next(query_plan)
+                    except StopIteration:
+                        host = _NOT_SET
+                with self._callback_lock:
+                    if (not self._is_active_page(selected_generation) or
+                            query_plan is not self.query_plan):
+                        return True
+            finally:
+                query_plan_lock.release()
+            if shutting_down:
+                self._set_final_exception(ConnectionShutdown(
+                    "Session or cluster shut down before the request could send"),
+                    page_generation=selected_generation)
+                return True
+            if host is _NOT_SET:
+                break
             if not isinstance(host, Host):
                 self._set_final_exception(TypeError(
                     "Query plan entries must be Host instances"))
@@ -7589,26 +7794,36 @@ class ResponseFuture(object):
                           host.host_id)
                 req_id = None
             else:
-                req_id = self._query(host, is_speculative=is_speculative)
+                req_id = self._query(host, **options)
             if req_id is _NOT_SET:
-                # The failed send has a retry decision or final result.
+                # This attempt requires no further host fallback.
                 return True
             if req_id is not None:
-                self._req_id = req_id
+                # _query published its complete timeout target at admission.
                 return True
             if self._timeout_before_send or (
                     self.timeout is not None and
                     time.time() - self._start_time > self.timeout):
-                self._on_timeout()
+                self._on_timeout(page_generation=page_generation)
                 return True
-        if self._timeout_before_send:
+        if self._timeout_before_send or (
+                self._time_remaining is not None and self._time_remaining <= 0):
             # The timeout fired before anything was sent: report it rather
             # than NoHostAvailable, and don't fall back after the deadline.
-            self._on_timeout()
+            self._on_timeout(_attempts=3, page_generation=page_generation)
+            return True
+        if (page_generation is not None and
+                not self._is_active_page(page_generation)):
             return True
         if error_no_hosts:
             if self._fallback_to_control_connection():
-                req_id = self._query_control_connection()
+                if consistency_level is _NOT_SET:
+                    req_id = self._query_control_connection(page_generation=page_generation)
+                else:
+                    message = copy(self.message)
+                    message.consistency_level = consistency_level
+                    req_id = self._query_control_connection(
+                        message=message, page_generation=page_generation)
                 if req_id is _NOT_SET:
                     return True
                 if req_id is not None:
@@ -7621,10 +7836,12 @@ class ResponseFuture(object):
                 # The timeout fired after the check above: before the fallback
                 # was admitted, or while deciding not to fall back. Nothing
                 # was sent, so report the timeout, not NoHostAvailable.
-                self._on_timeout()
+                self._on_timeout(page_generation=page_generation)
                 return True
-            self._set_final_exception(NoHostAvailable(
-                "Unable to complete the operation against any hosts", self._errors))
+        with self._callback_lock:
+            if (page_generation is None or
+                    page_generation == self._page_generation):
+                self._plan_exhausted = True
         return False
 
     def _has_usable_node_pool(self):
@@ -7701,7 +7918,8 @@ class ResponseFuture(object):
                         request_key, None) is not None:
                     control_connection._application_requests_in_flight -= 1
 
-    def _orphan_control_connection_request(self, connection, request_id):
+    def _orphan_control_connection_request(self, connection, request_id,
+                                           page_generation=None):
         """Detach a timed-out fallback request while retaining a safe barrier.
 
         The normal response callback owns the application in-flight count. A
@@ -7712,7 +7930,10 @@ class ResponseFuture(object):
         """
         control_connection = self.session.cluster.control_connection
         with control_connection._application_query_lock:
-            with connection.lock:
+            with connection.lock, self._callback_lock:
+                if (page_generation is not None and
+                        not self._is_active_page(page_generation)):
+                    return False
                 orphan_key = (connection, request_id)
                 expected_callback = self._control_connection_requests.get(
                     orphan_key)
@@ -7766,51 +7987,65 @@ class ResponseFuture(object):
             re.match(r'^(?:\s|(?:--|//)[^\r\n]*(?:\r\n?|\n|$)|/\*(?:[^*]|\*(?!/))*\*/)*USE\b',
                      query, re.IGNORECASE) is not None
 
-    def _control_connection_failed(self):
-        self._set_final_exception(NoHostAvailable(
-            "Unable to complete the operation against any hosts", self._errors))
+    def _control_connection_failed(self, page_generation=None):
+        if self._timeout_before_send:
+            self._on_timeout(page_generation=page_generation)
+            return
+        with self._callback_lock:
+            if not self._is_active_page(page_generation):
+                return
+            self._plan_exhausted = True
+        self._finish_attempt()
 
     def _set_control_connection_keyspace(self, connection, host, keyspace,
                                          message=None, cb=None, request_id=_NOT_SET,
-                                         provisional_session=None, keyspace_change=None):
+                                         provisional_session=None,
+                                         page_generation=None, keyspace_change=None):
         use_message = QueryMessage(
             query='USE %s' % protect_name(keyspace),
             consistency_level=ConsistencyLevel.ONE)
         control_connection = self.session.cluster.control_connection
 
         def keyspace_set(response):
-            if isinstance(response, ResultMessage) and response.kind == RESULT_KIND_SET_KEYSPACE:
+            keyspace_changed = (isinstance(response, ResultMessage) and
+                                response.kind == RESULT_KIND_SET_KEYSPACE)
+            if keyspace_changed:
                 connection.keyspace = response.new_keyspace
-                control_connection._finish_internal_keyspace_change(
-                    connection, request_id, keyspace_change)
+            control_connection._finish_internal_keyspace_change(
+                connection, request_id, keyspace_change)
+            if keyspace_changed:
                 if self._send_control_connection_message(
-                        message=message, cb=cb, connection=connection, host=host) is None:
-                    self._control_connection_failed()
+                        message=message, cb=cb,
+                        connection=connection, host=host,
+                        page_generation=page_generation) is None:
+                    self._control_connection_failed(page_generation)
             elif isinstance(response, ErrorMessage):
-                control_connection._finish_internal_keyspace_change(
-                    connection, request_id, keyspace_change)
-                self._set_final_exception(response.to_exception())
+                self._set_final_exception(response.to_exception(),
+                                          page_generation=page_generation)
             elif isinstance(response, ConnectionException):
-                control_connection._finish_internal_keyspace_change(
-                    connection, request_id, keyspace_change)
-                self._errors[host] = response
+                with self._callback_lock:
+                    if (self._is_final() or
+                            page_generation != self._page_generation):
+                        return
+                    self._errors[host] = response
                 # Known limitation: this retry goes around the RetryPolicy and
                 # _query_retries, because both are keyed to the user's statement
                 # and this is the driver's own USE. It also has no backoff, so a
                 # flapping control connection re-sends USE until the client-side
                 # timeout fires instead of failing fast. Routing it through the
                 # retry machinery shared with the pooled path would be the fix.
-                self.session.submit(self._retry_task, False, host)
+                self._submit_attempt(
+                    self._retry_task, False, host, page_generation, True,
+                    getattr(message, 'consistency_level', _NOT_SET),
+                    page_generation=page_generation)
             elif isinstance(response, Exception):
-                control_connection._finish_internal_keyspace_change(
-                    connection, request_id, keyspace_change)
-                self._set_final_exception(response)
+                self._set_final_exception(response,
+                                          page_generation=page_generation)
             else:
-                control_connection._finish_internal_keyspace_change(
-                    connection, request_id, keyspace_change)
                 self._set_final_exception(ConnectionException(
                     "Unexpected response while setting the control-connection keyspace: %r" %
-                    (response,), connection.endpoint))
+                    (response,), connection.endpoint),
+                    page_generation=page_generation)
 
         # Returns None on failure; send_request() turns that into the final
         # NoHostAvailable. Setting it here too would fire every errback twice.
@@ -7818,11 +8053,12 @@ class ResponseFuture(object):
             message=use_message, cb=keyspace_set, connection=connection,
             host=host, record_attempt=False, record_size=False,
             request_id=request_id,
-            provisional_session=provisional_session)
-        if sent is None:
+            provisional_session=provisional_session,
+            page_generation=page_generation)
+        if sent is None or sent is _NOT_SET:
             control_connection._finish_internal_keyspace_change(
                 connection, request_id, keyspace_change)
-            if not self._timeout_before_send and \
+            if sent is None and not self._timeout_before_send and \
                     not isinstance(self._errors.get(host),
                                    (ConnectionBusy, NoConnectionsAvailable)):
                 connection.defunct(ConnectionException(
@@ -7832,9 +8068,13 @@ class ResponseFuture(object):
     def _send_control_connection_message(self, message=None, cb=None, connection=None,
                                          host=None, record_attempt=True, record_size=True,
                                          request_id=_NOT_SET,
-                                         provisional_session=None):
-        if message is None:
-            message = self.message
+                                         provisional_session=None,
+                                         page_generation=None):
+        with self._callback_lock:
+            if page_generation is None:
+                page_generation = self._page_generation
+            if message is None:
+                message = copy(self.message)
 
         if connection is None:
             control_connection = self.session.cluster.control_connection
@@ -7845,47 +8085,88 @@ class ResponseFuture(object):
 
         if host is None:
             host = self.session.cluster.get_control_connection_host() or connection.endpoint
-        self._current_host = host
 
         if request_id is _NOT_SET:
             request_id = None
         request_sent = False
-        previous_req_id = self._req_id
+        previous_target = None
+        request_token = self._begin_attempt(page_generation)
         try:
+            with self._callback_lock:
+                stale = not self._is_active_page(page_generation)
+                if stale and request_id is None:
+                    return _NOT_SET
+                if not stale:
+                    self._current_host = host
             if request_id is None:
                 request_id = self._borrow_control_connection(connection)
             result_meta = self._bound_result_metadata
             if cb is None:
                 cb = partial(self._set_result, host, connection, None,
-                             page_generation=self._page_generation)
+                             page_generation=page_generation,
+                             request_token=request_token,
+                             consistency_level=getattr(
+                                 message, 'consistency_level', _NOT_SET))
+            else:
+                cb = partial(self._complete_request, cb, request_token)
             cb = partial(self._handle_control_connection_response, connection,
                          request_id, cb)
 
             control_connection = self.session.cluster.control_connection
             with control_connection._application_query_lock:
                 self._control_connection_requests[(connection, request_id)] = cb
-                # Same admission rule as _query(): once the timeout has fired
-                # without a connection, nothing may be sent. The finally block
-                # below finds the registered request and returns its stream.
-                with self._send_admission_lock:
+            # Match send_msg's transport checks before expensive encoding.
+            # send_msg rechecks them after encoding and final page admission.
+            if connection.is_defunct:
+                error = "Connection to %s is defunct" % connection.endpoint
+                if connection.last_error:
+                    error += ": %s" % connection.last_error
+                raise ConnectionShutdown(error)
+            elif connection.is_closed:
+                error = "Connection to %s is closed" % connection.endpoint
+                if connection.last_error:
+                    error += ": %s" % connection.last_error
+                raise ConnectionShutdown(error)
+            elif not connection._socket_writable:
+                raise ConnectionBusy("Connection %s is overloaded" % connection.endpoint)
+            # Custom encoding may block. Keep it outside admission so the
+            # deadline can complete; recheck the page before pushing bytes.
+            encoded_message = self._protocol_handler.encode_message(
+                message, request_id, connection.protocol_version,
+                compressor=connection.compressor,
+                allow_beta_protocol_version=connection.allow_beta_protocol_version,
+                protocol_features=connection.features)
+
+            def encode_message(*args, **kwargs):
+                return encoded_message
+
+            with self._send_admission_lock:
+                with self._callback_lock:
+                    if not self._is_active_page(page_generation):
+                        return _NOT_SET
+                    if self._time_remaining is not None and self._time_remaining <= 0:
+                        self._timeout_before_send = True
                     if self._timeout_before_send:
                         return None
+                    previous_target = (self._current_host, self._connection,
+                                       self._request_pool, self._req_id,
+                                       self._request_callback)
+                    self._current_host = host
                     self._connection = connection
                     self._request_pool = None
                     self._req_id = request_id
+                    self._request_callback = cb
 
-            log.debug("No usable node pools; falling back to control connection for host %s", host)
-            # Record the stream id before sending, not after. The reply can be
-            # handled re-entrantly - a SET_KEYSPACE reply sends the real message
-            # from inside this very call - and that nested send has to be the one
-            # whose id survives in _req_id. Assigning after send_msg() would put
-            # the already-completed USE id there instead, so a later timeout would
-            # orphan the wrong stream and leave the real request in _requests.
-            encoded_size = connection.send_msg(message, request_id, cb=cb,
-                                               encoder=self._protocol_handler.encode_message,
-                                               decoder=self._protocol_handler.decode_message,
-                                               result_metadata=result_meta)
-            request_sent = True
+                log.debug("No usable node pools; falling back to control "
+                          "connection for host %s", host)
+                # Publish the target before a synchronous USE response can
+                # replace it with the application request's target.
+                encoded_size = connection.send_msg(
+                    message, request_id, cb=cb,
+                    encoder=encode_message,
+                    decoder=self._protocol_handler.decode_message,
+                    result_metadata=result_meta)
+                request_sent = True
             control_connection._finish_application_session_claim(
                 provisional_session, True)
             if record_size:
@@ -7915,17 +8196,30 @@ class ResponseFuture(object):
                 self._metrics.on_connection_error()
         finally:
             if request_id is not None and not request_sent:
-                # Only roll back if nothing else claimed _req_id in the meantime,
-                # so a nested send that did go out keeps its id.
-                if self._req_id == request_id:
-                    self._req_id = previous_req_id
+                with self._send_admission_lock, self._callback_lock:
+                    if (previous_target is not None and
+                            self._request_callback is cb and
+                            page_generation == self._page_generation):
+                        (self._current_host, self._connection,
+                         self._request_pool, self._req_id,
+                         self._request_callback) = previous_target
                 self._release_control_connection_request(
                     connection, request_id, provisional_session)
+            if not request_sent:
+                self._finish_attempt(request_token)
 
         return None
 
-    def _query_control_connection(self, message=None, cb=None, connection=None, host=None):
-        self._control_connection_query_attempted = True
+    def _query_control_connection(self, message=None, cb=None, connection=None,
+                                  host=None, page_generation=None):
+        with self._callback_lock:
+            if page_generation is None:
+                page_generation = self._page_generation
+            if not self._is_active_page(page_generation):
+                return _NOT_SET
+            self._control_connection_query_attempted = True
+            if message is None:
+                message = copy(self.message)
         control_connection = self.session.cluster.control_connection
         if control_connection is None:
             self._errors['control connection'] = ConnectionException(
@@ -7933,10 +8227,15 @@ class ResponseFuture(object):
             return None
 
         changing_keyspace = self._is_keyspace_change_query(message)
+        keyspace_change = None
+        transport_change = None
 
         # Hold this from binding through borrowing a stream. The send itself is
         # outside the lock so protocol encoding cannot stall response handling.
         with control_connection._application_query_lock:
+            with self._callback_lock:
+                if not self._is_active_page(page_generation):
+                    return _NOT_SET
             if connection is None:
                 connection = control_connection._connection
             if connection is None:
@@ -7947,7 +8246,9 @@ class ResponseFuture(object):
             keyspace = self.session.keyspace or None
             if changing_keyspace and control_connection._application_keyspace_change is not None:
                 self._set_final_exception(InvalidRequest(
-                    "A control-connection keyspace change is already in progress"))
+                    "A control-connection keyspace change is already "
+                    "in progress"),
+                    page_generation=page_generation)
                 return _NOT_SET
             if changing_keyspace and \
                     control_connection._application_internal_keyspace_changes:
@@ -7956,17 +8257,22 @@ class ResponseFuture(object):
                        control_connection._application_sessions):
                     self._set_final_exception(InvalidRequest(
                         "Cannot change keyspace while another Session uses "
-                        "control-connection fallback"))
+                        "control-connection fallback"),
+                        page_generation=page_generation)
                 else:
-                    control_connection._application_keyspace_waiters.append(
-                        (self, host))
+                    token = self._begin_attempt(page_generation)
+                    if token is not None:
+                        control_connection._application_keyspace_waiters.append(
+                            (self, host, token,
+                             getattr(message, 'consistency_level', _NOT_SET)))
                 return _NOT_SET
             new_application_session = \
                 self.session not in control_connection._application_sessions
             conflict = control_connection._attach_application_session(
                 keyspace, self.session, changing_keyspace=changing_keyspace)
             if conflict is not None:
-                self._set_final_exception(InvalidRequest(conflict))
+                self._set_final_exception(InvalidRequest(conflict),
+                                          page_generation=page_generation)
                 return _NOT_SET
             provisional_session = \
                 control_connection._begin_application_session_claim(
@@ -8002,52 +8308,88 @@ class ResponseFuture(object):
                                   keyspace is not None and
                                   connection.keyspace != keyspace)
             if changing_keyspace:
-                control_connection._begin_application_keyspace_change(
-                    connection, request_id, self.session)
+                with self._callback_lock:
+                    if (not self._is_final() and
+                            page_generation == self._page_generation):
+                        control_connection._begin_application_keyspace_change(
+                            connection, request_id, self.session)
+                        transport_change = control_connection._application_keyspace_change
+                        keyspace_change = (control_connection, connection, request_id)
             elif needs_internal_use:
                 keyspace_change = object()
                 control_connection._application_internal_keyspace_changes[
                     (connection, request_id)] = keyspace_change
 
         if changing_keyspace:
+            def finish_keyspace_change():
+                # The physical USE owns its barrier until its response. The
+                # future owns it only while applying a successful response to
+                # its pools. Neither owner may release a replacement's marker.
+                with control_connection._application_query_lock, self._callback_lock:
+                    if self._control_connection_keyspace_change is keyspace_change:
+                        self._control_connection_keyspace_change = None
+                    if (transport_change is not None and
+                            control_connection._application_keyspace_change is transport_change):
+                        control_connection._finish_application_keyspace_change(
+                            connection, request_id)
+
             def keyspace_changed(response):
                 if isinstance(response, ResultMessage):
                     if response.kind != RESULT_KIND_SET_KEYSPACE:
                         error = ConnectionException(
                             "Unexpected result while changing control-connection keyspace",
                             connection.endpoint)
-                        control_connection._finish_application_keyspace_change(
-                            connection, request_id)
-                        connection.defunct(error)
-                        self._set_final_exception(error)
+                        try:
+                            connection.defunct(error)
+                        finally:
+                            finish_keyspace_change()
+                        self._set_final_exception(
+                            error, page_generation=page_generation)
                         return
-                    with control_connection._application_query_lock:
-                        control_connection._application_keyspace = response.new_keyspace
-                        self.session.keyspace = response.new_keyspace
-                    # _set_result may finish through an asynchronous pool
-                    # callback. Hold the marker until the future completes.
-                    self._control_connection_keyspace_change = \
-                        (control_connection, connection, request_id)
+                    with control_connection._application_query_lock, self._callback_lock:
+                        active = (self._is_active_page(page_generation) and
+                                  transport_change is not None and
+                                  control_connection._application_keyspace_change is transport_change)
+                        if active:
+                            # Keep the marker through asynchronous pool updates,
+                            # and release it before publishing final completion.
+                            self._control_connection_keyspace_change = keyspace_change
+                            control_connection._application_keyspace = response.new_keyspace
+                            self.session.keyspace = response.new_keyspace
+                    if not active:
+                        # The USE may have changed the physical connection,
+                        # but another attempt already settled this future.
+                        # Retire it before releasing the barrier rather than
+                        # changing the Session from a late response.
+                        try:
+                            connection.defunct(ConnectionException(
+                                "Control-connection keyspace change completed after its request",
+                                connection.endpoint))
+                        finally:
+                            finish_keyspace_change()
+                        return
                 else:
-                    control_connection._finish_application_keyspace_change(
-                        connection, request_id)
+                    finish_keyspace_change()
                 try:
                     self._set_result(host, connection, None, response,
-                                     page_generation=self._page_generation)
+                                     page_generation=page_generation,
+                                     consistency_level=getattr(
+                                         message, 'consistency_level',
+                                         _NOT_SET))
                 finally:
                     if self._is_final():
                         # A timeout may have finalized this future while the
                         # reply callback was already running.
-                        self._finish_control_connection_keyspace_change()
+                        finish_keyspace_change()
 
             sent = self._send_control_connection_message(
                 message=message, cb=keyspace_changed, connection=connection,
                 host=host, request_id=request_id,
-                provisional_session=provisional_session)
-            if sent is None:
-                control_connection._finish_application_keyspace_change(
-                    connection, request_id)
-                if not self._timeout_before_send and \
+                provisional_session=provisional_session,
+                page_generation=page_generation)
+            if sent is None or sent is _NOT_SET:
+                finish_keyspace_change()
+                if sent is None and not self._timeout_before_send and \
                         not isinstance(self._errors.get(host),
                                        (ConnectionBusy, NoConnectionsAvailable)):
                     connection.defunct(ConnectionException(
@@ -8059,28 +8401,51 @@ class ResponseFuture(object):
             return self._send_control_connection_message(
                 message=message, cb=cb, connection=connection, host=host,
                 request_id=request_id,
-                provisional_session=provisional_session)
+                provisional_session=provisional_session,
+                page_generation=page_generation)
 
         if needs_internal_use:
             return self._set_control_connection_keyspace(
                 connection, host, keyspace, message=message, cb=cb,
                 request_id=request_id,
-                provisional_session=provisional_session, keyspace_change=keyspace_change)
+                provisional_session=provisional_session,
+                page_generation=page_generation, keyspace_change=keyspace_change)
 
         return self._send_control_connection_message(
             message=message, cb=cb, connection=connection, host=host,
             request_id=request_id,
-            provisional_session=provisional_session)
+            provisional_session=provisional_session,
+            page_generation=page_generation)
 
-    def _query(self, host, message=None, cb=None, is_speculative=False):
+    def _query(self, host, message=None, cb=None, error_no_hosts=True,
+               page_generation=None, consistency_level=_NOT_SET,
+               is_speculative=False, cb_factory=None):
+        token = self._begin_attempt(page_generation)
+        if token is None:
+            return _NOT_SET if page_generation is not None else None
+        try:
+            return self._query_attempt(host, message, cb, error_no_hosts,
+                                       page_generation, consistency_level,
+                                       is_speculative, cb_factory)
+        finally:
+            self._finish_attempt(token)
+
+    def _query_attempt(self, host, message=None, cb=None, error_no_hosts=True,
+                       page_generation=None, consistency_level=_NOT_SET,
+                       is_speculative=False, cb_factory=None):
         if message is None:
             message = self.message
 
-        use_retry_policy = (not is_speculative and
-                            message is self.message and cb is None and
+        application_request = (message is self.message and cb is None and
+                               cb_factory is None)
+        use_retry_policy = (not is_speculative and application_request and
                             not isinstance(message, PrepareMessage))
 
-        self._control_connection_query_attempted = False
+        with self._callback_lock:
+            if (page_generation is not None and
+                    not self._is_active_page(page_generation)):
+                return _NOT_SET
+            self._control_connection_query_attempted = False
 
         pool = self.session._pools.get(host)
         if not pool:
@@ -8093,15 +8458,15 @@ class ResponseFuture(object):
             self._errors[host] = ConnectionException("Pool does not belong to host endpoint")
             return None
 
-        previous_host = self._current_host
-        previous_connection = self._connection
         connection = None
-        previous_req_id = self._req_id
-        previous_pool = self._request_pool
+        previous_target = None
         request_id = None
         request_sent = False
         replace_failed_connection = False
         send_error = None
+        expected_generation = page_generation
+        timed_out = False
+        request_token = None
         try:
             # TODO get connectTimeout from cluster settings
             borrow_options = {'allow_keyspace_mismatch': True} \
@@ -8135,33 +8500,55 @@ class ResponseFuture(object):
                     self._errors[host] = ConnectionException(
                         "Pool changed while borrowing connection")
                     return None
-                result_meta = self._bound_result_metadata
-
-                if cb is None:
-                    cb = partial(self._set_result, host, connection, pool,
-                                 page_generation=self._page_generation)
-
-                # Timeout reads the connection, pool, and stream under this
-                # lock. Keep it until send_msg installs the callback, so it
-                # cannot observe a partial attempt or an unsent stream.
+                # The connection lock precedes admission and callback locks.
+                # Keep admission through encoding/push so a page transition
+                # cannot change the callback generation or timeout target.
                 connection.lock.acquire()
                 try:
                     with self._send_admission_lock:
-                        if self._timeout_before_send:
-                            # The timeout already fired; the finally below
-                            # gives the stream back and send_request() times
-                            # out.
-                            return None
-                        self._current_host = host
-                        self._connection = connection
-                    self._request_pool = pool
-                    self._req_id = request_id
-                    self.request_encoded_size = connection.send_msg(
-                        message, request_id, cb=cb,
-                        encoder=self._protocol_handler.encode_message,
-                        decoder=self._protocol_handler.decode_message,
-                        result_metadata=result_meta)
-                    request_sent = True
+                        with self._callback_lock:
+                            if not self._is_active_page(expected_generation):
+                                return _NOT_SET
+                            page_generation = self._page_generation
+                            remaining = self._time_remaining
+                            if remaining is not None and remaining <= 0:
+                                timed_out = True
+                                return _NOT_SET
+                            if self._timeout_before_send:
+                                return None
+                            result_meta = self._bound_result_metadata
+                            if application_request:
+                                message = copy(message)
+                                if consistency_level is not _NOT_SET:
+                                    message.consistency_level = consistency_level
+                            request_token = (page_generation, object())
+                            self._pending_attempts.add(request_token)
+                            if cb_factory is not None:
+                                cb = cb_factory(host, connection, pool)
+                            if cb is None:
+                                cb = partial(self._set_result, host, connection, pool,
+                                             page_generation=page_generation,
+                                             request_token=request_token,
+                                             error_no_hosts=error_no_hosts,
+                                             is_speculative=is_speculative,
+                                             consistency_level=getattr(
+                                                 message, 'consistency_level', None))
+                            else:
+                                cb = partial(self._complete_request, cb, request_token)
+                            previous_target = (self._current_host, self._connection,
+                                               self._req_id, self._request_pool,
+                                               self._request_callback)
+                            self._current_host = host
+                            self._connection = connection
+                            self._request_pool = pool
+                            self._req_id = request_id
+                            self._request_callback = cb
+                        self.request_encoded_size = connection.send_msg(
+                            message, request_id, cb=cb,
+                            encoder=self._protocol_handler.encode_message,
+                            decoder=self._protocol_handler.decode_message,
+                            result_metadata=result_meta)
+                        request_sent = True
                 finally:
                     connection.lock.release()
             self.attempted_hosts.append(host)
@@ -8179,17 +8566,16 @@ class ResponseFuture(object):
             if self._metrics is not None:
                 self._metrics.on_connection_error()
             if connection:
-                with connection.lock:
+                with connection.lock, self._send_admission_lock, self._callback_lock:
                     connection._requests.pop(request_id, None)
                     connection.orphaned_request_ids.discard(request_id)
-                    if self._connection is connection and self._req_id == request_id:
-                        self._connection = previous_connection
-                        self._current_host = previous_host
-                        self._req_id = previous_req_id
-                        self._request_pool = previous_pool
-                # Claim the local failure before defunct() invokes other
-                # requests' callbacks. If another reactor already retired the
-                # connection, preserve its host failure reporting.
+                    if (self._connection is connection and self._req_id == request_id and
+                            self._request_callback is cb and
+                            page_generation == self._page_generation):
+                        (self._current_host, self._connection, self._req_id,
+                         self._request_pool, self._request_callback) = previous_target
+                # Preserve host failure reporting if another reactor already
+                # retired this connection before this local failure.
                 connection.defunct(exc)
                 with connection.lock:
                     replace_failed_connection = (
@@ -8201,12 +8587,13 @@ class ResponseFuture(object):
                 self._metrics.on_connection_error()
         finally:
             if request_id is not None and not request_sent:
-                with connection.lock:
-                    if self._connection is connection and self._req_id == request_id:
-                        self._connection = previous_connection
-                        self._current_host = previous_host
-                        self._req_id = previous_req_id
-                        self._request_pool = previous_pool
+                with connection.lock, self._send_admission_lock, self._callback_lock:
+                    if (previous_target is not None and
+                            self._connection is connection and self._req_id == request_id and
+                            self._request_callback is cb and
+                            page_generation == self._page_generation):
+                        (self._current_host, self._connection, self._req_id,
+                         self._request_pool, self._request_callback) = previous_target
                     connection._requests.pop(request_id, None)
                     connection.orphaned_request_ids.discard(request_id)
                     if not connection.is_defunct:
@@ -8215,15 +8602,34 @@ class ResponseFuture(object):
                     pool.return_connection(connection, replace_only=True)
                 else:
                     pool.return_connection(connection)
+                self._finish_attempt(request_token)
+
+            if timed_out:
+                self._on_timeout(_attempts=3, page_generation=page_generation)
 
         if send_error is not None and use_retry_policy:
-            # A failed push may have queued bytes. Finish cleanup before
-            # consulting application policy or scheduling a retry.
+            # A failed push may already have queued request bytes. Finish
+            # cleanup before consulting policy or scheduling a retry.
             try:
-                if not self._is_final():
-                    self._handle_request_error(send_error, host)
+                if (not self._is_final() and
+                        page_generation == self._page_generation):
+                    remaining = self._time_remaining
+                    if remaining is not None and remaining <= 0:
+                        self._on_timeout(page_generation=page_generation)
+                    else:
+                        self._handle_request_error(
+                            send_error, host, getattr(message, 'consistency_level', None),
+                            page_generation=page_generation,
+                            error_no_hosts=error_no_hosts)
             except Exception as exc:
-                self._set_final_exception(exc)
+                remaining = self._time_remaining
+                if (not self._is_final() and
+                        page_generation == self._page_generation and
+                        remaining is not None and remaining <= 0):
+                    self._on_timeout(page_generation=page_generation)
+                else:
+                    self._set_final_exception(
+                        exc, page_generation=page_generation)
             return _NOT_SET
 
         return None
@@ -8292,12 +8698,16 @@ class ResponseFuture(object):
             if self._retry_aborted:
                 raise self._final_exception
 
-        self._make_query_plan()
-
-        with self._callback_lock:
+        query_plan = self._make_query_plan(publish=False)
+        with self._send_admission_lock, self._callback_lock:
             if self._retry_aborted:
                 raise self._final_exception
             self._page_generation += 1
+            self.query_plan = query_plan
+            self._query_plan_lock = Lock()
+            self._start_time = time.time()
+            self._pending_attempts.clear()
+            self._plan_exhausted = False
             self.message.paging_state = self._paging_state
             self._event.clear()
             self._final_result = _NOT_SET
@@ -8308,16 +8718,30 @@ class ResponseFuture(object):
         self.send_request()
 
     def _reprepare(self, prepare_message, host, connection, pool, query_id=None):
-        cb = partial(self.session.submit, self._execute_after_prepare, host, connection, pool,
-                     expected_query_id=query_id)
         if pool is None and connection is not None and connection.is_control_connection:
+            cb = partial(self._reprepare_response, host, connection, pool,
+                         expected_query_id=query_id)
             request_id = self._query_control_connection(prepare_message, cb=cb,
                                                         connection=connection, host=host)
         else:
-            request_id = self._query(host, prepare_message, cb=cb)
+            request_id = self._query(
+                host, prepare_message,
+                cb_factory=partial(self._reprepare_callback,
+                                   expected_query_id=query_id))
         if request_id is None:
             # try to submit the original prepared statement on some other host
             self.send_request()
+
+    def _reprepare_callback(self, host, connection, pool, expected_query_id=None):
+        return partial(self._reprepare_response, host, connection, pool,
+                       expected_query_id=expected_query_id)
+
+    def _reprepare_response(self, host, connection, pool, response, expected_query_id=None):
+        # Release pooled capacity even if completion skips the executor task.
+        if pool:
+            pool.return_connection(connection)
+        self._submit_attempt(self._execute_after_prepare, host, connection, None,
+                             response, expected_query_id=expected_query_id)
 
     def _cache_tablet_from_payload(self, payload_key, ctype):
         """
@@ -8340,10 +8764,11 @@ class ResponseFuture(object):
         if tablet and keyspace and table:
             self.session.cluster.metadata._tablets.add_tablet(keyspace, table, tablet)
 
-    def _set_result(self, host, connection, pool, response, page_generation=None):
+    def _set_result(self, host, connection, pool, response, page_generation=None,
+                    consistency_level=_NOT_SET, error_no_hosts=True,
+                    is_speculative=False, request_token=None):
         try:
-            if self._is_final() or (page_generation is not None and
-                                    page_generation != self._page_generation):
+            if not self._is_active_page(page_generation):
                 # Late (e.g. speculative) or previous-page response: only give the connection back.
                 if pool and not pool.is_shutdown:
                     pool.return_connection(connection)
@@ -8352,6 +8777,9 @@ class ResponseFuture(object):
             self.coordinator_host = host
             if pool and not pool.is_shutdown:
                 pool.return_connection(connection)
+
+            if not self._is_active_page(page_generation):
+                return
 
             trace_id = getattr(response, 'trace_id', None)
             if trace_id:
@@ -8393,20 +8821,20 @@ class ResponseFuture(object):
                     # self._set_keyspace_completed() being called in the
                     # event loop thread.
                     if session:
+                        token = self._begin_attempt(page_generation)
                         session._set_keyspace_for_all_pools(
-                            response.new_keyspace, self._set_keyspace_completed)
+                            response.new_keyspace,
+                            partial(self._complete_request,
+                                    self._set_keyspace_completed, token))
                 elif response.kind == RESULT_KIND_SCHEMA_CHANGE:
                     # refresh the schema before responding, but do it in another
                     # thread instead of the event loop thread
                     self.is_schema_agreed = False
-                    self.session.submit(
+                    self._submit_attempt(
                         refresh_schema_and_set_result,
                         self.session.cluster.control_connection,
                         self, connection, **response.schema_change_event)
                 elif response.kind == RESULT_KIND_ROWS:
-                    self._paging_state = response.paging_state
-                    self._col_names = response.column_names
-                    self._col_types = response.column_types
                     new_result_metadata_id = getattr(response, 'result_metadata_id', None)
                     if self.prepared_statement and new_result_metadata_id is not None:
                         if response.column_metadata:
@@ -8435,13 +8863,18 @@ class ResponseFuture(object):
                                 getattr(self.prepared_statement, 'query_id', None)
                             )
                     if getattr(self.message, 'continuous_paging_options', None):
+                        self._paging_state = response.paging_state
+                        self._col_names = response.column_names
+                        self._col_types = response.column_types
                         self._handle_continuous_paging_first_response(connection, response)
                     else:
-                        self._set_final_result(self.row_factory(response.column_names, response.parsed_rows))
+                        self._set_final_result(
+                            self.row_factory(response.column_names, response.parsed_rows),
+                            page_generation=page_generation, row_response=response)
                 elif response.kind == RESULT_KIND_VOID:
-                    self._set_final_result(None)
+                    self._set_final_result(None, page_generation=page_generation)
                 else:
-                    self._set_final_result(response)
+                    self._set_final_result(response, page_generation=page_generation)
             elif isinstance(response, ErrorMessage):
                 retry_policy = self._retry_policy
 
@@ -8468,9 +8901,11 @@ class ResponseFuture(object):
                         self._metrics.on_other_error()
                     # Policy decision: TruncateError is surfaced directly, never retried.
                     if isinstance(response, TruncateError):
-                        self._set_final_exception(response.to_exception())
+                        self._set_final_exception(response.to_exception(),
+                                                  page_generation=page_generation)
                         return
-                    cl = getattr(self.message, 'consistency_level', None)
+                    cl = (getattr(self.message, 'consistency_level', None)
+                          if consistency_level is _NOT_SET else consistency_level)
                     retry = retry_policy.on_request_error(
                         self.query, cl, error=response,
                         retry_num=self._query_retries)
@@ -8489,7 +8924,8 @@ class ResponseFuture(object):
                         if not self.prepared_statement:
                             log.error("Tried to execute unknown prepared statement: id=%s",
                                       query_id.encode('hex'))
-                            self._set_final_exception(response)
+                            self._set_final_exception(
+                                response, page_generation=page_generation)
                             return
                         else:
                             prepared_statement = self.prepared_statement
@@ -8503,7 +8939,8 @@ class ResponseFuture(object):
                             ValueError("The Session's current keyspace (%s) does "
                                        "not match the keyspace the statement was "
                                        "prepared with (%s)" %
-                                       (current_keyspace, prepared_keyspace)))
+                                       (current_keyspace, prepared_keyspace)),
+                            page_generation=page_generation)
                         return
 
                     log.debug("Re-preparing unrecognized prepared statement against host %s: %s",
@@ -8514,39 +8951,56 @@ class ResponseFuture(object):
                                                      keyspace=prepared_keyspace)
                     # since this might block, run on the executor to avoid hanging
                     # the event loop thread
-                    self.session.submit(self._reprepare, prepare_message, host, connection, pool,
+                    self._submit_attempt(self._reprepare, prepare_message, host, connection, pool,
                                         query_id=query_id)
                     return
                 else:
                     if hasattr(response, 'to_exception'):
-                        self._set_final_exception(response.to_exception())
+                        self._set_final_exception(response.to_exception(),
+                                                  page_generation=page_generation)
                     else:
-                        self._set_final_exception(response)
+                        self._set_final_exception(
+                            response, page_generation=page_generation)
                     return
 
-                self._handle_retry_decision(retry, response, host)
+                self._handle_retry_decision(
+                    retry, response, host, page_generation=page_generation,
+                    error_no_hosts=error_no_hosts,
+                    is_speculative=is_speculative,
+                    attempt_consistency=consistency_level)
             elif isinstance(response, ConnectionException):
                 if self._metrics is not None:
                     self._metrics.on_connection_error()
+                failed_connection = connection if connection is not None else self._connection
                 if not isinstance(response, ConnectionShutdown):
-                    self._connection.defunct(response)
-                self._handle_request_error(response, host)
+                    failed_connection.defunct(response)
+                self._handle_request_error(
+                    response, host, consistency_level, page_generation=page_generation,
+                    error_no_hosts=error_no_hosts, is_speculative=is_speculative)
             elif isinstance(response, Exception):
                 if hasattr(response, 'to_exception'):
-                    self._set_final_exception(response.to_exception())
+                    self._set_final_exception(response.to_exception(),
+                                              page_generation=page_generation)
                 else:
-                    self._set_final_exception(response)
+                    self._set_final_exception(response, page_generation=page_generation)
             else:
                 # we got some other kind of response message
                 msg = "Got unexpected message: %r" % (response,)
                 exc = ConnectionException(msg, host)
                 self._cancel_timer()
                 self._connection.defunct(exc)
-                self._set_final_exception(exc)
+                self._set_final_exception(exc, page_generation=page_generation)
         except Exception as exc:
             # almost certainly caused by a bug, but we need to set something here
             log.exception("Unexpected exception while handling result in ResponseFuture:")
-            self._set_final_exception(exc)
+            remaining = self._time_remaining
+            if page_generation is not None and remaining is not None and remaining <= 0:
+                self._on_timeout(page_generation=page_generation)
+            else:
+                self._set_final_exception(exc, page_generation=page_generation)
+        finally:
+            if request_token is not None:
+                self._finish_attempt(request_token)
 
     def _handle_continuous_paging_first_response(self, connection, response):
         self._continuous_paging_session = connection.new_continuous_paging_session(response.stream_id,
@@ -8644,6 +9098,11 @@ class ResponseFuture(object):
         # A late response (e.g. speculative, or after client timeout) must not re-fire callbacks.
         return self._final_result is not _NOT_SET or self._final_exception is not None
 
+    def _is_active_page(self, page_generation=None):
+        # Callers hold the locks needed for mutations after this check.
+        return not self._is_final() and (page_generation is None or
+                                        page_generation == self._page_generation)
+
     def _finish_control_connection_keyspace_change(self):
         change = self._control_connection_keyspace_change
         if change is not None:
@@ -8652,75 +9111,97 @@ class ResponseFuture(object):
             control_connection._finish_application_keyspace_change(
                 connection, request_id)
 
-    def _set_final_result(self, response):
-        self._finish_control_connection_keyspace_change()
-        self._cancel_timer()
-        with self._callback_lock:
-            if self._retry_aborted or self._is_final():
+    @contextmanager
+    def _completion_guard(self):
+        # Binding operations take the application lock before the callback
+        # lock. Ordinary completions need only the future's callback lock.
+        while True:
+            with self._callback_lock:
+                change = self._control_connection_keyspace_change
+                if change is None:
+                    yield
+                    return
+            with change[0]._application_query_lock, self._callback_lock:
+                if self._control_connection_keyspace_change is not change:
+                    continue
+                yield
                 return
-            self._final_result = response
-            # save off current callbacks inside lock for execution outside it
-            # -- prevents case where _final_result is set, then a callback is
-            # added and executed on the spot, then executed again as a
-            # registered callback
-            to_call = tuple(
-                partial(fn, response, *args, **kwargs)
-                for (fn, args, kwargs) in self._callbacks
-            )
 
-        if self._metrics is not None:
-            self._metrics.request_timer.addValue(time.time() - self._start_time)
-        self._event.set()
-
-        # apply each callback
-        for callback_partial in to_call:
-            callback_partial()
+    def _set_final_result(self, response, page_generation=None,
+                          clear_paging_state=False, row_response=None):
+        self._complete(response, page_generation,
+                       clear_paging_state=clear_paging_state,
+                       row_response=row_response)
 
     def _set_final_exception(self, response,
-                             retry_abort_generation=_NOT_SET):
-        self._finish_control_connection_keyspace_change()
-        abort_retry = retry_abort_generation is not _NOT_SET
-        if not abort_retry:
-            self._cancel_timer()
+                             retry_abort_generation=_NOT_SET,
+                             page_generation=None, require_no_pending=False):
+        self._complete(response, page_generation, is_exception=True,
+                       retry_abort_generation=retry_abort_generation,
+                       require_no_pending=require_no_pending)
 
-        with self._callback_lock:
-            if self._retry_aborted:
+    def _complete(self, response, page_generation, is_exception=False,
+                  clear_paging_state=False, row_response=None,
+                  retry_abort_generation=_NOT_SET, require_no_pending=False):
+        with self._completion_guard():
+            if require_no_pending and (not self._plan_exhausted or
+                    self._pending_attempts):
                 return
-            if abort_retry:
-                if retry_abort_generation != self._page_generation or \
-                        self._final_result is not _NOT_SET or \
-                        self._final_exception is not None:
+            if self._retry_aborted or not self._is_active_page(page_generation):
+                return
+            if retry_abort_generation is not _NOT_SET:
+                if retry_abort_generation != self._page_generation:
                     return
                 self._retry_aborted = True
-            elif self._is_final():
-                return
-            self._final_exception = response
-            # save off current errbacks inside lock for execution outside it --
-            # prevents case where _final_exception is set, then an errback is
-            # added and executed on the spot, then executed again as a
-            # registered errback
+            self._finish_control_connection_keyspace_change()
+            if not is_exception:
+                if clear_paging_state:
+                    self._paging_state = None
+                elif row_response is not None:
+                    self._paging_state = row_response.paging_state
+                    self._col_names = row_response.column_names
+                    self._col_types = row_response.column_types
+            timer = self._timer
+            self._timer = None
+            if is_exception:
+                self._final_exception = response
+            else:
+                self._final_result = response
+            self._request_callback = None
+            elapsed = (time.time() - self._start_time
+                       if self._metrics is not None else None)
+            self._event.set()
+            # Snapshot callbacks under the lock so a concurrently registered
+            # callback cannot run both here and in add_callback/add_errback.
             to_call = tuple(
                 partial(fn, response, *args, **kwargs)
-                for (fn, args, kwargs) in self._errbacks
+                for (fn, args, kwargs) in
+                (self._errbacks if is_exception else self._callbacks)
             )
 
-        if abort_retry:
-            self._cancel_timer()
+        if timer is not None:
+            timer.cancel()
         if self._metrics is not None:
-            self._metrics.request_timer.addValue(time.time() - self._start_time)
-        self._event.set()
+            self._metrics.request_timer.addValue(elapsed)
 
         # apply each callback
         for callback_partial in to_call:
             callback_partial()
 
-    def _handle_request_error(self, response, host):
-        cl = getattr(self.message, 'consistency_level', None)
+    def _handle_request_error(self, response, host, attempt_consistency=_NOT_SET,
+                              **retry_context):
+        cl = (getattr(self.message, 'consistency_level', None)
+              if attempt_consistency is _NOT_SET else attempt_consistency)
         retry = self._retry_policy.on_request_error(
             self.query, cl, error=response, retry_num=self._query_retries)
-        self._handle_retry_decision(retry, response, host)
+        self._handle_retry_decision(retry, response, host,
+                                    attempt_consistency=attempt_consistency,
+                                    **retry_context)
 
-    def _handle_retry_decision(self, retry_decision, response, host):
+    def _handle_retry_decision(self, retry_decision, response, host,
+                               page_generation=None, error_no_hosts=True,
+                               attempt_consistency=_NOT_SET,
+                               is_speculative=False):
 
         def exception_from_response(response):
             if hasattr(response, 'to_exception'):
@@ -8733,69 +9214,118 @@ class ResponseFuture(object):
         elif len(retry_decision) == 3:
             retry_type, consistency, delay = retry_decision
 
-        if retry_type in (RetryPolicy.RETRY, RetryPolicy.RETRY_NEXT_HOST):
+        retrying = retry_type in (RetryPolicy.RETRY,
+                                 RetryPolicy.RETRY_NEXT_HOST)
+        if page_generation is not None:
+            with self._callback_lock:
+                if not self._is_active_page(page_generation):
+                    return
+                remaining = self._time_remaining
+                timed_out = remaining is not None and remaining <= 0
+                if not timed_out:
+                    if retrying:
+                        self._query_retries += 1
+                    self._errors[host] = exception_from_response(response)
+            if timed_out:
+                self._on_timeout(page_generation=page_generation)
+                return
+        elif retrying:
             self._query_retries += 1
+
+        if retrying:
             reuse = retry_type == RetryPolicy.RETRY
-            self._retry(reuse, consistency, host, delay)
+            if consistency is None and attempt_consistency is not _NOT_SET:
+                consistency = attempt_consistency
+            self._retry(reuse, consistency, host, delay,
+                        page_generation=page_generation,
+                        error_no_hosts=error_no_hosts,
+                        is_speculative=is_speculative)
         elif retry_type is RetryPolicy.RETHROW:
-            self._set_final_exception(exception_from_response(response))
+            self._set_final_exception(
+                exception_from_response(response), page_generation=page_generation)
         else:  # IGNORE
             if self._metrics is not None:
                 self._metrics.on_ignore()
-            self._set_final_result(None)
+            self._set_final_result(None, clear_paging_state=True,
+                                   page_generation=page_generation)
 
-        self._errors[host] = exception_from_response(response)
+        if page_generation is None:
+            self._errors[host] = exception_from_response(response)
 
-    def _retry(self, reuse_connection, consistency_level, host, delay):
+    def _retry(self, reuse_connection, consistency_level, host, delay,
+               page_generation=None, error_no_hosts=True,
+               is_speculative=False):
         with self._callback_lock:
-            if self._final_exception:
+            if (self._final_exception or (page_generation is not None and
+                    not self._is_active_page(page_generation))):
                 # the connection probably broke while we were waiting
                 # to retry the operation
                 return
-            page_generation = self._page_generation
+            if page_generation is None:
+                page_generation = self._page_generation
+
+            if consistency_level is not None:
+                # Never downgrade a serial read's Paxos guarantees.
+                original_cl = getattr(self.message, 'consistency_level', _NOT_SET)
+                if (ConsistencyLevel.is_serial(original_cl) and
+                        not ConsistencyLevel.is_serial(consistency_level)):
+                    log.debug(
+                        "Retry policy attempted to downgrade serial "
+                        "consistency %s to %s; keeping original level.",
+                        ConsistencyLevel.value_to_name.get(
+                            original_cl, original_cl),
+                        ConsistencyLevel.value_to_name.get(
+                            consistency_level, consistency_level))
+                else:
+                    self.message.consistency_level = consistency_level
+
+            consistency_level = getattr(self.message, 'consistency_level', _NOT_SET)
+            token = (page_generation, object())
+            self._pending_attempts.add(token)
 
         if self._metrics is not None:
             self._metrics.on_retry()
-        if consistency_level is not None:
-            # Never downgrade from serial to non-serial consistency, as that
-            # would break serial read (Paxos) guarantees.
-            original_cl = self.message.consistency_level
-            if ConsistencyLevel.is_serial(original_cl) and not ConsistencyLevel.is_serial(consistency_level):
-                log.debug(
-                    "Retry policy attempted to downgrade serial consistency %s to %s; "
-                    "keeping original consistency level.",
-                    ConsistencyLevel.value_to_name.get(original_cl, original_cl),
-                    ConsistencyLevel.value_to_name.get(consistency_level, consistency_level))
-            else:
-                self.message.consistency_level = consistency_level
 
-        # don't retry on the event loop thread
-        self.session.cluster.scheduler.schedule_with_shutdown(
-            delay, partial(self._abort_retry, page_generation),
-            self._retry_task, reuse_connection, host, page_generation)
+        # Keep each scheduled attempt's selected consistency independent.
+        args = (reuse_connection, host, page_generation, error_no_hosts,
+                consistency_level)
+        if is_speculative:
+            args += (True,)
+        try:
+            self.session.cluster.scheduler.schedule_with_shutdown(
+                delay, partial(self._abort_retry, page_generation),
+                self._run_attempt, token, self._retry_task, *args)
+        except Exception:
+            with self._callback_lock:
+                self._pending_attempts.discard(token)
+            raise
 
     def _abort_retry(self, page_generation):
         self._set_final_exception(ConnectionShutdown(
             "Cluster scheduler was shut down before the retry could run"),
             retry_abort_generation=page_generation)
 
-    def _retry_task(self, reuse_connection, host, page_generation=None):
-        if self._is_final() or (page_generation is not None and
-                                page_generation != self._page_generation):
-            # the connection probably broke while we were waiting
-            # to retry the operation
-            return
+    def _retry_task(self, reuse_connection, host, page_generation=None,
+                    error_no_hosts=True, consistency_level=_NOT_SET,
+                    is_speculative=False):
+        with self._callback_lock:
+            if not self._is_active_page(page_generation):
+                # The connection may have broken while this retry was queued.
+                return
+            retry_control_connection = self._control_connection_query_attempted
+            if retry_control_connection:
+                self._control_connection_query_attempted = False
 
-        if self._control_connection_query_attempted:
-            self._control_connection_query_attempted = False
-            self.send_request()
-            return
-
-        if reuse_connection and self._query(host) is not None:
+        options = dict(page_generation=page_generation,
+                       consistency_level=consistency_level,
+                       error_no_hosts=error_no_hosts,
+                       is_speculative=is_speculative)
+        if (not retry_control_connection and reuse_connection and
+                self._query(host, **options) is not None):
             return
 
         # otherwise, move onto another host
-        self.send_request()
+        self.send_request(**options)
 
     def result(self):
         """
