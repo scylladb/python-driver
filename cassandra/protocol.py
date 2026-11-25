@@ -900,12 +900,13 @@ class ResultMessage(_MessageType):
             num_fields = read_short(f)
             names, types = zip(*((read_string(f), cls.read_type(f, user_type_map))
                                  for _ in range(num_fields)))
-            specialized_type = typeclass.make_udt_class(ks, udt_name, names, types)
-            specialized_type.mapped_class = user_type_map.get(ks, {}).get(udt_name)
-            typeclass = specialized_type
+            # Bake the per-cluster mapping into the class; never assign it onto
+            # a shared cached class, or clusters overwrite each other.
+            mapped_class = user_type_map.get(ks, {}).get(udt_name) if user_type_map else None
+            typeclass = typeclass.make_udt_class(ks, udt_name, names, types, mapped_class)
         elif typeclass == CUSTOM_TYPE:
             classname = read_string(f)
-            typeclass = lookup_casstype(classname)
+            typeclass = lookup_casstype(classname, user_type_map)
 
         return typeclass
 
