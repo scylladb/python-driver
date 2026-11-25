@@ -35,19 +35,40 @@ Control-connection fallback
 
 :class:`~cassandra.cluster.ControlConnectionQueryFallback` offers ``Fallback``,
 which uses the shared control connection when no node pool is usable, and
-``SkipPoolCreation``, which always uses it for application queries. Both modes
-bind fallback queries to one keyspace at a time.
+``SkipPoolCreation``, which uses it for application queries without an explicit
+host. Requests with an explicit host do not use fallback. Every Session belonging
+to the same Cluster shares that connection on the fallback path.
 
-An explicit ``USE`` statement or :meth:`~cassandra.cluster.Session.set_keyspace`
-can change that binding only when its Session is the sole fallback user. Another
-Session using the control connection causes the change to fail. Queries already
-in flight from the same Session may execute under either keyspace; wait for
-those queries to finish before sending ``USE`` when their keyspace matters.
-Another ``USE`` fails while an explicit keyspace change is pending. If the
-driver is still selecting the Session's initial keyspace, an explicit ``USE``
-waits for that setup to finish.
-An uncertain ``USE`` result, such as a client timeout, closes the shared
-control connection so a later query cannot inherit an unknown keyspace state.
+Before a fallback request, the driver selects the Session's configured keyspace
+if it differs from the connection's recorded keyspace. A Session without a
+configured keyspace uses the connection's existing state. The driver does not
+parse application CQL. A successful ``USE`` response updates the originating
+Session's default and propagates the change to its node pools.
+
+For predictable keyspace selection, finish outstanding application requests
+before executing ``USE`` or calling
+:meth:`~cassandra.cluster.Session.set_keyspace`, and wait for the change to
+succeed before submitting more work. Include further page fetches when
+coordinating outstanding work.
+
+The driver permits overlapping keyspace changes and queries, including requests
+from Sessions with different defaults. Their effective keyspace and ordering are
+unspecified: a change on the shared connection can affect another Session's
+request. The driver does not reject or serialize these requests to enforce
+keyspace isolation. Fully qualified table names avoid dependence on the
+connection's default for those references.
+
+A failed or timed-out ``USE`` may leave connections on different keyspaces.
+Further requests remain allowed, and the caller decides whether to continue,
+successfully re-establish a default, or recreate the affected Session or Cluster.
+Creating a Session without a default does not reset the Cluster's existing
+control connection to no keyspace. Normal transport errors, capacity limits,
+shutdown and request deadlines still apply.
+
+After reconnecting, a Session whose default was dropped can fail preliminary
+keyspace setup even for ``session.execute("USE live_ks")``. Recover with
+``session.set_keyspace("live_ks")``; it selects the requested default without
+first restoring the unavailable one.
 
 Pooled keyspace changes
 -----------------------
@@ -59,9 +80,12 @@ that connection.
 
 The failure does not roll back changes that already succeeded:
 ``Session.keyspace`` and some connections may already use the new keyspace.
-Connections still using the old keyspace are not used for ordinary queries.
-After correcting the cause of the rejection, issue ``USE`` again or create a
-new Session before sending unqualified queries.
+Further queries remain allowed, including through connections still using the
+old keyspace. Until a keyspace change completes successfully, the keyspace used
+by an unqualified query is unspecified. After correcting the cause of the
+rejection, the caller can issue ``USE`` again or create a new Session. The driver
+still synchronizes connections it opens in the background with the current
+Session default before making them available.
 
 Contents
 --------

@@ -31,8 +31,9 @@ except ImportError:
     from cassandra.util import WeakSet  # NOQA
 
 from cassandra import AuthenticationFailed, _lifecycle
-from cassandra.connection import (ConnectionException, ConnectionSendError, EndPoint,
-                                  DefaultEndPoint, UnixSocketEndPoint)
+from cassandra.connection import (ConnectionBusy, ConnectionException, ConnectionSendError,
+                                  ConnectionShutdown, EndPoint, DefaultEndPoint,
+                                  UnixSocketEndPoint)
 from cassandra.policies import HostDistance
 
 log = logging.getLogger(__name__)
@@ -480,6 +481,7 @@ class HostConnection(object):
         # Failure reservations hold membership while return_connection and
         # shutdown re-enter it.
         self._membership_lock = RLock()
+        self._keyspace_waiters = {}
         self._ownership = _ownership or _lifecycle.PoolOwnershipReservation(
             session, host, self.endpoint)
         # this is used in conjunction with the connection streams. Not using the connection lock because the connection can be replaced in the lifetime of the pool.
@@ -621,7 +623,7 @@ class HostConnection(object):
         return random.choice(list(self._connections.values()))
 
     def borrow_connection(self, timeout, routing_key=None, keyspace=None, table=None,
-                          routing_token=None, allow_keyspace_mismatch=False):
+                          routing_token=None):
         conn = self._get_connection_for_routing_key(routing_key, keyspace, table, routing_token)
         start = time.time()
         remaining = timeout
@@ -631,25 +633,12 @@ class HostConnection(object):
                 # The connection might have been closed in the meantime - if so, try again
                 conn = self._get_connection_for_routing_key(routing_key, keyspace, table, routing_token)
             with conn.lock:
-                if (allow_keyspace_mismatch or conn.keyspace == self._keyspace) and \
-                        (not conn.is_closed or last_retry) and \
+                if (not conn.is_closed or last_retry) and \
                         conn.in_flight < conn.max_request_id:
                     # On last retry we ignore connection status, since it is better to return closed connection than
                     #  raise Exception
                     conn.in_flight += 1
                     return conn, conn.get_request_id()
-            if not allow_keyspace_mismatch and conn.keyspace != self._keyspace:
-                alternate = next((candidate for candidate in tuple(self._connections.values())
-                                  if candidate is not conn and not candidate.is_closed and
-                                  candidate.keyspace == self._keyspace), None)
-                if alternate is not None:
-                    conn = alternate
-                    continue
-                # Waiting here could block the reactor thread that must
-                # deliver the pending USE response. Let the request try another
-                # host or fail while this pool finishes synchronizing.
-                raise NoConnectionsAvailable(
-                    "No connection has the current session keyspace")
             if timeout is not None:
                 remaining = timeout - time.time() + start
                 if remaining < 0:
@@ -666,9 +655,6 @@ class HostConnection(object):
             conn = self._get_connection_for_routing_key(
                 routing_key, keyspace, table, routing_token)
 
-        if not allow_keyspace_mismatch and conn.keyspace != self._keyspace:
-            raise NoConnectionsAvailable(
-                "No connection has the current session keyspace")
         raise NoConnectionsAvailable("All request IDs are currently in use")
 
     def return_connection(self, connection, stream_was_orphaned=False,
@@ -873,6 +859,7 @@ class HostConnection(object):
             # Revoke before waiting for work that may be synchronizing USE.
             with self._membership_lock:
                 self._ownership.retired = True
+            self._cancel_keyspace_waiters()
         shutdown_lock = _failure.locked() if _failure is not None else self._lock
         with shutdown_lock:
             if (_failure is not None and not _failure.owns_locked()):
@@ -900,6 +887,7 @@ class HostConnection(object):
 
         for future in futures_to_cancel:
             future.cancel()
+        self._cancel_keyspace_waiters()
 
         # connection.close can call pool.return_connection, which will
         #  obtain self._lock via self._stream_available_condition.
@@ -1200,15 +1188,20 @@ class HostConnection(object):
 
     def _set_keyspace_for_all_conns(self, keyspace, callback):
         """
-        Asynchronously sets the keyspace for all connections.  When all
-        connections have been set, `callback` will be called with two
-        arguments: this pool, and a list of any errors that occurred.
+        Asynchronously propagate the current Session default to all connections.
+        Revalidate the caller's `keyspace` snapshot before publishing the pool
+        target. When all connections have been set, call `callback` with this
+        pool and a list of any errors that occurred.
         """
         # Pair the target and member snapshot with final synchronized
         # insertion. Never take the broad work lock here: it can await
         # this reply thread.
         with self._membership_lock:
-            self._keyspace = keyspace
+            # The Session default may have advanced after its pool snapshot.
+            # Follow the same membership -> Session lock order as publication.
+            with self._session._lock:
+                keyspace = self._session.keyspace
+                self._keyspace = keyspace
             remaining_callbacks = set(self._connections.values())
         remaining_callbacks_lock = Lock()
         errors = []
@@ -1219,11 +1212,12 @@ class HostConnection(object):
 
         def connection_finished_setting_keyspace(conn, error,
                                                  release_connection=True):
-            # set_keyspace_async reserves one stream for every call. Retire
+            # A successful set_keyspace_async reserves one stream. Retire
             # this reply before a corrective USE reserves the next stream.
+            # None denotes a capacity waiter with no stream or failed transport.
             if release_connection:
                 self.return_connection(conn)
-            else:
+            elif release_connection is False:
                 # A synchronous send error already returned the stream, but
                 # a defunct connection still needs normal pool replacement.
                 self.return_connection(conn, stream_was_orphaned=True)
@@ -1231,13 +1225,8 @@ class HostConnection(object):
                 # An older USE may finish after a newer one on this shared
                 # connection. Converge on the current pool target before the
                 # callback publishes this connection as synchronized.
-                try:
-                    conn.set_keyspace_async(
-                        self._keyspace, connection_finished_setting_keyspace)
-                except Exception as exc:
-                    error = exc
-                else:
-                    return
+                dispatch_keyspace_change(conn, self._keyspace)
+                return
             with remaining_callbacks_lock:
                 remaining_callbacks.remove(conn)
                 if error:
@@ -1249,14 +1238,76 @@ class HostConnection(object):
             if all_finished:
                 callback(self, errors)
 
-        for conn in list(remaining_callbacks):
+        def dispatch_keyspace_change(conn, target):
+            with self._membership_lock:
+                retired = self.is_shutdown or self._ownership.retired
+            if retired:
+                connection_finished_setting_keyspace(conn, ConnectionShutdown(
+                    "Pool retired during keyspace propagation"), release_connection=None)
+                return
             try:
-                conn.set_keyspace_async(keyspace, connection_finished_setting_keyspace)
+                conn.set_keyspace_async(target, connection_finished_setting_keyspace)
+            except ConnectionBusy:
+                defer_keyspace_change(conn)
             except Exception as exc:
-                # A synchronous send failure has already returned its stream
-                # in Connection.set_keyspace_async; no reply callback follows.
+                # Failed admission or sending leaves no stream reservation.
+                # Notify pool recovery without releasing another entry.
                 connection_finished_setting_keyspace(
                     conn, exc, release_connection=False)
+
+        def defer_keyspace_change(conn):
+            token = object()
+            record = [None, lambda: connection_finished_setting_keyspace(
+                conn, ConnectionShutdown("Pool retired during keyspace propagation"),
+                release_connection=None)]
+            with self._membership_lock:
+                retired = self.is_shutdown or self._ownership.retired
+                if not retired:
+                    self._keyspace_waiters[token] = record
+            if retired:
+                record[1]()
+                return
+
+            def retry():
+                with self._membership_lock:
+                    if self._keyspace_waiters.pop(token, None) is None:
+                        return
+                    target = self._keyspace
+                dispatch_keyspace_change(conn, target)
+
+            try:
+                # Retry on the reactor, preserving callback context without
+                # occupying a worker needed by background pool creation.
+                timer = conn.create_timer(0.01, retry)
+            except Exception as exc:
+                with self._membership_lock:
+                    claimed = self._keyspace_waiters.pop(token, None) is not None
+                if claimed:
+                    connection_finished_setting_keyspace(
+                        conn, exc, release_connection=None)
+                return
+            with self._membership_lock:
+                if self._keyspace_waiters.get(token) is record:
+                    record[0] = timer
+                    return
+            # Retirement or an immediate timer already claimed this waiter.
+            timer.cancel()
+
+        for conn in list(remaining_callbacks):
+            dispatch_keyspace_change(conn, keyspace)
+
+    def _cancel_keyspace_waiters(self):
+        with self._membership_lock:
+            waiters = tuple(self._keyspace_waiters.values())
+            self._keyspace_waiters.clear()
+        for timer, cancel in waiters:
+            if timer is not None:
+                timer.cancel()
+            try:
+                cancel()
+            except Exception:
+                log.exception(
+                    "Error cancelling keyspace propagation during pool shutdown")
 
     def get_connections(self):
         connections = self._connections

@@ -44,6 +44,102 @@ import pytest
 
 class ConnectionTest(unittest.TestCase):
 
+    def test_sender_released_stream_is_not_returned_again_by_reactor(self):
+        connection = self.make_connection()
+        stream = connection.get_request_id()
+        callback = Mock()
+
+        def decode_after_sender_cleanup(*args):
+            with connection.lock:
+                callback._stream_released_by_sender = True
+                connection.request_ids.append(stream)
+            return Mock(spec=ResultMessage)
+
+        connection._requests[stream] = (callback, decode_after_sender_cleanup, [])
+        header = _Frame(version=4, flags=0, stream=stream,
+                        opcode=ResultMessage.opcode, body_offset=9, end_pos=9)
+        connection.process_msg(header, b'')
+        callback.assert_called_once()
+        assert list(connection.request_ids).count(stream) == 1
+
+    def test_missing_callback_does_not_return_already_released_stream(self):
+        connection = self.make_connection()
+        stream = connection.get_request_id()
+        connection.request_ids.append(stream)
+        connection._sender_released_request_ids.add(stream)
+        header = _Frame(version=4, flags=0, stream=stream,
+                        opcode=ResultMessage.opcode, body_offset=9, end_pos=9)
+        connection.process_msg(header, b'')
+        assert list(connection.request_ids).count(stream) == 1
+
+    def test_late_orphan_response_does_not_scan_available_streams(self):
+        from collections import deque
+
+        class NoMembershipScan(deque):
+            def __contains__(self, value):
+                raise AssertionError('late response scanned free stream ids')
+
+        connection = self.make_connection()
+        stream = connection.get_request_id()
+        connection.in_flight = 1
+        connection.orphaned_request_ids.add(stream)
+        connection.request_ids = NoMembershipScan(range(1, 20000))
+        connection.highest_request_id = 19999
+        connection.defunct = Mock()
+        header = _Frame(version=4, flags=0, stream=stream,
+                        opcode=ResultMessage.opcode, body_offset=9, end_pos=9)
+        connection.process_msg(header, b'')
+        connection.defunct.assert_not_called()
+        assert connection.in_flight == 0
+        assert connection.request_ids[-1] == stream
+
+    def test_send_failure_preserves_a_new_owner_of_the_stream(self):
+        connection = self.make_connection()
+        replacement = (Mock(), Mock(), [])
+
+        def push_after_reuse(data):
+            connection._requests[7] = replacement
+            raise OSError('wake-up failed after response and reuse')
+
+        connection.push = push_after_reuse
+        with pytest.raises(ConnectionSendError):
+            connection.send_msg(Mock(), 7, Mock(), encoder=lambda *a, **k: b'frame')
+        assert connection._requests[7] is replacement
+
+    def test_keyspace_send_failure_and_response_have_one_owner(self):
+        from collections import deque
+
+        for response_first in (False, True):
+            with self.subTest(response_first=response_first):
+                connection = self.make_connection()
+                connection.request_ids = deque([7])
+                connection.defunct = Mock()
+                completed = []
+                captured = []
+
+                def completed_keyspace(conn, error):
+                    conn.in_flight -= 1
+                    completed.append(error)
+
+                def fail_after_extracting(message, stream, callback):
+                    captured.append(callback)
+                    if response_first:
+                        callback(Mock(spec=ResultMessage))
+                        connection.request_ids.append(stream)
+                    raise ConnectionSendError('wake-up failed', connection.endpoint)
+
+                connection.send_msg = fail_after_extracting
+                if response_first:
+                    connection.set_keyspace_async('ks', completed_keyspace)
+                    assert completed == [None]
+                else:
+                    with pytest.raises(ConnectionSendError):
+                        connection.set_keyspace_async('ks', completed_keyspace)
+                    captured[0](Mock(spec=ResultMessage))
+                    assert completed == []
+                assert connection.in_flight == 0
+                assert list(connection.request_ids) == [7]
+
     def test_defunct_exposes_error_with_defunct_state(self):
         connection = self.make_connection()
         error = ConnectionSendError('send failed', connection.endpoint)

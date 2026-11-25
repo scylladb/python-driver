@@ -1001,6 +1001,7 @@ class Connection(object):
     is_unsupported_proto_version = False
 
     is_control_connection = False
+    _sender_released_request_ids = None
     # Stable identity learned from system.local for control connections.
     _control_connection_host_id = None
     signaled_error = False  # used for flagging at the pool level
@@ -1072,6 +1073,7 @@ class Connection(object):
         self.no_compact = no_compact
         self._push_watchers = defaultdict(set)
         self._requests = {}
+        self._sender_released_request_ids = set()
         self._io_buffer = _ConnectionIOBuffer(self)
         self._continuous_paging_sessions = {}
         self._socket_writable = True
@@ -1621,7 +1623,9 @@ class Connection(object):
         This must be called while self.lock is held.
         """
         try:
-            return self.request_ids.popleft()
+            request_id = self.request_ids.popleft()
+            self._sender_released_request_ids.discard(request_id)
+            return request_id
         except IndexError:
             new_request_id = self.highest_request_id + 1
             # in_flight checks should guarantee this
@@ -1653,7 +1657,8 @@ class Connection(object):
 
         # queue the decoder function with the request
         # this allows us to inject custom functions per request to encode, decode messages
-        self._requests[request_id] = (cb, decoder, result_metadata)
+        request = (cb, decoder, result_metadata)
+        self._requests[request_id] = request
         try:
             msg = encoder(msg, request_id, self.protocol_version, compressor=self.compressor,
                           allow_beta_protocol_version=self.allow_beta_protocol_version,
@@ -1670,7 +1675,9 @@ class Connection(object):
                 raise ConnectionSendError("Failed to push request on %s" % self.endpoint,
                                           self.endpoint) from exc
         except Exception:
-            self._requests.pop(request_id, None)
+            with self.lock:
+                if self._requests.get(request_id) is request:
+                    self._requests.pop(request_id)
             raise
         return len(msg)
 
@@ -1856,21 +1863,26 @@ class Connection(object):
             else:
                 need_notify_of_release = False
                 with self.lock:
+                    # Timeout replaces the callback and marks the stream under
+                    # this lock. Observe both together before releasing it.
                     if stream_id in self.orphaned_request_ids:
                         self.in_flight -= 1
                         self.orphaned_request_ids.remove(stream_id)
                         need_notify_of_release = True
+                    request = self._requests.pop(stream_id, None)
+                    if request is None:
+                        if stream_id in self._sender_released_request_ids:
+                            self._sender_released_request_ids.discard(stream_id)
+                        else:
+                            self.request_ids.append(stream_id)
                 if need_notify_of_release and self._on_orphaned_stream_released:
                     self._on_orphaned_stream_released()
 
-                try:
-                    callback, decoder, result_metadata = self._requests.pop(stream_id)
                 # This can only happen if the stream_id was
                 # removed due to an OperationTimedOut
-                except KeyError:
-                    with self.lock:
-                        self.request_ids.append(stream_id)
+                if request is None:
                     return
+                callback, decoder, result_metadata = request
 
         try:
             response = decoder(header.version, self.features, self.user_type_map, stream_id,
@@ -1905,7 +1917,10 @@ class Connection(object):
                     self.remove_continuous_paging_session(stream_id)
             else:
                 with self.lock:
-                    self.request_ids.append(stream_id)
+                    if getattr(callback, '_stream_released_by_sender', False) is not True:
+                        self.request_ids.append(stream_id)
+                    else:
+                        self._sender_released_request_ids.discard(stream_id)
 
     def new_continuous_paging_session(self, stream_id, decoder, row_factory, state):
         session = ContinuousPagingSession(stream_id, decoder, row_factory, self, state)
@@ -2202,27 +2217,19 @@ class Connection(object):
         two arguments: this connection and an Exception if an error
         occurred, otherwise :const:`None`.
 
-        This method will always increment :attr:`.in_flight` attribute, even if
-        it doesn't need to make a request, just to maintain an
-        ":attr:`.in_flight` is incremented" invariant.
+        A successful reservation increments :attr:`.in_flight`, even when no
+        request is needed. The callback releases that reservation. At capacity,
+        :exc:`ConnectionBusy` is raised without reserving a stream; the caller
+        can retry asynchronously.
         """
-        # Here we increment in_flight unconditionally, whether we need to issue
-        # a request or not. This is bad, but allows callers -- specifically
-        # _set_keyspace_for_all_conns -- to assume that we increment
-        # self.in_flight during this call. This allows the passed callback to
-        # safely call HostConnection{Pool,}.return_connection on this
-        # Connection.
-        #
-        # We use a busy wait on the lock here because:
-        # - we'll only spin if the connection is at max capacity, which is very
-        #   unlikely for a set_keyspace call
-        # - it allows us to avoid signaling a condition every time a request completes
-        while True:
-            with self.lock:
-                if self.in_flight < self.max_request_id:
-                    self.in_flight += 1
-                    break
-            time.sleep(0.001)
+        # Reserve one entry even when no USE is needed. The pool callback
+        # returns it. A failure before reservation leaves accounting unchanged.
+        with self.lock:
+            if self.is_closed or self.is_defunct:
+                raise ConnectionShutdown("Connection closed while setting keyspace", self.endpoint)
+            if self.in_flight >= self.max_request_id:
+                raise ConnectionBusy("All request IDs are currently in use")
+            self.in_flight += 1
 
         if not keyspace or keyspace == self.keyspace:
             callback(self, None)
@@ -2232,7 +2239,13 @@ class Connection(object):
         query = QueryMessage(query='USE %s' % (escape_name(keyspace),),
                              consistency_level=ConsistencyLevel.ONE)
 
+        response_claimed = [False]
+
         def process_result(result):
+            with self.lock:
+                if response_claimed[0]:
+                    return
+                response_claimed[0] = True
             if isinstance(result, ResultMessage):
                 self.keyspace = keyspace
                 callback(self, None)
@@ -2245,18 +2258,29 @@ class Connection(object):
         # We've incremented self.in_flight above, so we "have permission" to
         # acquire a new request id
         request_id = None
+        response_callback = partial(process_result)
         try:
             with self.lock:
                 request_id = self.get_request_id()
-            self.send_msg(query, request_id, process_result)
+            self.send_msg(query, request_id, response_callback)
         except Exception as exc:
             with self.lock:
-                self.in_flight -= 1
-                if request_id is not None:
-                    self.request_ids.append(request_id)
+                response_won = response_claimed[0]
+                if not response_won:
+                    response_claimed[0] = True
+                    self.in_flight -= 1
+                    if request_id is not None:
+                        response_callback._stream_released_by_sender = True
+                        self._sender_released_request_ids.add(request_id)
+                        self.request_ids.append(request_id)
+                        request = self._requests.get(request_id)
+                        if request is not None and request[0] is response_callback:
+                            self._requests.pop(request_id)
             if not isinstance(exc, ConnectionBusy):
                 self.defunct(ConnectionException(
                     "Failed sending keyspace change: %r" % (exc,), self.endpoint))
+            if response_won:
+                return
             raise
 
     @property
