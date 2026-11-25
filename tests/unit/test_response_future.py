@@ -1074,7 +1074,7 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_failed_push_immediate_retry_preserves_active_stream(self):
         policy = Mock(wraps=RetryPolicy())
-        rf, (first, second), queued = self.make_failed_push_future(policy)
+        rf, (first, second), queued = self.make_failed_push_future(policy, is_idempotent=True)
         second.request_ids.clear()
         second.request_ids.append(17)
 
@@ -1097,7 +1097,7 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_failed_push_default_policy_schedules_next_host(self):
         rf, (first, second), queued = self.make_failed_push_future(
-            RetryPolicy())
+            RetryPolicy(), is_idempotent=True)
         assert rf.send_request()
         scheduler = rf.session.cluster.scheduler.schedule_with_shutdown
         scheduler.assert_called_once_with(
@@ -1615,6 +1615,7 @@ class ResponseFutureTests(unittest.TestCase):
         pool.borrow_connection.return_value = (connection, 1)
 
         rf = self.make_response_future(session)
+        rf.query.is_idempotent = True
         rf.message.consistency_level = ConsistencyLevel.QUORUM
         rf.send_request()
 
@@ -2849,6 +2850,7 @@ class ResponseFutureTests(unittest.TestCase):
         session.cluster.get_control_connection_host.return_value = control_host
 
         rf = self.make_response_future(session)
+        rf.query.is_idempotent = True
         assert rf.send_request()
 
         first_response = Mock(spec=ServerError, info={})
@@ -3761,7 +3763,7 @@ class ResponseFutureTests(unittest.TestCase):
         connection = Mock(spec=Connection)
         pool.borrow_connection.return_value = (connection, 1)
         
-        query = SimpleStatement("INSERT INTO foo (a, b) VALUES (1, 2)")
+        query = SimpleStatement("INSERT INTO foo (a, b) VALUES (1, 2)", is_idempotent=True)
         message = QueryMessage(query=query, consistency_level=ConsistencyLevel.ONE)
         
         # Create ResponseFuture with a specific host (this is the key to reproducing the bug)

@@ -78,6 +78,34 @@ How does the driver manage request retries?
 By default, retries are managed by the :attr:`.Cluster.default_retry_policy` set on the session Cluster. It can also
 be specialized per statement by setting :attr:`.Statement.retry_policy`.
 
-Retries are presently attempted on the same coordinator, but this may change in the future.
+The default policy requests one retry on the same coordinator for read timeouts
+when enough replicas replied but none supplied data. It requests one retry on the
+same coordinator for a batch-log write timeout only when the statement is marked
+:attr:`.Statement.is_idempotent`. Other write timeouts and write failures are
+terminal. These retries keep the effective requested consistency, rather than
+adopting the consistency echoed in a timeout response.
+
+The execution layer can currently fall back to another coordinator when the
+requested coordinator cannot send. Strict retry destination enforcement is
+tracked separately in `#1303 <https://github.com/scylladb/python-driver/issues/1303>`_.
+
+Server errors, overloaded responses and connection failures, including uncertain
+failed pushes, can mean the request already executed. The default policy allows
+retries for these errors only for statements marked idempotent. Client deadlines
+remain terminal. Configured speculative execution also requires an idempotent
+statement. PREPARE requests remain retryable because preparing does not execute
+the statement. Custom retry policies remain authoritative and may explicitly retry unmarked statements
+or change consistency, subject to serial-consistency protection. A custom policy
+that delegates to the default hooks inherits their idempotency requirements;
+mark safely repeatable statements explicitly or return a deliberate custom decision.
+
+Bootstrapping and unavailable responses retain their existing retry behavior.
+Unmarked unavailable retries are safe only when the server guarantees
+nonexecution. Do not assume this guarantee across server versions, particularly
+on affected counter and LWT paths. Overloaded responses also do not reliably
+prove nonexecution and require an idempotent statement.
+`SCYLLADB-6491 <https://scylladb.atlassian.net/browse/SCYLLADB-6491>`_ remains a
+prerequisite for these guarantees on affected paths. This policy does not
+establish a complete LWT timeout, Paxos, or serial-consistency safety matrix.
 
 Please see :class:`.policies.RetryPolicy` for further details.

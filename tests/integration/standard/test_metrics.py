@@ -228,7 +228,10 @@ class MetricsNamespaceTest(BasicSharedKeyspaceUnitTestCaseRF3WM):
 
         try:
             # Test write
-            query = SimpleStatement("INSERT INTO {0}.{0} (k, v) VALUES (2, 2)".format(self.ks_name), consistency_level=ConsistencyLevel.ALL)
+            # This fixed-value write is safe to retry if its coordinator is
+            # paused, so the test can reach a server timeout or unavailable error.
+            query = SimpleStatement("INSERT INTO {0}.{0} (k, v) VALUES (2, 2)".format(self.ks_name),
+                                    consistency_level=ConsistencyLevel.ALL, is_idempotent=True)
             with pytest.raises((WriteTimeout, Unavailable)):
                 self.session.execute(query, timeout=None)
         finally:

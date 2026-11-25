@@ -459,20 +459,25 @@ class RetryPolicyTests(unittest.TestCase):
         assert len(rf.attempted_hosts) == 1  # no retry
         assert next(retry_policy.request_error) == 4  # counter unchanged: on_request_error not called
 
-        # Test that by default, errors retry on next host (except TruncateError)
+        # Uncertain errors require idempotency; bootstrapping proves nonexecution.
         retry_policy = RetryPolicy()
         self.set_cluster(retry_policy)
 
-        for e in [overloaded_error, bootstrapping_error, server_error]:
-            clear_queries()
-            query_to_prime = "SELECT * from simulacron_keyspace.simulacron_table;"
-            prime_query(query_to_prime, then=e, rows=None, column_types=None)
-            rf = self.session.execute_async(query_to_prime)
+        for marked in (False, True):
+            for e, exc in [(overloaded_error, OverloadedErrorMessage),
+                           (bootstrapping_error, IsBootstrappingErrorMessage),
+                           (server_error, ServerError)]:
+                clear_queries()
+                query_to_prime = "SELECT * from simulacron_keyspace.simulacron_table;"
+                prime_query(query_to_prime, then=e, rows=None, column_types=None)
+                statement = SimpleStatement(query_to_prime, is_idempotent=marked)
+                rf = self.session.execute_async(statement)
+                retryable = marked or e is bootstrapping_error
 
-            with pytest.raises(NoHostAvailable):
-                rf.result()
+                with pytest.raises(NoHostAvailable if retryable else exc):
+                    rf.result()
 
-            assert len(rf.attempted_hosts) == 3  # all 3 nodes failed
+                assert len(rf.attempted_hosts) == (3 if retryable else 1)
 
         # Test TruncateError does not retry even with default RetryPolicy
         clear_queries()

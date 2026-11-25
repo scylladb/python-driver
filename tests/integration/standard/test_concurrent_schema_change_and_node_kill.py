@@ -33,9 +33,14 @@ class TestConcurrentSchemaChangeAndNodeKill(unittest.TestCase):
         self.session.execute("CREATE TABLE IF NOT EXISTS some_table(k int, c int, v int, PRIMARY KEY (k, v));")
         self.session.execute("INSERT INTO some_table (k, c, v) VALUES (1, 2, 3);")
         node2.stop(wait=False, gently=False)
-        self.session.execute("ALTER TABLE some_table ADD v2 int;", timeout=180)
+        # Exercise schema agreement through a live coordinator without relying
+        # on a retry of the unmarked ALTER after a connection error from node2.
+        coordinator = self.cluster.metadata.get_host('127.0.0.1')
+        assert coordinator is not None, 'Live coordinator 127.0.0.1 is missing from cluster metadata'
+        self.session.execute("ALTER TABLE some_table ADD v2 int;", timeout=180,
+                             host=coordinator)
         # Stopping node2 may leave only one live replica for this partition.
         # Verify schema progress without requiring a local quorum for the read.
         query = SimpleStatement("SELECT * FROM some_table WHERE k = 1;",
                                 consistency_level=ConsistencyLevel.LOCAL_ONE)
-        print(self.session.execute(query).all())
+        print(self.session.execute(query, host=coordinator).all())

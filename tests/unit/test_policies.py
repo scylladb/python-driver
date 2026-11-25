@@ -36,7 +36,7 @@ from cassandra.policies import (RackAwareRoundRobinPolicy, RoundRobinPolicy, Whi
                                 IdentityTranslator, EC2MultiRegionTranslator, HostFilterPolicy, ExponentialBackoffRetryPolicy)
 from cassandra.connection import DefaultEndPoint, UnixSocketEndPoint
 from cassandra.pool import Host
-from cassandra.query import Statement
+from cassandra.query import Statement, SimpleStatement
 from cassandra.tablets import Tablets, Tablet
 
 
@@ -1696,7 +1696,7 @@ class RetryPolicyTest(unittest.TestCase):
             query=None, consistency=ONE, required_responses=2, received_responses=2,
             data_retrieved=False, retry_num=0)
         assert retry == RetryPolicy.RETRY
-        assert consistency == ONE
+        assert consistency is None
 
     def test_write_timeout(self):
         policy = RetryPolicy()
@@ -1715,12 +1715,12 @@ class RetryPolicyTest(unittest.TestCase):
         assert retry == RetryPolicy.RETHROW
         assert consistency == None
 
-        # retry BATCH_LOG writes regardless of received responses
+        # retry marked BATCH_LOG writes regardless of received responses
         retry, consistency = policy.on_write_timeout(
-            query=None, consistency=ONE, write_type=WriteType.BATCH_LOG,
+            query=SimpleStatement("BEGIN BATCH", is_idempotent=True), consistency=ONE, write_type=WriteType.BATCH_LOG,
             required_responses=10000, received_responses=1, retry_num=0)
         assert retry == RetryPolicy.RETRY
-        assert consistency == ONE
+        assert consistency is None
 
     def test_unavailable(self):
         """
