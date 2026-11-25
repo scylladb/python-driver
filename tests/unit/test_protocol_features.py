@@ -74,6 +74,28 @@ class TestProtocolFeatures(unittest.TestCase):
         assert TABLETS_ROUTING_V2 in startup
         assert TABLETS_ROUTING_V1 not in startup
 
+    def test_tablets_routing_v2_wire_name(self):
+        """V2 is exchanged under the name of the extension's current revision."""
+        assert TABLETS_ROUTING_V2 == "TABLETS_ROUTING_V2_EXPERIMENTAL_V2"
+
+    def test_tablets_routing_v2_old_revision_not_negotiated(self):
+        """
+        A server advertising only the original revision of the experimental
+        extension expects BATCH requests without a routing hint, so the driver
+        falls back to V1 and doesn't echo the old name in STARTUP.
+        """
+        options = {
+            TABLETS_ROUTING_V1: [''],
+            "TABLETS_ROUTING_V2_EXPERIMENTAL": [''],
+        }
+        features = ProtocolFeatures.parse_from_supported(options)
+        assert features.tablets_routing_v1 is True
+        assert features.tablets_routing_v2 is False
+
+        startup = {}
+        features.add_startup_options(startup)
+        assert startup == {TABLETS_ROUTING_V1: ""}
+
     def test_tablets_routing_v1_only(self):
         """When server only advertises V1, only V1 is negotiated."""
         options = {
