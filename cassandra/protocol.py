@@ -797,6 +797,8 @@ class ResultMessage(_MessageType):
                         raise DriverException('Failed decoding result column "%s" of type %s: %s' % (col_md[2],
                                                                                                      col_md[3].cql_parameterized_type(),
                                                                                                      str(e)))
+            # The retry only adds column context; never return without rows.
+            raise
 
     def recv_results_prepared(self, f, protocol_version, protocol_features, user_type_map):
         self.query_id = read_binary_string(f)
