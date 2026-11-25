@@ -79,6 +79,16 @@ Reconnecting to Dead Hosts
 Retrying Failed Operations
 --------------------------
 
+Application retries honor the policy's destination: ``RETRY`` uses the same
+coordinator and ``RETRY_NEXT_HOST`` uses another eligible coordinator. If that
+destination is unavailable, the original failure is raised unless the client
+deadline has expired, in which case ``OperationTimedOut`` takes precedence.
+These rules also apply when optional control-connection query fallback is enabled.
+An uncertain
+application send failure consults the retry policy after transport cleanup;
+``FallthroughRetryPolicy`` prevents another policy-driven application send.
+Speculative attempts retain their separate execution rules.
+
 .. autoclass:: WriteType
    :members:
 

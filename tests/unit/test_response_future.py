@@ -1054,7 +1054,7 @@ class ResponseFutureTests(unittest.TestCase):
                 scheduler = rf.session.cluster.scheduler.schedule_with_shutdown
                 scheduler.assert_called_once_with(
                     0.5, ANY, rf._retry_task, decision == RetryPolicy.RETRY,
-                    self.host1, rf._page_generation)
+                    self.host1, rf._page_generation, retry_error=ANY)
                 second.push.assert_not_called()
                 assert rf.message.consistency_level == ConsistencyLevel.QUORUM
                 assert rf._query_retries == 1
@@ -1066,7 +1066,7 @@ class ResponseFutureTests(unittest.TestCase):
                     pool.borrow_connection.side_effect = (
                         replacement_pool.borrow_connection.side_effect)
                 args = scheduler.call_args.args
-                args[2](*args[3:])
+                args[2](*args[3:], **scheduler.call_args.kwargs)
                 second.push.assert_called_once()
                 expected_host = (self.host1 if decision == RetryPolicy.RETRY
                                  else self.host2)
@@ -1078,8 +1078,8 @@ class ResponseFutureTests(unittest.TestCase):
         second.request_ids.clear()
         second.request_ids.append(17)
 
-        def schedule(delay, on_shutdown, fn, *args):
-            fn(*args)
+        def schedule(delay, on_shutdown, fn, *args, **kwargs):
+            fn(*args, **kwargs)
 
         scheduler = rf.session.cluster.scheduler.schedule_with_shutdown
         scheduler.side_effect = schedule
@@ -1089,7 +1089,7 @@ class ResponseFutureTests(unittest.TestCase):
             rf.query, ConsistencyLevel.ONE,
             error=rf._errors[self.host1], retry_num=0)
         scheduler.assert_called_once_with(
-            0, ANY, rf._retry_task, False, self.host1, rf._page_generation)
+            0, ANY, rf._retry_task, False, self.host1, rf._page_generation, retry_error=ANY)
         second.push.assert_called_once()
         assert rf._connection is second
         assert rf._req_id == 17
@@ -1101,7 +1101,7 @@ class ResponseFutureTests(unittest.TestCase):
         assert rf.send_request()
         scheduler = rf.session.cluster.scheduler.schedule_with_shutdown
         scheduler.assert_called_once_with(
-            0, ANY, rf._retry_task, False, self.host1, rf._page_generation)
+            0, ANY, rf._retry_task, False, self.host1, rf._page_generation, retry_error=ANY)
         second.push.assert_not_called()
 
     def test_failed_push_ignore_finishes_without_second_send(self):
@@ -1410,6 +1410,7 @@ class ResponseFutureTests(unittest.TestCase):
         """
 
         connection = MagicMock(spec=Connection)
+        connection.is_control_connection = False
         connection._requests = {}
         connection.in_flight = 5
         connection.orphaned_request_ids = set()
@@ -1592,14 +1593,15 @@ class ResponseFutureTests(unittest.TestCase):
         rf._set_result(host, None, None, result)
 
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            ANY, ANY, rf._retry_task, True, host, 0)
+            ANY, ANY, rf._retry_task, True, host, 0, retry_error=ANY)
         assert 1 == rf._query_retries
 
         connection = Mock(spec=Connection)
         pool.borrow_connection.return_value = (connection, 2)
 
         # simulate the executor running this
-        rf._retry_task(True, host)
+        scheduled = rf.session.cluster.scheduler.schedule_with_shutdown.call_args
+        scheduled.args[2](*scheduled.args[3:], **scheduled.kwargs)
 
         # it should try again with the same host since this was
         # an UnavailableException
@@ -1628,7 +1630,7 @@ class ResponseFutureTests(unittest.TestCase):
         rf._set_result(host, None, None, result)
 
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            ANY, ANY, rf._retry_task, False, host, 0)
+            ANY, ANY, rf._retry_task, False, host, 0, retry_error=ANY)
         # query_retries does get incremented for Overloaded/Bootstrapping errors (since 3.18)
         assert 1 == rf._query_retries
 
@@ -1636,7 +1638,8 @@ class ResponseFutureTests(unittest.TestCase):
         connection = Mock(spec=Connection)
         pool.borrow_connection.return_value = (connection, 2)
         # simulate the executor running this
-        rf._retry_task(False, host)
+        scheduled = rf.session.cluster.scheduler.schedule_with_shutdown.call_args
+        scheduled.args[2](*scheduled.args[3:], **scheduled.kwargs)
 
         # it should try with a different host
         rf.session._pools.get.assert_called_with(self.host2)
@@ -1648,37 +1651,22 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_all_retries_fail(self):
         session = self.make_session()
-        pool = session._pools[self.host1]
-        connection = Mock(spec=Connection)
-        pool.borrow_connection.return_value = (connection, 1)
-
+        pool1, connection1 = self.make_owned_pool(self.host1, request_id=1)
+        pool2, connection2 = self.make_owned_pool(self.host2, request_id=2)
+        session._pools = {self.host1: pool1, self.host2: pool2}
         rf = self.make_response_future(session)
         rf.send_request()
-        rf.session._pools.get.assert_any_call(self.host1)
-
-        result = Mock(spec=IsBootstrappingErrorMessage, info={})
-        host = self.host1
-        rf._set_result(host, None, None, result)
-
-        # simulate the executor running this
-        rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            ANY, ANY, rf._retry_task, False, host, 0)
-
-        rf._retry_task(False, host)
-
-        # it should try with a different host
-        rf.session._pools.get.assert_called_with(self.host2)
-
-        result = Mock(spec=IsBootstrappingErrorMessage, info={})
-        rf._set_result(host, None, None, result)
-
-        # simulate the executor running this
-        rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_with(
-            ANY, ANY, rf._retry_task, False, host, 0)
-        rf._retry_task(False, host)
-
-        with pytest.raises(NoHostAvailable):
-            rf.result()
+        first = IsBootstrappingErrorMessage(0x1002, 'first coordinator', {})
+        second = IsBootstrappingErrorMessage(0x1002, 'second coordinator', {})
+        connection1._requests.pop(1)(first)
+        scheduled = session.cluster.scheduler.schedule_with_shutdown.call_args
+        scheduled.args[2](*scheduled.args[3:], **scheduled.kwargs)
+        connection2._requests.pop(2)(second)
+        expected = rf._errors[self.host2]
+        assert expected is not rf._errors[self.host1]
+        scheduled = session.cluster.scheduler.schedule_with_shutdown.call_args
+        scheduled.args[2](*scheduled.args[3:], **scheduled.kwargs)
+        assert rf._final_exception is expected
 
     def test_exponential_retry_policy_fail(self):
         session = self.make_session()
@@ -1698,11 +1686,12 @@ class ResponseFutureTests(unittest.TestCase):
 
         # simulate the executor running this
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            ANY, ANY, rf._retry_task, False, host, 0)
+            ANY, ANY, rf._retry_task, False, host, 0, retry_error=ANY)
 
         delay = rf.session.cluster.scheduler.schedule_with_shutdown.mock_calls[-1][1][0]
         assert delay > 0.05
-        rf._retry_task(False, host)
+        scheduled = rf.session.cluster.scheduler.schedule_with_shutdown.call_args
+        scheduled.args[2](*scheduled.args[3:], **scheduled.kwargs)
 
     def test_retry_is_failed_when_scheduler_shuts_down(self):
         session = self.make_session()
@@ -1980,8 +1969,8 @@ class ResponseFutureTests(unittest.TestCase):
 
     def test_control_connection_fallback_use_waits_for_initial_keyspace_setup(self):
         session = self._make_fallback_session(keyspace='ks1')
-        def submit(callback, *args):
-            callback(*args)
+        def submit(callback, *args, **kwargs):
+            callback(*args, **kwargs)
             return object()
 
         session.submit.side_effect = submit
@@ -2441,7 +2430,7 @@ class ResponseFutureTests(unittest.TestCase):
         connection.send_msg.side_effect = ConnectionSendError('wake failed', connection.endpoint)
 
         rf = self.make_response_future(session)
-        assert not rf.send_request()
+        assert rf.send_request()
         connection.defunct.assert_called_once()
         session.cluster.control_connection.return_connection.assert_called_once_with(connection)
         assert not connection._requests
@@ -2464,7 +2453,7 @@ class ResponseFutureTests(unittest.TestCase):
         control_connection.reconnect = Mock()
 
         rf = self.make_response_future(session)
-        assert not rf.send_request()
+        assert rf.send_request()
         control_connection.reconnect.assert_not_called()
 
     def test_control_connection_fallback_concurrent_send_preserves_session(self):
@@ -2818,6 +2807,8 @@ class ResponseFutureTests(unittest.TestCase):
         connection = self.make_control_connection()
         session.cluster.control_connection._connection = connection
         control_host = self.make_host(connection.endpoint)
+        session.cluster.metadata.add_or_return_host(control_host)
+        connection._control_connection_host = control_host
         session.cluster.get_control_connection_host.return_value = control_host
 
         rf = self.make_response_future(session)
@@ -2846,6 +2837,8 @@ class ResponseFutureTests(unittest.TestCase):
         connection.get_request_id.side_effect = [7, 8]
         session.cluster.control_connection._connection = connection
         control_host = self.make_host(connection.endpoint)
+        session.cluster.metadata.add_or_return_host(control_host)
+        connection._control_connection_host = control_host
         session.cluster.get_control_connection_host.return_value = control_host
 
         rf = self.make_response_future(session)
@@ -2857,24 +2850,17 @@ class ResponseFutureTests(unittest.TestCase):
         connection.send_msg.call_args[1]['cb'](first_response)
 
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            ANY, ANY, rf._retry_task, False, control_host, 0)
+            ANY, ANY, rf._retry_task, False, control_host, 0, retry_error=ANY)
 
-        # The retry decision must come from the future state, not the live connection reference.
+        # The original error survives exhaustion; the same fallback host is
+        # not a next-host destination, even if the connection state changes.
         rf._connection = Mock(is_control_connection=False)
-
-        rf._retry_task(False, control_host)
-
-        assert connection.send_msg.call_count == 2
-        assert connection.send_msg.call_args_list[1][0][0] is rf.message
-        assert connection.send_msg.call_args_list[1][0][1] == 8
-        assert rf.attempted_hosts == [control_host, control_host]
-
-        expected_result = (object(), object())
-        connection.send_msg.call_args_list[1][1]['cb'](
-            self.make_mock_response(expected_result[0], expected_result[1]))
-
+        scheduled = rf.session.cluster.scheduler.schedule_with_shutdown.call_args
+        scheduled.args[2](*scheduled.args[3:], **scheduled.kwargs)
+        assert connection.send_msg.call_count == 1
+        assert rf.attempted_hosts == [control_host]
+        assert rf._final_exception is first_response
         assert connection.in_flight == 0
-        assert rf.result()[0] == expected_result
 
     def test_control_connection_fallback_fetches_next_page(self):
         session = self.make_basic_session()
@@ -2886,6 +2872,8 @@ class ResponseFutureTests(unittest.TestCase):
         connection.get_request_id.side_effect = [7, 8]
         session.cluster.control_connection._connection = connection
         control_host = self.make_host(connection.endpoint)
+        session.cluster.metadata.add_or_return_host(control_host)
+        connection._control_connection_host = control_host
         session.cluster.get_control_connection_host.return_value = control_host
 
         rf = self.make_response_future(session)
@@ -2935,6 +2923,8 @@ class ResponseFutureTests(unittest.TestCase):
         connection.get_request_id.side_effect = [7, 8, 9]
         session.cluster.control_connection._connection = connection
         control_host = self.make_host(connection.endpoint)
+        session.cluster.metadata.add_or_return_host(control_host)
+        connection._control_connection_host = control_host
         session.cluster.get_control_connection_host.return_value = control_host
 
         rf = self.make_response_future(session)
@@ -2984,7 +2974,8 @@ class ResponseFutureTests(unittest.TestCase):
         rf.send_request = Mock()
         rf._reprepare(PrepareMessage("SELECT * FROM foo"), host, connection, None)
 
-        rf.send_request.assert_called_once_with()
+        rf.send_request.assert_called_once_with(is_speculative=False, error_no_hosts=True,
+                                                retry_context=None)
 
     def test_control_connection_fallback_rejects_indented_use(self):
         session = self.make_basic_session()
@@ -3069,7 +3060,8 @@ class ResponseFutureTests(unittest.TestCase):
         connection.send_msg.call_args_list[1][1]['cb'](prepared_response)
         session.submit.assert_called_once_with(
             rf._execute_after_prepare, host, connection, None, prepared_response,
-            expected_query_id=None)
+            expected_query_id=None, is_speculative=False, retry_context=None,
+            page_generation=rf._page_generation)
 
     def test_control_connection_fallback_not_used_when_pool_can_serve(self):
         session = self.make_basic_session()
@@ -3127,6 +3119,9 @@ class ResponseFutureTests(unittest.TestCase):
         session = self._make_fallback_session()
         connection = self.make_control_connection()
         session.cluster.control_connection._connection = connection
+        control_host = self.make_host(connection.endpoint)
+        session.cluster.metadata.add_or_return_host(control_host)
+        connection._control_connection_host = control_host
 
         def send_msg(message, request_id, cb, **kwargs):
             connection._requests[request_id] = \
@@ -3496,7 +3491,7 @@ class ResponseFutureTests(unittest.TestCase):
 
         rf._query = Mock(return_value=True)
         rf._execute_after_prepare('host', None, None, response)
-        rf._query.assert_called_once_with('host')
+        rf._query.assert_called_once_with('host', is_speculative=False, retry_context=None)
 
         rf.prepared_statement = PreparedStatement(
             column_metadata=[], query_id=query_id, routing_key_indexes=None,
@@ -3504,7 +3499,7 @@ class ResponseFutureTests(unittest.TestCase):
             result_metadata=[], result_metadata_id=None)
         rf._query = Mock(return_value=True)
         rf._execute_after_prepare('host', None, None, response)
-        rf._query.assert_called_once_with('host')
+        rf._query.assert_called_once_with('host', is_speculative=False, retry_context=None)
         assert rf.prepared_statement.result_metadata_id == b'foo'
 
     def test_unprepared_refreshes_bind_names_without_rebinding(self):
@@ -3674,7 +3669,7 @@ class ResponseFutureTests(unittest.TestCase):
         assert rf.prepared_statement.result_metadata_and_id == (new_meta, b'new_hash')
         # Recovering the metadata re-arms the anomaly warning, on this path too.
         assert rf.prepared_statement._warned_missing_column_metadata is False
-        rf._query.assert_called_once_with('host')
+        rf._query.assert_called_once_with('host', is_speculative=False, retry_context=None)
 
     def test_execute_after_prepare_no_metadata_id_in_response_clears_id(self):
         """
@@ -3730,7 +3725,8 @@ class ResponseFutureTests(unittest.TestCase):
         rf = self.make_response_future(session)
         rf.send_request()
 
-        connection._requests[1] = (connection._handle_options_response, ProtocolHandler.decode_message, [])
+        connection._requests[1] = (connection.send_msg.call_args.kwargs['cb'],
+                                   ProtocolHandler.decode_message, [])
 
         rf._on_timeout()
         pool.return_connection.assert_called_once_with(connection, stream_was_orphaned=True)
@@ -3780,7 +3776,7 @@ class ResponseFutureTests(unittest.TestCase):
         
         # The retry should be scheduled
         rf.session.cluster.scheduler.schedule_with_shutdown.assert_called_once_with(
-            ANY, ANY, rf._retry_task, False, specific_host, 0)
+            ANY, ANY, rf._retry_task, False, specific_host, 0, retry_error=ANY)
         assert 1 == rf._query_retries
         
         # Reset mocks to track next calls
@@ -3790,13 +3786,15 @@ class ResponseFutureTests(unittest.TestCase):
         # Now simulate the retry task executing
         # The bug would cause this to succeed and retry again infinitely
         # The fix ensures the iterator is exhausted after the first try
-        rf._retry_task(False, specific_host)
+        scheduled = rf.session.cluster.scheduler.schedule_with_shutdown.call_args
+        scheduled.args[2](*scheduled.args[3:], **scheduled.kwargs)
         
         # After the retry, send_request should be called but the query_plan iterator
         # should be exhausted, so no new request should be sent
-        # Instead, it should set a NoHostAvailable exception
-        assert rf._final_exception is not None
-        assert isinstance(rf._final_exception, NoHostAvailable)
+        # The original application failure is preserved on exhaustion.
+        assert rf._final_exception is result
+        pool.borrow_connection.assert_not_called()
+        connection.send_msg.assert_not_called()
 
     # -------------------------------------------------------------------------
     # Helpers for SCYLLA_USE_METADATA_ID tests
