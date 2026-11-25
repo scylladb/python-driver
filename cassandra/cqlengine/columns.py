@@ -756,7 +756,7 @@ class BaseCollectionColumn(Column):
     """
     Base Container type for collection-like columns.
 
-    http://cassandra.apache.org/doc/cql3/CQL-3.0.html#collections
+    https://docs.scylladb.com/manual/stable/cql/types.html#collections
     """
     def __init__(self, types, **kwargs):
         """
@@ -961,7 +961,7 @@ class Map(BaseContainerColumn):
     """
     Stores a key -> value map (dictionary)
 
-    https://docs.datastax.com/en/dse/6.7/cql/cql/cql_using/useMap.html
+    https://docs.scylladb.com/manual/stable/cql/types.html#maps
     """
 
     _python_type_hashable = False
