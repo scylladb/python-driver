@@ -86,7 +86,8 @@ Windows Installation Notes
 Installing the driver with extensions in Windows sometimes presents some challenges. A few notes about common
 hang-ups:
 
-Setup requires a compiler. Install the `Microsoft C++ Build Tools <https://visualstudio.microsoft.com/visual-cpp-build-tools/>`_
+To build the driver's extensions from source, install the
+`Microsoft C++ Build Tools <https://visualstudio.microsoft.com/visual-cpp-build-tools/>`_
 (setuptools prints this link during install if it cannot find a compiler).
 
 It is also possible to run the build with your compiler of choice. Just make sure to have your environment setup with
