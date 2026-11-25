@@ -2123,6 +2123,43 @@ class ResponseFutureTests(unittest.TestCase):
         connection.defunct.assert_called_once()
         assert control_connection._get_application_keyspace() == 'ks1'
 
+    def test_failed_internal_use_cleanup_preserves_reused_stream_barrier(self):
+        session = self._make_fallback_session(keyspace='ks2')
+        control = session.cluster.control_connection
+        connection = self.make_control_connection()
+        connection.keyspace = 'ks1'
+        connection.get_request_id.side_effect = [7, 7, 8]
+        control._connection = connection
+        first = self.make_response_future(session)
+        second = self.make_response_future(session)
+        sends = []
+
+        def send(message, request_id, cb, **kwargs):
+            sends.append(message.query)
+            if len(sends) == 1:
+                cb(InvalidRequestException(0x2200, 'USE rejected', None))
+                assert second._query_control_connection() == 7
+                raise ConnectionBusy('failed after immediate response')
+            connection._requests[request_id] = (cb, None, None)
+            return 128
+
+        connection.send_msg.side_effect = send
+        assert first._query_control_connection() is None
+        assert isinstance(first._final_exception, InvalidRequest)
+        assert (connection, 7) in control._application_internal_keyspace_changes
+        assert not second._is_final()
+
+        connection._requests.pop(7)[0](Mock(
+            spec=ResultMessage, kind=RESULT_KIND_SET_KEYSPACE,
+            new_keyspace='ks2'))
+        assert not control._application_internal_keyspace_changes
+        assert sends[:2] == ['USE ks2', 'USE ks2']
+        assert len(sends) == 3
+        connection._requests.pop(8)[0](self.make_mock_response(['value'], [(1,)]))
+        assert second._event.is_set()
+        second.result()
+        assert control._application_requests_in_flight == connection.in_flight == 0
+
     def test_control_connection_fallback_timed_out_use_retires_connection(self):
         session = self._make_fallback_session(keyspace='ks1')
         control_connection = session.cluster.control_connection
