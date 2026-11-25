@@ -663,8 +663,12 @@ class BoundStatement(Statement):
                     raise ValueError("Attempt to bind UNSET_VALUE while using unsuitable protocol version (%d < 4)" % proto_version)
             else:
                 try:
-                    col_desc = ColDesc(col_spec.keyspace_name, col_spec.table_name, col_spec.name)
-                    uses_ce = ce_policy and ce_policy.contains_column(col_desc)
+                    # ColDesc is only needed for encryption; skip the allocation otherwise.
+                    if ce_policy:
+                        col_desc = ColDesc(col_spec.keyspace_name, col_spec.table_name, col_spec.name)
+                        uses_ce = ce_policy.contains_column(col_desc)
+                    else:
+                        uses_ce = False
                     col_type = ce_policy.column_type(col_desc) if uses_ce else col_spec.type
                     col_bytes = col_type.serialize(value, proto_version)
                     if uses_ce:

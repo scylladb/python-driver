@@ -35,6 +35,10 @@ class TypesTest(unittest.TestCase):
     def test_date_side_by_side(self):
         types_testhelper.test_date_side_by_side()
 
+    @cythontest
+    def test_decimal_empty_varint_raises(self):
+        types_testhelper.test_decimal_empty_varint_raises()
+
 
 def decode_cython_collection(collection, encoded_collection):
     assert HAVE_CYTHON, "VERIFY_CYTHON requires built Cython extensions"

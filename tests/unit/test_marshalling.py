@@ -16,12 +16,15 @@ from cassandra import ProtocolVersion
 
 import unittest
 
+import pytest
+
 import platform
 from datetime import datetime, date
 from decimal import Decimal
 from uuid import UUID
 
 from cassandra.cqltypes import lookup_casstype, DecimalType, UTF8Type, DateType
+from cassandra.marshal import varint_pack, varint_unpack
 from cassandra.util import OrderedMapSerializedKey, sortedset, Time, Date
 
 marshalled_value_pairs = (
@@ -134,3 +137,17 @@ class UnmarshalTest(unittest.TestCase):
             for n in converted_types:
                 expected = Decimal(n)
                 assert DecimalType.from_binary(DecimalType.to_binary(n, proto_ver), proto_ver) == expected
+
+    def test_varint_unpack_empty_raises(self):
+        # empty varint is malformed wire data; must fail loudly, not decode to 0
+        self.assertRaises(ValueError, varint_unpack, b'')
+
+    def test_varint_pack_accepts_numpy_ints(self):
+        numpy = pytest.importorskip('numpy')
+        for value in (0, 1, -1, 127, 128, -128, -129, 2 ** 62, -2 ** 63):
+            assert varint_pack(numpy.int64(value)) == varint_pack(value)
+        self.assertRaises(TypeError, varint_pack, 1.5)
+
+    def test_decimal_truncated_payload_raises(self):
+        # 4-byte payload (scale only, no unscaled varint) is a corrupt decimal
+        self.assertRaises(ValueError, DecimalType.deserialize, b'\x00\x00\x00\x05', 3)
