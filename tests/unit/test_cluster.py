@@ -303,10 +303,10 @@ class ClusterTest(unittest.TestCase):
         second_session = make_session()
         first_pool = Mock(
             host=host, is_shutdown=False, host_distance=HostDistance.LOCAL,
-            _initially_disconnected=False, _promotion_recovery_claimed=False)
+            _retiring=False)
         second_pool = Mock(
             host=host, is_shutdown=False, host_distance=HostDistance.LOCAL,
-            _initially_disconnected=False, _promotion_recovery_claimed=False)
+            _retiring=False)
 
         first_future = Future()
         first_future.set_result(True)
@@ -1365,7 +1365,8 @@ class ClusterTest(unittest.TestCase):
 
             pool = Mock(
                 host=pool_host, host_distance=distance,
-                is_shutdown=False, _keyspace=None, _membership_lock=RLock())
+                is_shutdown=False, _keyspace=None, _membership_lock=RLock(),
+                _retiring=False)
             pool._lock_usable_connection.return_value = nullcontext(True)
             pool.get_state.return_value = {"open_count": 1}
             created_pools.append(pool)
@@ -1599,7 +1600,7 @@ class ClusterTest(unittest.TestCase):
         new_pool = Mock(
             host=host, host_distance=HostDistance.LOCAL,
             is_shutdown=False, _keyspace="old_keyspace",
-            _membership_lock=RLock())
+            _membership_lock=RLock(), _retiring=False)
         new_pool._lock_usable_connection.return_value = nullcontext(True)
         keyspace_error = ConnectionException("keyspace update failed")
 
@@ -1708,7 +1709,8 @@ class ClusterTest(unittest.TestCase):
 
         new_pool = Mock(
             host=host, host_distance=HostDistance.LOCAL,
-            is_shutdown=False, _keyspace=None, _membership_lock=RLock())
+            is_shutdown=False, _keyspace=None, _membership_lock=RLock(),
+            _retiring=False)
         new_pool._lock_usable_connection.return_value = nullcontext(True)
 
         def create_pool(*args, **kwargs):
@@ -3225,7 +3227,7 @@ class SessionPoolRaceTest(unittest.TestCase):
         pool = Mock(
             host=host, host_distance=distance, is_shutdown=False,
             _keyspace=keyspace, _membership_lock=RLock(),
-            _initially_disconnected=False, _promotion_recovery_claimed=False)
+            _retiring=False)
         pool._lock_usable_connection.return_value = nullcontext(True)
         pool.shutdown.side_effect = lambda: setattr(
             pool, 'is_shutdown', True)
@@ -3248,6 +3250,7 @@ class SessionPoolRaceTest(unittest.TestCase):
             executor=executor, connect_timeout=5, is_shutdown=False,
             allow_control_connection_query_fallback=(
                 ControlConnectionQueryFallback.Disabled))
+        session.cluster.reconnection_policy.new_schedule.return_value = ()
         return session
 
     def _blocking_pool_factory(self, pool):
@@ -3831,7 +3834,7 @@ class SessionPoolRaceTest(unittest.TestCase):
         assert pool.host_distance == HostDistance.LOCAL
         pool.shutdown.assert_not_called()
 
-    def test_newer_distance_supersedes_older_assignment(self):
+    def test_newer_distance_supersedes_older_replacement(self):
         for old_distance, new_distance in (
                 (HostDistance.REMOTE, HostDistance.LOCAL),
                 (HostDistance.LOCAL, HostDistance.REMOTE)):
@@ -3839,6 +3842,7 @@ class SessionPoolRaceTest(unittest.TestCase):
                     old_distance=old_distance, new_distance=new_distance):
                 host = self._host()
                 pool = self._pool(host, distance=HostDistance.LOCAL_RACK)
+                replacement = self._pool(host, distance=new_distance)
                 session = self._session({host: pool})
                 old_distance_started = Event()
                 release_old_distance = Event()
@@ -3858,18 +3862,24 @@ class SessionPoolRaceTest(unittest.TestCase):
                     return new_distance
 
                 session._profile_manager.distance.side_effect = distance
-                with ThreadPoolExecutor(max_workers=1) as reconciler:
+                with (patch('cassandra.cluster.HostConnection',
+                            return_value=replacement),
+                      ThreadPoolExecutor(max_workers=1) as reconciler):
                     old_reconciliation = reconciler.submit(
                         session.update_created_pools, hosts=(host,))
                     assert old_distance_started.wait(5)
 
-                    assert session.update_created_pools(
-                        hosts=(host,)) == set()
+                    futures = session.update_created_pools(hosts=(host,))
+                    assert len(futures) == 1
+                    assert next(iter(futures)).result(timeout=5) is True
 
                     release_old_distance.set()
                     assert old_reconciliation.result(timeout=5) == set()
 
-                assert pool.host_distance == new_distance
+                assert pool.host_distance == HostDistance.LOCAL_RACK
+                assert pool.is_shutdown
+                assert session._pools == {host: replacement}
+                assert replacement.host_distance == new_distance
 
     def test_in_flight_eligible_creation_loses_to_ignored_intent(self):
         host = self._host()
@@ -4229,6 +4239,7 @@ class SessionPoolRaceTest(unittest.TestCase):
 
         session.submit = shutdown_before_submit
         live_pool = self._pool(host, distance=HostDistance.REMOTE)
+        replacement = self._pool(host)
         live_session = self._session({host: live_pool})
         cluster = Cluster(contact_points=[])
         self.addCleanup(cluster.shutdown)
@@ -4236,15 +4247,19 @@ class SessionPoolRaceTest(unittest.TestCase):
         # Keep the failing session first to exercise the cluster caller's loop.
         cluster.sessions = (session, live_session)
 
-        with self.assertLogs('cassandra.cluster', level='ERROR'):
+        with (patch('cassandra.cluster.HostConnection',
+                    return_value=replacement),
+              self.assertLogs('cassandra.cluster', level='ERROR')):
             cluster.add_execution_profile('new', ExecutionProfile())
 
         assert session.is_shutdown
         assert session._pools == {}
         pool.shutdown.assert_called_once_with()
         assert completions[0].exception(timeout=5) is shutdown_error
-        assert live_pool.host_distance == HostDistance.LOCAL
-        live_pool.shutdown.assert_not_called()
+        assert live_pool.host_distance == HostDistance.REMOTE
+        assert live_pool.is_shutdown
+        assert live_session._pools == {host: replacement}
+        replacement.shutdown.assert_not_called()
 
     def test_superseded_ignored_shutdown_waits_for_newer_creation(self):
         host = self._host()
@@ -4883,18 +4898,25 @@ class SessionPoolRaceTest(unittest.TestCase):
         remote_pool.shutdown.assert_called_once_with()
         local_pool.shutdown.assert_not_called()
 
-    def test_newer_reconciliation_updates_in_flight_replacement_distance(self):
+    def test_newer_reconciliation_replaces_in_flight_pool_distance(self):
         host = self._host()
         old_pool = self._pool(host, distance=HostDistance.REMOTE)
         candidate = self._pool(host, distance=HostDistance.REMOTE)
+        local_pool = self._pool(host)
         session = self._session({host: old_pool}, workers=1)
         current_distance = [HostDistance.REMOTE]
         session._profile_manager.distance.side_effect = \
             lambda _host: current_distance[0]
         factory = self._blocking_pool_factory(candidate)
 
+        def create_pool(pool_host, distance, pool_session, _ownership=None):
+            if distance == HostDistance.REMOTE:
+                return factory(pool_host, distance, pool_session, _ownership)
+            assert distance == HostDistance.LOCAL
+            return local_pool
+
         with patch('cassandra.cluster.HostConnection',
-                   side_effect=factory):
+                   side_effect=create_pool):
             candidate_future = session.add_or_renew_pool(
                 host, is_host_addition=False)
             assert factory.creation_started.wait(5)
@@ -4902,17 +4924,22 @@ class SessionPoolRaceTest(unittest.TestCase):
                 session._pool_creation_work[candidate_future]
 
             current_distance[0] = HostDistance.LOCAL
-            assert session.update_created_pools(hosts=(host,)) == set()
-            assert old_pool.host_distance == HostDistance.LOCAL
+            futures = session.update_created_pools(hosts=(host,))
+            assert len(futures) == 1
+            assert old_pool.host_distance == HostDistance.REMOTE
+            assert old_pool.is_shutdown
 
             factory.release_creation.set()
             assert candidate_future.result(timeout=5) is True
-            candidate_work.result(timeout=5)
+            assert candidate_work.result(timeout=5) is False
+            assert next(iter(futures)).result(timeout=5) is True
 
-        assert session._pools == {host: candidate}
-        assert candidate.host_distance == HostDistance.LOCAL
-        old_pool.shutdown.assert_called_once_with()
-        candidate.shutdown.assert_not_called()
+        assert session._pools == {host: local_pool}
+        assert candidate.host_distance == HostDistance.REMOTE
+        assert local_pool.host_distance == HostDistance.LOCAL
+        assert old_pool.is_shutdown
+        candidate.shutdown.assert_called_once_with()
+        local_pool.shutdown.assert_not_called()
 
     def test_competing_pool_creation_keeps_first_published_replacement(self):
         host = self._host()

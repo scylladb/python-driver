@@ -21,11 +21,13 @@ from uuid import uuid4
 
 import pytest
 
-from cassandra import AuthenticationFailed
-from cassandra.cluster import Cluster
+from cassandra import AuthenticationFailed, OperationTimedOut
+from cassandra.cluster import Cluster, ExecutionProfile, EXEC_PROFILE_DEFAULT
 from cassandra.connection import (
     Connection, ConnectionException, DefaultEndPoint)
-from cassandra.policies import HostDistance, SimpleConvictionPolicy
+from cassandra.policies import (
+    DCAwareRoundRobinPolicy, HostDistance, RoundRobinPolicy,
+    SimpleConvictionPolicy)
 from cassandra.pool import Host, HostConnection
 from cassandra.protocol_features import ProtocolFeatures
 from tests.unit.util import HashableMock
@@ -35,8 +37,7 @@ from tests.unit.utils import new_session_with_pool_state
 def make_pool(host, keyspace=None):
     pool = Mock(host=host, endpoint=host.endpoint, is_shutdown=False,
                 host_distance=HostDistance.LOCAL, _keyspace=keyspace,
-                _membership_lock=RLock(), _initially_disconnected=False,
-                _promotion_recovery_claimed=False)
+                _membership_lock=RLock(), _retiring=False)
     pool._lock_usable_connection.side_effect = lambda: nullcontext(True)
     pool.shutdown.side_effect = lambda: setattr(pool, 'is_shutdown', True)
     return pool
@@ -72,12 +73,10 @@ def make_connection(is_closed=False, is_defunct=False):
 
 
 @pytest.mark.parametrize('connect_to_remote_hosts', [False, True])
-@pytest.mark.parametrize('advertise_local', [False, True])
 @pytest.mark.parametrize('local_distance', [HostDistance.LOCAL,
                                            HostDistance.LOCAL_RACK])
 def test_remote_pool_promotion_opens_local_connection(
-        pool_session, connect_to_remote_hosts, advertise_local,
-        local_distance):
+        pool_session, connect_to_remote_hosts, local_distance):
     session, host = pool_session
     cluster = session.cluster
     cluster.connect_to_remote_hosts = connect_to_remote_hosts
@@ -93,26 +92,167 @@ def test_remote_pool_promotion_opens_local_connection(
     assert cluster.connection_factory.call_count == int(
         connect_to_remote_hosts)
 
-    if advertise_local:
-        # A concurrent direct ADD can update a retained pool's distance.
-        remote_pool.host_distance = local_distance
+    cluster.connection_factory.return_value = make_connection()
     session._profile_manager.distance.return_value = local_distance
     futures = session.update_created_pools()
-    assert len(futures) == int(not connect_to_remote_hosts)
+    assert len(futures) == 1
     for future in futures:
         assert future.result(5) is True
     local_pool = session._pools[host]
     assert local_pool.host_distance == local_distance
     assert local_pool.open_count == 1
-    assert cluster.connection_factory.call_count == 1
-    assert remote_pool.is_shutdown is not connect_to_remote_hosts
-    assert (local_pool is remote_pool) is connect_to_remote_hosts
+    assert cluster.connection_factory.call_count == (
+        1 + int(connect_to_remote_hosts))
+    assert remote_pool.is_shutdown
+    assert remote_pool.host_distance == HostDistance.REMOTE
+    assert local_pool is not remote_pool
+    with pytest.raises(AttributeError):
+        local_pool.host_distance = HostDistance.REMOTE
     borrowed, _ = local_pool.borrow_connection(timeout=0)
-    assert borrowed is conn
+    assert borrowed is cluster.connection_factory.return_value
     local_pool.return_connection(borrowed)
     assert session.update_created_pools() == set()
     assert session._pools[host] is local_pool
-    assert cluster.connection_factory.call_count == 1
+    assert cluster.connection_factory.call_count == (
+        1 + int(connect_to_remote_hosts))
+
+
+@pytest.mark.parametrize('direct', [False, True])
+@pytest.mark.parametrize('connect_to_remote_hosts', [False, True])
+@pytest.mark.parametrize('old_distance,new_distance', [
+    (HostDistance.REMOTE, HostDistance.LOCAL),
+    (HostDistance.REMOTE, HostDistance.LOCAL_RACK),
+    (HostDistance.LOCAL, HostDistance.REMOTE),
+    (HostDistance.LOCAL, HostDistance.LOCAL_RACK),
+    (HostDistance.LOCAL_RACK, HostDistance.REMOTE),
+    (HostDistance.LOCAL_RACK, HostDistance.LOCAL),
+])
+def test_distance_change_recreates_pool(
+        pool_session, old_distance, new_distance, connect_to_remote_hosts,
+        direct):
+    session, host = pool_session
+    cluster = session.cluster
+    cluster.connect_to_remote_hosts = connect_to_remote_hosts
+    old_connection, new_connection = make_connection(), make_connection()
+    cluster.connection_factory = Mock(return_value=old_connection)
+    session._profile_manager.distance.return_value = old_distance
+    assert session.add_or_renew_pool(host, True).result(5) is True
+    old_pool = session._pools[host]
+    cluster.connection_factory.reset_mock()
+    cluster.connection_factory.return_value = new_connection
+    session._profile_manager.distance.return_value = new_distance
+
+    if direct:
+        futures = {session.add_or_renew_pool(host, False)}
+    else:
+        futures = session.update_created_pools()
+    assert len(futures) == 1
+    assert next(iter(futures)).result(5) is True
+    new_pool = session._pools[host]
+    assert new_pool is not old_pool
+    assert old_pool.is_shutdown
+    assert old_pool.host_distance == old_distance
+    assert new_pool.host_distance == new_distance
+    needs_connection = (
+        new_distance != HostDistance.REMOTE or connect_to_remote_hosts)
+    assert new_pool.open_count == int(needs_connection)
+    assert cluster.connection_factory.call_count == int(needs_connection)
+    assert old_pool.get_connections() == []
+    if old_distance != HostDistance.REMOTE or connect_to_remote_hosts:
+        old_connection.close.assert_called_once()
+    if needs_connection:
+        borrowed, _ = new_pool.borrow_connection(timeout=0)
+        assert borrowed is new_connection
+        new_pool.return_connection(borrowed)
+    assert session.update_created_pools() == set()
+    assert session._pools[host] is new_pool
+
+
+@pytest.mark.parametrize('local_distance', [HostDistance.LOCAL,
+                                           HostDistance.LOCAL_RACK])
+@pytest.mark.parametrize('connect_to_remote_hosts', [False, True])
+def test_direct_add_replaces_remote_published_during_distance(
+        pool_session, local_distance, connect_to_remote_hosts):
+    session, host = pool_session
+    session.cluster.connect_to_remote_hosts = connect_to_remote_hosts
+    session.cluster.connection_factory = Mock(side_effect=[
+        make_connection(), make_connection()])
+    work = []
+
+    def submit(fn, *args, **kwargs):
+        completion = Future()
+        work.append((fn, args, kwargs, completion))
+        return completion
+
+    def run_next():
+        fn, args, kwargs, completion = work.pop(0)
+        result = fn(*args, **kwargs)
+        completion.set_result(result)
+        return result
+
+    session.submit = submit
+    session._profile_manager.distance.return_value = HostDistance.REMOTE
+    remote_completion = session.add_or_renew_pool(host, True)
+    published = []
+
+    def distance(current_host):
+        assert current_host is host
+        assert run_next() is True
+        published.append(session._pools[host])
+        return local_distance
+
+    session._profile_manager.distance.side_effect = distance
+    local_completion = session.add_or_renew_pool(host, False)
+    assert not local_completion.done()
+    assert not remote_completion.done()
+    assert published[0].is_shutdown
+    assert published[0].host_distance == HostDistance.REMOTE
+    assert run_next() is True
+    assert local_completion.result(5) is True
+    assert remote_completion.result(5) is True
+    assert session._pools[host] is not published[0]
+    assert session._pools[host].host_distance == local_distance
+    assert session._pools[host].open_count == 1
+
+
+def test_profile_timeout_keeps_registration_and_replacement(pool_session):
+    session, host = pool_session
+    cluster = session.cluster
+    cluster.connect_to_remote_hosts = False
+    cluster.connection_factory = Mock(return_value=make_connection())
+    host.set_location_info('dc2', 'rack1')
+    host.set_up()
+    cluster.profile_manager.profiles[EXEC_PROFILE_DEFAULT] = ExecutionProfile(
+        load_balancing_policy=DCAwareRoundRobinPolicy(
+            local_dc='dc1', used_hosts_per_remote_dc=1))
+    cluster.profile_manager.populate(cluster, cluster.metadata.all_hosts())
+    session._profile_manager = cluster.profile_manager
+    assert session.add_or_renew_pool(host, True).result(5) is True
+    remote_pool = session._pools[host]
+    work = []
+
+    def submit(fn, *args, **kwargs):
+        completion = Future()
+        work.append((fn, args, kwargs, completion))
+        return completion
+
+    session.submit = submit
+    profile = ExecutionProfile(load_balancing_policy=RoundRobinPolicy())
+    with pytest.raises(OperationTimedOut):
+        cluster.add_execution_profile('local', profile, pool_wait_timeout=0)
+    assert cluster.profile_manager.profiles['local'] is profile
+    assert remote_pool.is_shutdown
+    assert remote_pool.host_distance == HostDistance.REMOTE
+    with pytest.raises(ValueError, match='already exists'):
+        cluster.add_execution_profile('local', profile, pool_wait_timeout=0)
+    assert len(work) == 1
+    fn, args, kwargs, completion = work.pop()
+    assert not completion.cancelled()
+    completion.set_result(fn(*args, **kwargs))
+    assert completion.result(5) is True
+    assert session._pools[host] is not remote_pool
+    assert session._pools[host].host_distance == HostDistance.LOCAL
+    assert session._pools[host].open_count == 1
 
 
 @pytest.mark.parametrize('local_distance', [HostDistance.LOCAL,
@@ -182,7 +322,7 @@ def test_queued_remote_creation_cannot_satisfy_local_promotion(
             add = session.add_or_renew_pool
 
             def admit(*args, **kwargs):
-                run_next(connect_to_remote_hosts)
+                run_next(False)
                 return add(*args, **kwargs)
 
             with patch.object(session, 'add_or_renew_pool', side_effect=admit):
@@ -190,13 +330,10 @@ def test_queued_remote_creation_cannot_satisfy_local_promotion(
         else:
             futures = session.update_created_pools()
             assert len(work) == 2
-            run_next(connect_to_remote_hosts)
+            run_next(False)
 
-        immediate_success = (
-            connect_to_remote_hosts and
-            publish_remote != 'before_local_worker')
-        assert len(futures) == int(not immediate_success)
-        assert len(work) == int(not immediate_success)
+        assert len(futures) == 1
+        assert len(work) == 1
         local_result = not local_creation_fails
         if work:
             assert not remote_completion.done()
@@ -210,7 +347,7 @@ def test_queued_remote_creation_cannot_satisfy_local_promotion(
         assert host not in session._pools
         assert host.is_up
         assert len(created) == 1
-        assert created[0]._initially_disconnected
+        assert created[0].host_distance == HostDistance.REMOTE
         assert created[0].is_shutdown
         cluster.connection_factory.assert_called_once()
         session._recover_pool.assert_not_called()
@@ -219,17 +356,19 @@ def test_queued_remote_creation_cannot_satisfy_local_promotion(
     pool = session._pools[host]
     assert pool.host_distance == local_distance
     assert pool.open_count == 1
-    assert cluster.connection_factory.call_count == 1
-    assert len(created) == 2 - int(connect_to_remote_hosts)
-    if not connect_to_remote_hosts:
-        assert created[0].is_shutdown
-        assert pool is not created[0]
+    assert cluster.connection_factory.call_count == (
+        1 + int(connect_to_remote_hosts))
+    assert len(created) == 2
+    assert created[0].is_shutdown
+    assert created[0].host_distance == HostDistance.REMOTE
+    assert pool is not created[0]
     borrowed, _ = pool.borrow_connection(timeout=0)
     assert borrowed is conn
     pool.return_connection(borrowed)
     assert session.update_created_pools() == set()
     assert session._pools[host] is pool
-    assert cluster.connection_factory.call_count == 1
+    assert cluster.connection_factory.call_count == (
+        1 + int(connect_to_remote_hosts))
 
 
 @pytest.mark.parametrize('connect_to_remote_hosts', [False, True])
@@ -345,6 +484,75 @@ def test_concurrent_remote_promotions_share_recovery(
     assert not scheduled
 
 
+@pytest.mark.parametrize('direct', [False, True])
+@pytest.mark.parametrize('old_distance,new_distance', [
+    (HostDistance.REMOTE, HostDistance.LOCAL),
+    (HostDistance.LOCAL, HostDistance.LOCAL_RACK),
+])
+def test_distance_reversal_during_retirement_recreates_pool(
+        pool_session, direct, old_distance, new_distance):
+    session, host = pool_session
+    cluster = session.cluster
+    cluster.connect_to_remote_hosts = False
+    cluster.connection_factory = Mock(return_value=make_connection())
+    cluster.reconnection_policy = Mock()
+    cluster.reconnection_policy.new_schedule.return_value = []
+
+    def submit(fn, *args, **kwargs):
+        future = Future()
+        try:
+            future.set_result(fn(*args, **kwargs))
+        except Exception as exc:
+            future.set_exception(exc)
+        return future
+
+    session.submit = submit
+    session._profile_manager.distance.return_value = old_distance
+    assert session.add_or_renew_pool(host, True).result(5) is True
+    old_pool = session._pools[host]
+    shutdown = old_pool.shutdown
+    entered, release = Event(), Event()
+    calls = 0
+
+    def hold_first_shutdown():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            entered.set()
+            assert release.wait(5)
+        shutdown()
+
+    old_pool.shutdown = hold_first_shutdown
+    session._profile_manager.distance.return_value = new_distance
+
+    def replace():
+        if direct:
+            return {session.add_or_renew_pool(host, False)}
+        return session.update_created_pools()
+
+    with ThreadPoolExecutor(max_workers=1) as background:
+        try:
+            first = background.submit(replace)
+            assert entered.wait(5)
+            session._profile_manager.distance.return_value = old_distance
+            latest = replace()
+            assert len(latest) == 1
+            assert next(iter(latest)).result(5) is True
+            winner = session._pools[host]
+            assert winner is not old_pool
+        finally:
+            release.set()
+        for future in first.result(5):
+            assert future.result(5) is True
+    cluster._lifecycle.drain()
+    assert old_pool.is_shutdown
+    assert old_pool.host_distance == old_distance
+    assert session._pools[host] is winner
+    assert winner.host_distance == old_distance
+    assert not winner.is_shutdown
+    assert cluster.reconnection_policy.new_schedule.call_count == 1
+
+
 @pytest.mark.parametrize('renewal_fails', [False, True])
 def test_remote_promotion_supports_synchronous_submission(
         pool_session, renewal_fails, caplog):
@@ -381,8 +589,69 @@ def test_remote_promotion_supports_synchronous_submission(
     assert 'Error delivering host lifecycle notification' not in caplog.text
 
 
+def test_superseding_policy_error_preserves_pool_recovery(pool_session):
+    session, host = pool_session
+    cluster = session.cluster
+    host.set_up()
+    cluster.connect_to_remote_hosts = False
+    cluster.signal_connection_failure = Mock(return_value=False)
+    cluster.reconnection_policy = Mock()
+    cluster.reconnection_policy.new_schedule.return_value = [1]
+    scheduled = []
+    cluster.scheduler.schedule = Mock(
+        side_effect=lambda delay, fn: scheduled.append(fn))
+    cluster.executor.submit = Mock(return_value=Future())
+
+    def submit(fn, *args, **kwargs):
+        future = Future()
+        future.set_result(fn(*args, **kwargs))
+        return future
+
+    session.submit = submit
+    session._profile_manager.distance.return_value = HostDistance.REMOTE
+    assert session.add_or_renew_pool(host, True).result(5) is True
+    old_pool = session._pools[host]
+    shutdown = old_pool.shutdown
+    policy_error = RuntimeError('distance failed')
+
+    def supersede_during_shutdown():
+        session._profile_manager.distance.side_effect = policy_error
+        with pytest.raises(RuntimeError, match='distance failed'):
+            session.update_created_pools()
+        session._profile_manager.distance.side_effect = None
+        shutdown()
+
+    old_pool.shutdown = supersede_during_shutdown
+    session._profile_manager.distance.return_value = HostDistance.LOCAL
+    cluster.connection_factory = Mock(side_effect=ConnectionException('retry'))
+    futures = session.update_created_pools()
+    assert next(iter(futures)).exception(5) is policy_error
+    cluster._lifecycle.drain()
+    assert old_pool.is_shutdown
+    assert len(scheduled) == 1
+    cluster.connection_factory.side_effect = None
+    cluster.connection_factory.return_value = make_connection()
+    old_pool.shutdown = shutdown
+    scheduled.pop()()
+    assert session._pools[host] is not old_pool
+    assert session._pools[host].host_distance == HostDistance.LOCAL
+    assert session._pools[host].open_count == 1
+
+
+@pytest.fixture(params=[HostDistance.REMOTE, HostDistance.LOCAL,
+                        HostDistance.LOCAL_RACK])
+def initial_distance(request):
+    return request.param
+
+
+@pytest.fixture(params=[False, True])
+def direct_replacement(request):
+    return request.param
+
+
 @pytest.fixture
-def failed_pool_promotion(pool_session, request):
+def failed_pool_promotion(pool_session, request, initial_distance,
+                          direct_replacement):
     session, host = pool_session
     cluster = session.cluster
     cluster.connect_to_remote_hosts = False
@@ -407,10 +676,13 @@ def failed_pool_promotion(pool_session, request):
     # Hold executor delivery so this test drives the lifecycle FIFO.
     cluster.executor.submit = Mock(return_value=Future())
     session.submit = submit
-    session._profile_manager.distance.return_value = HostDistance.REMOTE
+    cluster.connection_factory = Mock(return_value=make_connection())
+    session._profile_manager.distance.return_value = initial_distance
     assert session.add_or_renew_pool(host, True).result(5) is True
     remote_pool = session._pools[host]
-    session._profile_manager.distance.return_value = HostDistance.LOCAL
+    session._profile_manager.distance.return_value = (
+        HostDistance.LOCAL_RACK if initial_distance == HostDistance.LOCAL
+        else HostDistance.LOCAL)
     failure = getattr(request, 'param', 'connect')
     if failure == 'connect':
         cluster.connection_factory = Mock(
@@ -419,7 +691,10 @@ def failed_pool_promotion(pool_session, request):
         conn = make_connection(
             is_closed=failure == 'closed', is_defunct=failure == 'defunct')
         cluster.connection_factory = Mock(return_value=conn)
-    futures = session.update_created_pools()
+    if direct_replacement:
+        futures = {session.add_or_renew_pool(host, False)}
+    else:
+        futures = session.update_created_pools()
     assert len(futures) == 1
     assert next(iter(futures)).result(5) is False
     cluster._lifecycle.drain()

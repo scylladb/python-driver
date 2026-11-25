@@ -3088,13 +3088,12 @@ class ControlConnectionTest(unittest.TestCase):
         cluster.register_listener(listener)
         old_pool = Mock(
             host=old_host, is_shutdown=False,
-            _initially_disconnected=False, _promotion_recovery_claimed=False)
+            _retiring=False)
         retained_pools = {
             host: Mock(
                 host=host, is_shutdown=False,
                 host_distance=HostDistance.LOCAL,
-                _initially_disconnected=False,
-                _promotion_recovery_claimed=False)
+                _retiring=False)
             for host in (hosts[0], hosts[2])
         }
         removal_future = Future()
@@ -3146,7 +3145,7 @@ class ControlConnectionTest(unittest.TestCase):
         replacement_pool = Mock(
             host=replacement, is_shutdown=False,
             host_distance=HostDistance.LOCAL,
-            _initially_disconnected=False, _promotion_recovery_claimed=False)
+            _retiring=False)
         session._pools[replacement] = replacement_pool
         addition_future.set_result(True)
 
@@ -3193,11 +3192,11 @@ class ControlConnectionTest(unittest.TestCase):
         old_pool = Mock(
             host=old_host, is_shutdown=False,
             host_distance=HostDistance.REMOTE,
-            _initially_disconnected=False, _promotion_recovery_claimed=False)
+            _retiring=False)
         local_pool = Mock(
             host=local_host, is_shutdown=False,
             host_distance=HostDistance.LOCAL,
-            _initially_disconnected=False, _promotion_recovery_claimed=False)
+            _retiring=False)
         removal_future = Future()
         replacement_future = Future()
         promoted_future = Future()
