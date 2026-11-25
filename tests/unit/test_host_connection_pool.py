@@ -20,7 +20,7 @@ from cassandra.shard_info import _ShardingInfo
 
 import unittest
 from threading import Barrier, Thread, Event, Lock, RLock
-from unittest.mock import Mock, NonCallableMagicMock, MagicMock, patch
+from unittest.mock import Mock, NonCallableMagicMock, MagicMock, PropertyMock, patch
 
 from cassandra import AuthenticationFailed
 from cassandra.cluster import Cluster, Session, ShardAwareOptions
@@ -923,6 +923,56 @@ def test_return_after_session_collection_releases_original_stream():
     assert original.in_flight == 0
     original.close.assert_called_once()
     host.signal_connection_failure.assert_not_called()
+
+
+def _fail_on_wait(pool):
+    return patch.object(pool._stream_available_condition, 'wait',
+                        side_effect=AssertionError('borrow waited on a closed connection'))
+
+
+@pytest.mark.parametrize('orphaned_threshold_reached', [False, True])
+def test_borrow_takes_last_closed_connection_without_waiting(
+        socket_pool, orphaned_threshold_reached):
+    # When every connection is closed, no stream can become available. The
+    # closed connection comes back at once, so the request fails on this host
+    # and moves on instead of waiting out the timeout (#1058).
+    _, _, pool, original, _ = socket_pool
+    original.is_closed = True
+    original.orphaned_threshold_reached = orphaned_threshold_reached
+
+    with _fail_on_wait(pool):
+        borrowed, _ = pool.borrow_connection(timeout=2.0)
+
+    assert borrowed is original
+    assert original.in_flight == 1
+
+
+def test_borrow_fails_at_once_when_closed_connection_is_full(socket_pool):
+    _, _, pool, original, _ = socket_pool
+    original.is_closed = True
+    original.in_flight = original.max_request_id
+
+    with _fail_on_wait(pool):
+        with pytest.raises(NoConnectionsAvailable):
+            pool.borrow_connection(timeout=2.0)
+
+
+@pytest.mark.parametrize('orphaned_threshold_reached', [False, True])
+def test_borrow_reselects_connection_closed_after_selection(
+        socket_pool, orphaned_threshold_reached):
+    _, _, pool, original, replacement = socket_pool
+    original.orphaned_threshold_reached = orphaned_threshold_reached
+    # Open when borrow first checks it, closed by the time it tries to take it.
+    states = iter([False])
+    type(original).is_closed = PropertyMock(side_effect=lambda: next(states, True))
+    pool._get_connection_for_routing_key = Mock(side_effect=[original, replacement])
+
+    with _fail_on_wait(pool):
+        borrowed, _ = pool.borrow_connection(timeout=2.0)
+
+    assert borrowed is replacement
+    assert original.in_flight == 0
+    assert replacement.in_flight == 1
 
 
 class _PoolTests(unittest.TestCase):

@@ -630,6 +630,12 @@ class HostConnection(object):
             if conn.is_closed:
                 # The connection might have been closed in the meantime - if so, try again
                 conn = self._get_connection_for_routing_key(routing_key, keyspace, table, routing_token)
+                if conn.is_closed:
+                    # Selection prefers open connections, so all of them are
+                    # closed and waiting cannot free a stream. Make this the
+                    # last retry now, so the request fails on this host at
+                    # once and moves on instead of waiting out the timeout.
+                    last_retry = True
             with conn.lock:
                 if (allow_keyspace_mismatch or conn.keyspace == self._keyspace) and \
                         (not conn.is_closed or last_retry) and \
@@ -658,11 +664,14 @@ class HostConnection(object):
                         break
                     last_retry = True
                     continue
+            if conn.is_closed:
+                # Never wait on a closed connection: select again if it closed
+                # after the check above, or give up if it was the last retry.
+                if last_retry:
+                    break
+                continue
             with self._stream_available_condition:
-                if conn.orphaned_threshold_reached and conn.is_closed:
-                    conn = self._get_connection()
-                else:
-                    self._stream_available_condition.wait(remaining)
+                self._stream_available_condition.wait(remaining)
             conn = self._get_connection_for_routing_key(
                 routing_key, keyspace, table, routing_token)
 
