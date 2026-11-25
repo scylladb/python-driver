@@ -58,8 +58,17 @@ cdef extern from *:
 # configured with larger frames (see issue #1000).  We validate against
 # INT32_MAX so legitimate oversized frames still decompress while
 # negative or >2 GiB values from corrupt headers are still rejected.
+# Declared as a typed constant: Cython does not accept the extern
+# INT32_MAX macro as an enum initializer.
+cdef uint32_t MAX_DECOMPRESSED_LENGTH = <uint32_t>INT32_MAX  # ~2 GiB
+
+# An LZ4 block cannot expand by more than 255x: every output byte beyond
+# that comes from a match-length extension byte, and each such byte adds
+# at most 255 bytes of output.  Rejecting declared sizes above this ratio
+# bounds the output allocation by the size of the received payload, so a
+# short frame cannot make the client allocate up to 2 GiB.
 cdef enum:
-    MAX_DECOMPRESSED_LENGTH = INT32_MAX  # ~2 GiB
+    LZ4_MAX_EXPANSION_RATIO = 255
 
 # LZ4_MAX_INPUT_SIZE from lz4.h — the LZ4 C API uses C int (32-bit
 # signed) for sizes, so we must reject Python bytes objects that
@@ -161,6 +170,33 @@ def lz4_compress(bytes data not None):
             free(tmp)
 
 
+def _check_decompressed_size(uint32_t uncompressed_size,
+                             Py_ssize_t compressed_len):
+    """Validate a frame's declared size before allocating its output.
+
+    Raises ``ValueError`` if the declared uncompressed size exceeds
+    INT32_MAX, the compressed payload exceeds INT32_MAX, or the declared
+    size is larger than the payload could expand to.
+    """
+    if uncompressed_size > MAX_DECOMPRESSED_LENGTH:
+        raise ValueError(
+            "Declared uncompressed size %d exceeds safety limit of %d bytes; "
+            "frame header may be corrupt" % (uncompressed_size,
+                                             MAX_DECOMPRESSED_LENGTH))
+
+    if compressed_len > <Py_ssize_t>INT32_MAX:
+        raise ValueError(
+            "Compressed payload size %d exceeds maximum supported size" %
+            compressed_len)
+
+    if (<unsigned long long>uncompressed_size >
+            <unsigned long long>compressed_len * LZ4_MAX_EXPANSION_RATIO):
+        raise ValueError(
+            "Declared uncompressed size %d exceeds what a %d-byte LZ4 "
+            "payload can produce; frame header may be corrupt" %
+            (uncompressed_size, compressed_len))
+
+
 def lz4_decompress(bytes data not None):
     """Decompress a CQL-protocol LZ4 frame.
 
@@ -182,18 +218,8 @@ def lz4_decompress(bytes data not None):
             "length header, got %d" % src_len)
 
     cdef uint32_t uncompressed_size = _read_be32(src)
-
-    if uncompressed_size > MAX_DECOMPRESSED_LENGTH:
-        raise ValueError(
-            "Declared uncompressed size %d exceeds safety limit of %d bytes; "
-            "frame header may be corrupt" % (uncompressed_size,
-                                             MAX_DECOMPRESSED_LENGTH))
-
     cdef Py_ssize_t compressed_len = src_len - 4
-    if compressed_len > <Py_ssize_t>INT32_MAX:
-        raise ValueError(
-            "Compressed payload size %d exceeds maximum supported size" %
-            compressed_len)
+    _check_decompressed_size(uncompressed_size, compressed_len)
     cdef int compressed_size = <int>compressed_len
     cdef bytes out = PyBytes_FromStringAndSize(NULL, <Py_ssize_t>uncompressed_size)
     cdef char *out_ptr = PyBytes_AS_STRING(out)
