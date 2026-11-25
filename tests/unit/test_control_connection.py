@@ -36,7 +36,7 @@ from cassandra.cluster import (Cluster, ControlConnection, _Scheduler,
                                NoHostAvailable, _ControlReconnectionHandler)
 from cassandra.pool import Host, _ReconnectionHandler
 from cassandra.metadata import Metadata
-from cassandra.connection import (Connection, ConnectionException, EndPoint,
+from cassandra.connection import (Connection, ConnectionException, ConnectionShutdown, ConnectionBusy, EndPoint,
                                   DefaultEndPoint,
                                   DefaultEndPointFactory, UnixSocketEndPoint,
                                   SniEndPointFactory,
@@ -47,7 +47,7 @@ from cassandra.policies import (DCAwareRoundRobinPolicy, HostDistance,
                                 ConstantReconnectionPolicy,
                                 ExponentialReconnectionPolicy,
                                 IdentityTranslator)
-from tests.unit.utils import new_session_with_pool_state
+from tests.unit.utils import new_owned_pool, new_session_with_pool_state
 
 PEER_IP = "foobar"
 
@@ -907,6 +907,292 @@ class ControlConnectionTest(unittest.TestCase):
         assert self.control_connection._get_schema_mismatches(
             peer_result, local_result, self.connection.endpoint) is None
 
+
+    def _schema_fallback_session(self):
+        host = self.cluster.metadata.get_host(self.connection.endpoint)
+        session = new_session_with_pool_state({host: Mock(is_shutdown=False)})
+        session.cluster = self.cluster
+        session.is_shutdown = False
+        session._row_factory = Mock(side_effect=AssertionError("User row factory used"))
+        self.cluster.sessions = [session]
+        self.control_connection._connection = None
+        self.control_connection._set_new_connection(self.connection)
+        return host, session
+
+    def test_schema_agreement_connection_loss_without_pool_is_soft_failure(self):
+        for state in ("missing", "closed", "defunct", "broken", "busy"):
+            with self.subTest(state=state):
+                self.setUp()
+                if state == "missing":
+                    self.control_connection._connection = None
+                elif state in ("closed", "defunct"):
+                    setattr(self.connection, "is_" + state, True)
+                else:
+                    error = ConnectionShutdown if state == "broken" else ConnectionBusy
+                    self.connection.wait_for_responses.side_effect = error("unavailable")
+                assert self.control_connection._wait_for_schema_agreement() is False
+
+    @patch('cassandra.cluster.ResponseFuture')
+    def test_schema_agreement_uses_same_host_session_after_connection_loss(self, future):
+        for state in ("missing", "closed", "defunct", "broken", "busy"):
+            with self.subTest(state=state):
+                self.setUp()
+                host, session = self._schema_fallback_session()
+                if state == "missing":
+                    self.control_connection._connection = None
+                elif state in ("closed", "defunct"):
+                    setattr(self.connection, "is_" + state, True)
+                else:
+                    error = ConnectionShutdown if state == "broken" else ConnectionBusy
+                    self.connection.wait_for_responses.side_effect = error("unavailable")
+                future.reset_mock()
+                peers, local = _node_meta_results(self.connection.local_results, self.connection.peer_results)
+                future.side_effect = [Mock(**{'result.return_value.one.return_value': peers}),
+                                      Mock(**{'result.return_value.one.return_value': local})]
+                assert self.control_connection._wait_for_schema_agreement() is True
+                assert future.call_count == 2
+                for args, kwargs in future.call_args_list:
+                    assert args[0] is session
+                    assert kwargs['host'] is host
+                    assert args[1].consistency_level == 1
+                    assert args[1].fetch_size is None
+                    # Raw metadata must not use the application's row factory.
+                    raw = kwargs['row_factory'](['schema_version'], [('a',)])
+                    assert raw[0].parsed_rows == [('a',)]
+                session.row_factory.assert_not_called()
+
+    @patch('cassandra.cluster.ResponseFuture')
+    def test_schema_agreement_does_not_use_another_hosts_pool(self, future):
+        host, session = self._schema_fallback_session()
+        other = self.cluster.metadata.get_host(DefaultEndPoint('192.168.1.1'))
+        session._pools = {other: Mock(is_shutdown=False)}
+        self.connection.is_closed = True
+        assert self.control_connection._wait_for_schema_agreement() is False
+        future.assert_not_called()
+
+    @patch('cassandra.cluster.ResponseFuture')
+    def test_schema_agreement_does_not_use_replaced_host_at_same_endpoint(self, future):
+        host, session = self._schema_fallback_session()
+        replacement = Host(host.endpoint, SimpleConvictionPolicy, host_id=HOST_ID_4)
+        self.cluster.metadata.remove_host(host)
+        self.cluster.metadata.add_or_return_host(replacement)
+        session._pools = {replacement: Mock(is_shutdown=False)}
+        self.control_connection._connection = None
+        assert self.control_connection._wait_for_schema_agreement() is False
+        future.assert_not_called()
+
+    @patch('cassandra.cluster.ResponseFuture')
+    def test_schema_agreement_fallback_shares_remaining_timeout(self, future):
+        self._schema_fallback_session()
+        peers, local = _node_meta_results(self.connection.local_results, self.connection.peer_results)
+        def fail_control(*args, **kwargs):
+            self.time.sleep(0.4)
+            raise ConnectionShutdown("lost")
+        self.connection.wait_for_responses.side_effect = fail_control
+        def response(*args, **kwargs):
+            result = peers if future.call_count == 1 else local
+            f = Mock()
+            def finish():
+                self.time.sleep(0.2)
+                return Mock(**{'one.return_value': result})
+            f.result.side_effect = finish
+            return f
+        future.side_effect = response
+        assert self.control_connection._wait_for_schema_agreement(wait_time=1) is True
+        assert [call.args[3] for call in future.call_args_list] == pytest.approx([0.6, 0.4])
+
+    def _schema_fallback_transport(self):
+        from cassandra.cluster import ResponseFuture
+        original_result = ResponseFuture.result
+
+        def bounded_result(future):
+            assert future._event.wait(1), "schema future was not completed"
+            return original_result(future)
+
+        for fixture_patch in (patch('cassandra.cluster.time', self.time),
+                              patch.object(ResponseFuture, 'result', bounded_result)):
+            fixture_patch.start()
+            self.addCleanup(fixture_patch.stop)
+        host, session = self._schema_fallback_session()
+        self.cluster._default_load_balancing_policy = RoundRobinPolicy()
+        self.cluster.connection_class = Mock()
+        pool, connection = new_owned_pool(host)
+        connection.features.tablets_routing_v1 = False
+        connection.features.tablets_routing_v2 = False
+        session._pools = {host: pool}
+        self.connection.is_closed = True
+        return host, pool, connection
+
+    def test_schema_agreement_real_future_uses_raw_rows_and_bounded_borrow(self):
+        host, pool, connection = self._schema_fallback_transport()
+        peers, local = _node_meta_results(self.connection.local_results, self.connection.peer_results)
+        for result in (peers, local):
+            result.column_types = []
+        def send(message, request_id, cb, **kwargs):
+            cb(local if 'system.local' in message.query else peers)
+            return 128
+        connection.send_msg.side_effect = send
+        assert self.control_connection._wait_for_schema_agreement(wait_time=0.05) is True
+        assert pool.borrow_connection.call_count == 2
+        assert all(0 < c.kwargs['timeout'] <= 0.05 for c in pool.borrow_connection.call_args_list)
+        assert connection.in_flight == 0
+        assert pool.return_connection.call_count == 2
+        assert not connection.orphaned_request_ids
+
+    def test_schema_agreement_releases_borrow_when_host_replaced_during_acquisition(self):
+        host, pool, connection = self._schema_fallback_transport()
+        borrow = pool.borrow_connection.side_effect
+        def replace(**kwargs):
+            self.cluster.metadata.remove_host(host)
+            self.cluster.metadata.add_or_return_host(
+                Host(host.endpoint, SimpleConvictionPolicy, host_id=HOST_ID_4))
+            return borrow(**kwargs)
+        pool.borrow_connection.side_effect = replace
+        assert self.control_connection._wait_for_schema_agreement() is False
+        connection.send_msg.assert_not_called()
+        pool.return_connection.assert_called_once_with(connection)
+        assert connection.in_flight == 0
+        assert list(connection.request_ids) == [1]
+        self.cluster.connection_class.create_timer.return_value.cancel.assert_called_once()
+
+    def test_schema_agreement_future_timeout_keeps_stream_orphaned(self):
+        host, pool, connection = self._schema_fallback_transport()
+        def send(message, request_id, cb, **kwargs):
+            connection._requests[request_id] = (cb, kwargs['decoder'], kwargs['result_metadata'])
+            cb.func.__self__._on_timeout()
+            return 128
+        connection.send_msg.side_effect = send
+        assert self.control_connection._wait_for_schema_agreement() is False
+        pool.return_connection.assert_called_once_with(connection, stream_was_orphaned=True)
+        assert connection.in_flight == 1
+        assert connection.orphaned_request_ids == {1}
+        assert not connection.request_ids
+        assert not connection._requests
+
+    def test_schema_agreement_future_send_failure_returns_stream(self):
+        host, pool, connection = self._schema_fallback_transport()
+        connection.send_msg.side_effect = RuntimeError('encoding failed')
+        assert self.control_connection._wait_for_schema_agreement() is False
+        pool.return_connection.assert_called_once_with(connection)
+        assert connection.in_flight == 0
+        assert not connection.orphaned_request_ids
+        assert list(connection.request_ids) == [1]
+
+    def test_schema_agreement_preserves_default_future_borrow_timeout(self):
+        from cassandra.cluster import ResponseFuture
+        from cassandra.protocol import QueryMessage
+        host, pool, connection = self._schema_fallback_transport()
+        session = self.cluster.sessions[0]
+        future = ResponseFuture(session, QueryMessage('SELECT now() FROM system.local', 1), None, 0.05, host=host)
+        assert future._query(host) == 1
+        assert pool.borrow_connection.call_args.kwargs['timeout'] == 2.0
+        future._cancel_timer()
+
+    @patch('cassandra.cluster.ResponseFuture')
+    def test_schema_agreement_missing_connection_preserves_dse_peers_projection(self, future):
+        host, session = self._schema_fallback_session()
+        host.dse_version = '6.0.0'
+        self.control_connection._uses_peers_v2 = False
+        self.control_connection._connection = None
+        peers, local = _node_meta_results(self.connection.local_results, self.connection.peer_results)
+        future.side_effect = [Mock(**{'result.return_value.one.return_value': peers}),
+                              Mock(**{'result.return_value.one.return_value': local})]
+        assert self.control_connection._wait_for_schema_agreement() is True
+        assert 'native_transport_address' in future.call_args_list[0].args[1].query
+
+    def test_schema_agreement_missing_connection_preserves_skip_and_shutdown(self):
+        self.control_connection._connection = None
+        assert self.control_connection._wait_for_schema_agreement(wait_time=0) is True
+        self.control_connection._is_shutdown = True
+        assert self.control_connection._wait_for_schema_agreement() is None
+
+    @patch('cassandra.cluster.ResponseFuture')
+    def test_schema_agreement_snapshots_connection_and_host_together(self, future):
+        self._schema_fallback_session()
+        replacement = MockConnection()
+        replacement.endpoint = DefaultEndPoint('192.168.1.1')
+        replacement.original_endpoint = replacement.endpoint
+        replacement.is_closed = True
+        lookup_started, release_lookup = Event(), Event()
+        snapshot_started, wait_finished = Event(), Event()
+        results, errors = [], []
+        original_lock = self.control_connection._lock
+
+        class ObservedLock:
+            def __enter__(self):
+                if lookup_started.is_set():
+                    snapshot_started.set()
+                return original_lock.__enter__()
+
+            def __exit__(self, *args):
+                return original_lock.__exit__(*args)
+
+        original_lookup = self.control_connection._get_host_for_connection
+        peers, local = _node_meta_results(
+            self.connection.local_results, self.connection.peer_results)
+        future.side_effect = [
+            Mock(**{'result.return_value.one.return_value': peers}),
+            Mock(**{'result.return_value.one.return_value': local})]
+
+        def lookup(connection):
+            if connection is replacement:
+                lookup_started.set()
+                if not release_lookup.wait(2):
+                    raise AssertionError('Host publication was not released')
+            return original_lookup(connection)
+
+        def install():
+            try:
+                self.control_connection._set_new_connection(replacement)
+            except Exception as exc:
+                errors.append(exc)
+
+        def check():
+            try:
+                results.append(self.control_connection._wait_for_schema_agreement())
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                wait_finished.set()
+
+        setter, waiter = Thread(target=install), Thread(target=check)
+        with patch.object(self.control_connection, '_lock', ObservedLock()), \
+                patch.object(self.control_connection, '_get_host_for_connection',
+                             side_effect=lookup):
+            try:
+                setter.start()
+                assert lookup_started.wait(1)
+                assert self.control_connection._connection is replacement
+                waiter.start()
+                assert snapshot_started.wait(1)
+                assert not wait_finished.is_set()
+            finally:
+                release_lookup.set()
+                setter.join(1)
+                if waiter.ident is not None:
+                    waiter.join(1)
+        assert not setter.is_alive()
+        assert not waiter.is_alive()
+        assert not errors
+        # The new host has no session pool; the previous host's pool is unsafe.
+        assert results == [False]
+        future.assert_not_called()
+
+    @patch('cassandra.cluster.ResponseFuture')
+    def test_schema_agreement_shutdown_during_local_fallback_aborts(self, future):
+        self._schema_fallback_session()
+        self.connection.is_closed = True
+        peers, local = _node_meta_results(
+            self.connection.local_results, self.connection.peer_results)
+        peers_future = Mock(**{'result.return_value.one.return_value': peers})
+        local_future = Mock()
+        def finish_local():
+            self.control_connection._is_shutdown = True
+            return Mock(**{'one.return_value': local})
+        local_future.result.side_effect = finish_local
+        future.side_effect = [peers_future, local_future]
+        assert self.control_connection._wait_for_schema_agreement() is None
+        assert future.call_count == 2
 
     def test_wait_for_schema_agreement_none_timeout(self):
         """

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections import deque
 from functools import wraps
 from pathlib import Path
 import subprocess
@@ -22,6 +23,7 @@ from unittest.mock import Mock, patch
 
 from concurrent.futures import Future
 from cassandra.cluster import Cluster, Session
+from cassandra.connection import Connection
 from cassandra.driver_config import DriverConfigReporter
 
 
@@ -42,6 +44,38 @@ def run_isolated_subprocess(script, timeout=5):
         "Subprocess failed\nstdout:\n{}\nstderr:\n{}".format(
             result.stdout, result.stderr))
     return result
+
+
+def new_owned_pool(host, request_id=1):
+    """Build a pool that tracks borrowed and orphaned stream ownership."""
+    connection = Mock(spec=Connection)
+    connection.lock = RLock()
+    connection._requests = {}
+    connection.request_ids = deque()
+    connection.orphaned_request_ids = set()
+    connection.orphaned_threshold = 256
+    connection.orphaned_threshold_reached = False
+    connection.in_flight = 0
+    connection.is_control_connection = False
+    connection.is_defunct = False
+
+    def borrow_connection(**kwargs):
+        connection.in_flight += 1
+        return connection, request_id
+
+    def return_connection(conn, stream_was_orphaned=False):
+        if not stream_was_orphaned:
+            conn.in_flight -= 1
+
+    def send_msg(message, stream_id, cb, **kwargs):
+        connection._requests[stream_id] = cb
+        return 128
+
+    connection.send_msg.side_effect = send_msg
+    pool = Mock(host=host, endpoint=host.endpoint, is_shutdown=False)
+    pool.borrow_connection.side_effect = borrow_connection
+    pool.return_connection.side_effect = return_connection
+    return pool, connection
 
 
 def new_session_with_pool_state(pools=None):
