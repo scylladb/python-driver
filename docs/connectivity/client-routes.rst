@@ -234,7 +234,12 @@ enabled.
 Enable the advanced mode only when the proxy path preserves the required
 source-port behavior and the proxy listener at each route's selected ``port``
 or ``tls_port`` forwards to that node's configured shard-aware listener
-(``19042`` without TLS or ``19142`` with TLS by default):
+(``19042`` by default without TLS, or the port set by
+``native_shard_aware_transport_port_ssl`` with TLS). For example, the proxy can
+send a PROXY protocol v2 header carrying the client's source port to the node's
+PROXY protocol shard-aware listener, which ScyllaDB 2026.1 and later open on
+the port set by ``native_shard_aware_transport_port_proxy_protocol``
+(``native_shard_aware_transport_port_ssl_proxy_protocol`` with TLS):
 
 .. code-block:: python
 
@@ -244,9 +249,37 @@ or ``tls_port`` forwards to that node's configured shard-aware listener
     )
 
 Client Routes does not substitute the node's advertised shard-aware port for
-the route-table port. If the driver detects that a connection reached a
-different shard than requested, it disables advanced shard awareness for ten
-minutes.
+the route-table port, but the driver opens shard-aware connections only to
+nodes that advertise one. ScyllaDB advertises a shard-aware port when
+``native_shard_aware_transport_port`` is set, or
+``native_shard_aware_transport_port_ssl`` with TLS; its PROXY protocol
+listeners alone are not advertised. With TLS and no
+``native_shard_aware_transport_port_ssl``, the option has no effect. A node
+without a matching route is reached at its own address, and its shard-aware
+connections use the advertised shard-aware port, as without Client Routes.
+
+If the driver detects that a connection reached a different shard than
+requested, it logs a warning, once per connection pool, that the route's proxy
+probably does not carry the source port, and stops choosing source ports for
+that node for ten minutes.
+
+Connections whose source port the driver does not choose rely on the node to
+spread them over its shards, which it does only on its regular ports. A proxy
+that does not preserve the source port should therefore forward to a regular
+port: ``native_transport_port``, or ``native_transport_port_proxy_protocol``
+with PROXY protocol v2. With TLS, use ``native_transport_port_ssl`` if it is
+set; otherwise ``native_transport_port`` itself serves TLS. PROXY protocol v2
+with TLS needs ``native_transport_port_ssl_proxy_protocol``, because
+``native_transport_port_proxy_protocol`` accepts only plaintext. Through a
+regular port, a pool makes one connection attempt per missing shard when it is
+created. The node may assign an attempt a shard that the pool already has, so
+some shards can remain missing; the pool makes a further attempt for such a
+shard when a request is routed to it. A proxy that forwards to a shard-aware
+listener should be used with advanced shard awareness enabled. Otherwise each
+connection lands on the shard that its OS-chosen source port maps to, and some
+shards may never be reached; Linux, for example, prefers even source ports for
+outgoing connections, so on a node with an even number of shards the odd ones
+stay unreachable.
 
 Fallback and compatibility
 --------------------------
@@ -256,8 +289,10 @@ node's advertised RPC address and ``Cluster.port``. With ``port=9000`` in the
 basic example, the fallback target is the advertised address on port ``9000``.
 Mixed direct and proxied nodes therefore require ``Cluster.port`` to match the
 nodes' CQL port and the application network to reach every fallback address.
-In a private-only deployment, provide a route for every node to prevent
-connection failures.
+With ``advanced_shard_awareness`` enabled, shard-aware connections to such a
+node go to its advertised shard-aware port, so the application network must
+reach that port too. In a private-only deployment, provide a route for every
+node to prevent connection failures.
 
 Client Routes owns endpoint resolution for discovered nodes. A
 ``client_routes_config`` cannot be combined with a custom ``endpoint_factory``,

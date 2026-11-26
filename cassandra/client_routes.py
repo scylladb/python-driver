@@ -74,8 +74,57 @@ class ClientRoutesConfig:
 
     :param proxies: Non-empty list or tuple of :class:`ClientRouteProxy`
         objects (required).
-    :param advanced_shard_awareness: Whether to enable advanced shard awareness
-        through the proxy (default: ``False``).
+    :param advanced_shard_awareness: Whether the driver should open shard-aware
+        connections, which pick their shard through the client's source port
+        (default: ``False``).
+
+        *Basic* shard awareness, sending each request to the connection of
+        the shard that owns its data, works regardless of this setting. This
+        setting controls *advanced* shard awareness: the driver binds each new
+        connection to a source port chosen so that the node assigns it the
+        shard the pool is still missing.
+
+        With client routes, every connection to a node that has a route,
+        shard-aware or not, goes to the ``port`` (or ``tls_port``) that
+        ``system.client_routes`` publishes for the node. The shard-aware port
+        such a node advertises is not dialed directly, so a shard-aware
+        connection lands on the requested shard only if the endpoint behind
+        that route forwards the driver's original source port to the node's
+        shard-aware listener, for example with PROXY protocol v2. Load
+        balancers and NAT typically replace the source port, so this is
+        disabled by default. A node without a matching route is reached at its
+        own address, and its shard-aware connections use the advertised
+        shard-aware port, as without client routes.
+
+        The driver still opens shard-aware connections only to a node that
+        advertises a shard-aware port: ``SCYLLA_SHARD_AWARE_PORT`` without TLS
+        or ``SCYLLA_SHARD_AWARE_PORT_SSL`` with TLS. ScyllaDB advertises them
+        when ``native_shard_aware_transport_port`` or
+        ``native_shard_aware_transport_port_ssl`` is set, not for its PROXY
+        protocol listeners alone.
+
+        Enable it only when the network path preserves the source port, for
+        example:
+
+        * the private endpoint uses PROXY protocol v2 and forwards to the
+          node's shard-aware port, which accepts it;
+        * the client reaches the nodes without NAT, for example over VPC
+          peering;
+        * the proxy is itself shard-aware.
+
+        If it is enabled but the path does not preserve the source port,
+        connections land on shards other than the ones requested. The driver
+        then logs a warning and, for that host, stops choosing source ports
+        for a while. If the route leads to a regular port, the node then
+        assigns the shards: connections to the shards still missing are
+        opened as requests are routed to them, until the node has assigned
+        each shard one. If it leads to a shard-aware port, each connection
+        lands on the shard that the source port seen by the node maps to,
+        and some shards may stay unreachable.
+
+        Explicit ``Cluster(shard_aware_options=...)`` settings that disable
+        the shard-aware port, or shard awareness altogether, take precedence
+        over this setting.
     """
 
     proxies: Union[List[ClientRouteProxy], Tuple[ClientRouteProxy, ...]]
@@ -92,6 +141,9 @@ class ClientRoutesConfig:
         for proxy in proxies:
             if not isinstance(proxy, ClientRouteProxy):
                 raise TypeError("All proxies must be ClientRouteProxy instances")
+
+        if not isinstance(advanced_shard_awareness, bool):
+            raise TypeError("advanced_shard_awareness must be a bool")
 
         self.proxies = proxies
         self.advanced_shard_awareness = advanced_shard_awareness
@@ -423,6 +475,13 @@ class _ClientRoutesHandler:
             )
 
         return routes
+
+    def has_route(self, host_id: uuid.UUID) -> bool:
+        """
+        Whether a route is currently known for ``host_id``, without resolving
+        its address.
+        """
+        return self._routes.get_by_host_id(host_id) is not None
 
     def resolve_host(self, host_id: uuid.UUID) -> Optional[Tuple[str, int]]:
         """

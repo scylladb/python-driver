@@ -18,6 +18,14 @@ Compatibility Changes
   failure applies to truthy values other than ``Host`` instances passed as
   ``host=`` to ``Session.execute()`` or ``Session.execute_async()``. Asynchronous
   calls deliver the error through their ``ResponseFuture`` (#1164).
+* ``ClientRoutesConfig`` now rejects a non-``bool`` ``advanced_shard_awareness`` with
+  ``TypeError``. Earlier releases accepted any value and used its truthiness, so code
+  that passes, for example, ``1`` or ``"true"`` must pass ``True`` instead.
+* With ``ClientRoutesConfig(advanced_shard_awareness=True)``, shard-aware connections to
+  a node without a matching route now go to that node's advertised shard-aware port at
+  its own address. Earlier releases sent every connection to such a node to
+  ``Cluster.port``, so in mixed direct and proxied deployments that enable the option,
+  the nodes' shard-aware port must now be reachable as well.
 
 Removed
 -------
@@ -42,6 +50,23 @@ Removed
   never used against it. The ``dse_version`` argument of
   ``get_schema_parser()`` is now ignored, and the driver no longer queries
   ``system.local.dse_version`` when ``release_version`` is unknown.
+
+Features
+--------
+* Advanced shard awareness can now be used with client routes (PrivateLink), where the
+  endpoint carries the driver's source port to the node's shard-aware port, for example
+  with PROXY protocol v2. Enable it with
+  ``ClientRoutesConfig(advanced_shard_awareness=True)``; it stays disabled by default,
+  because whether the network path preserves the source port depends on the
+  infrastructure and cannot be detected by the driver. Shard-aware connections to a node
+  with a route dial that route, like any other client routes connection; a node without
+  a matching route is reached at its own address, on its advertised shard-aware port.
+  They are opened only to nodes that advertise a shard-aware port (with TLS,
+  ``native_shard_aware_transport_port_ssl`` must be set). If a connection through a
+  route lands on a shard other than the requested one, the driver warns once per pool
+  that the endpoint probably does not carry the source port; on a node without a route
+  it logs the generic shard mismatch warning instead. Either way it stops choosing
+  source ports for that host for a while. The option is now documented (DRIVER-389).
 
 Bug Fixes
 ---------
