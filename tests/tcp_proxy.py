@@ -24,12 +24,38 @@ rather than in ``tests.integration`` -- that lets the unit test suite
 CASSANDRA_VERSION/SCYLLA_VERSION to be set.
 """
 
+import ipaddress
 import logging
 import select
 import socket
+import struct
 import threading
 
 log = logging.getLogger(__name__)
+
+PROXY_PROTOCOL_V2_SIGNATURE = b'\r\n\r\n\x00\r\nQUIT\n'
+
+
+def build_proxy_protocol_v2_header(source, destination):
+    """
+    Build a PROXY protocol v2 header for a TCP connection, as a load balancer
+    sends it before any client data (see
+    https://www.haproxy.org/download/2.9/doc/proxy-protocol.txt, section 2.2).
+
+    :param source: ``(address, port)`` of the original client
+    :param destination: ``(address, port)`` the client connected to
+    """
+    src_ip = ipaddress.ip_address(source[0])
+    dst_ip = ipaddress.ip_address(destination[0])
+    if src_ip.version != dst_ip.version:
+        raise ValueError("source and destination must be of the same address family")
+    # Upper nibble: address family (1 = AF_INET, 2 = AF_INET6), lower: 1 = STREAM.
+    family_and_transport = 0x11 if src_ip.version == 4 else 0x21
+    addresses = src_ip.packed + dst_ip.packed + struct.pack('!HH', source[1], destination[1])
+    # 0x21: protocol version 2, PROXY command.
+    return (PROXY_PROTOCOL_V2_SIGNATURE
+            + struct.pack('!BBH', 0x21, family_and_transport, len(addresses))
+            + addresses)
 
 
 class TcpProxy:
@@ -37,15 +63,21 @@ class TcpProxy:
     A simple TCP proxy that forwards connections from a local listen port
     to a target (host, port).  Tracks active connections so tests can
     verify that traffic flows through the proxy.
+
+    With ``proxy_protocol=True`` every connection to the target starts with a
+    PROXY protocol v2 header carrying the client's address and source port,
+    so a target listening with proxy protocol sees the original client
+    rather than the proxy.
     """
 
     BUF_SIZE = 65536
 
-    def __init__(self, listen_host, listen_port, target_host, target_port):
+    def __init__(self, listen_host, listen_port, target_host, target_port, proxy_protocol=False):
         self.listen_host = listen_host
         self.listen_port = listen_port
         self.target_host = target_host
         self.target_port = target_port
+        self.proxy_protocol = proxy_protocol
 
         self._server_sock = None
         self._running = False
@@ -156,14 +188,24 @@ class TcpProxy:
     def _handle_new_connection(self, client_sock, target_host=None, target_port=None):
         target_host = target_host or self.target_host
         target_port = target_port or self.target_port
+        target_sock = None
+        step = "connect to"
         try:
             target_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             target_sock.connect((target_host, target_port))
+            if self.proxy_protocol:
+                step = "send the PROXY protocol header to"
+                target_sock.sendall(build_proxy_protocol_v2_header(
+                    client_sock.getpeername()[:2], client_sock.getsockname()[:2]))
         except Exception as e:
-            log.warning("TcpProxy %s:%d failed to connect to target %s:%d: %s",
-                        self.listen_host, self.listen_port,
+            log.warning("TcpProxy %s:%d failed to %s target %s:%d: %s",
+                        self.listen_host, self.listen_port, step,
                         target_host, target_port, e)
+            # Close both sockets now rather than leaving the target one to
+            # the garbage collector, which would also warn about it.
             client_sock.close()
+            if target_sock is not None:
+                target_sock.close()
             return
 
         t = threading.Thread(target=self._forward_loop,

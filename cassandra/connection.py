@@ -521,6 +521,13 @@ class ClientRoutesEndPoint(EndPoint):
         # connections; the TLS peer is identified by the node behind it.
         return (self._host_id, self._original_address, self._original_port)
 
+    def has_route(self) -> bool:
+        """
+        Whether this host currently has a route. Without one, :meth:`resolve`
+        falls back to the original address and port.
+        """
+        return self._handler.has_route(self._host_id)
+
     def resolve(self) -> Tuple[str, int]:
         """
         Resolve endpoint by delegating to the handler.

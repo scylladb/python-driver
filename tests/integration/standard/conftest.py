@@ -24,6 +24,9 @@ _MODULE_CLUSTER_ORDER = {
     # Group 2: 'shared_aware' (--smp 2 --memory 2048M, 3 nodes)
     "test_use_keyspace": 2,
     "test_client_routes": 2,
+    # Group 2b: 'test_client_routes_shard_aware' (smp=4, 1 node, PROXY
+    # protocol v2 regular and shard-aware listeners)
+    "test_client_routes_shard_aware": 2.5,
     # Group 3: single-node cluster
     "test_types": 3,
     "test_cython_protocol_handlers": 3,

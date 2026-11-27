@@ -27,7 +27,7 @@ from cassandra.client_routes import (
     _ClientRoutesHandler
 )
 from cassandra.connection import ClientRoutesEndPoint, ClientRoutesEndPointFactory
-from cassandra.cluster import Cluster
+from cassandra.cluster import Cluster, ShardAwareOptions
 
 
 def _routes_for_query(query, params, routes):
@@ -71,6 +71,66 @@ class TestClientRoutesConfig(unittest.TestCase):
     def test_config_invalid_proxy_type(self):
         with self.assertRaises(TypeError):
             ClientRoutesConfig(["not-a-proxy"])
+
+    def test_advanced_shard_awareness_defaults_to_false(self):
+        config = ClientRoutesConfig([ClientRouteProxy(str(uuid.uuid4()))])
+        self.assertIs(config.advanced_shard_awareness, False)
+
+    def test_advanced_shard_awareness_can_be_enabled(self):
+        config = ClientRoutesConfig([ClientRouteProxy(str(uuid.uuid4()))],
+                                    advanced_shard_awareness=True)
+        self.assertIs(config.advanced_shard_awareness, True)
+        self.assertIn("advanced_shard_awareness=True", repr(config))
+
+    def test_advanced_shard_awareness_must_be_bool(self):
+        for value in (None, 1, "true"):
+            with self.subTest(value=value):
+                with self.assertRaises(TypeError):
+                    ClientRoutesConfig([ClientRouteProxy(str(uuid.uuid4()))],
+                                       advanced_shard_awareness=value)
+
+
+class TestClientRoutesShardAwareOptions(unittest.TestCase):
+    """How ClientRoutesConfig.advanced_shard_awareness maps onto Cluster.shard_aware_options."""
+
+    def _cluster(self, advanced_shard_awareness, **kwargs):
+        config = ClientRoutesConfig([ClientRouteProxy(str(uuid.uuid4()), "10.0.0.1")],
+                                    advanced_shard_awareness=advanced_shard_awareness)
+        cluster = Cluster(contact_points=["10.0.0.1"], client_routes_config=config, **kwargs)
+        self.addCleanup(cluster.shutdown)
+        return cluster
+
+    def test_disabled_by_default(self):
+        config = ClientRoutesConfig([ClientRouteProxy(str(uuid.uuid4()), "10.0.0.1")])
+        cluster = Cluster(contact_points=["10.0.0.1"], client_routes_config=config)
+        self.addCleanup(cluster.shutdown)
+        self.assertTrue(cluster.shard_aware_options.disable_shardaware_port)
+        self.assertFalse(cluster.shard_aware_options.disable)
+
+    def test_disabled_when_false(self):
+        cluster = self._cluster(advanced_shard_awareness=False)
+        self.assertTrue(cluster.shard_aware_options.disable_shardaware_port)
+        self.assertFalse(cluster.shard_aware_options.disable)
+
+    def test_enabled_keeps_shard_aware_port(self):
+        cluster = self._cluster(advanced_shard_awareness=True)
+        self.assertFalse(cluster.shard_aware_options.disable_shardaware_port)
+        self.assertFalse(cluster.shard_aware_options.disable)
+
+    def test_explicit_shard_aware_options_take_precedence(self):
+        cluster = self._cluster(advanced_shard_awareness=True,
+                                shard_aware_options=dict(disable_shardaware_port=True))
+        self.assertTrue(cluster.shard_aware_options.disable_shardaware_port)
+
+        cluster = self._cluster(advanced_shard_awareness=True,
+                                shard_aware_options=dict(disable=True))
+        self.assertTrue(cluster.shard_aware_options.disable)
+
+    def test_disabling_does_not_mutate_user_options(self):
+        user_options = ShardAwareOptions()
+        cluster = self._cluster(advanced_shard_awareness=False, shard_aware_options=user_options)
+        self.assertTrue(cluster.shard_aware_options.disable_shardaware_port)
+        self.assertFalse(user_options.disable_shardaware_port)
 
 
 
@@ -530,6 +590,20 @@ class TestClientRoutesEndPoint(unittest.TestCase):
         self.proxy = ClientRouteProxy(str(self.conn_id), "10.0.0.1")
         self.config = ClientRoutesConfig([self.proxy])
         self.handler = _ClientRoutesHandler(self.config, ssl_enabled=False)
+
+    def test_has_route_reflects_route_store(self):
+        """has_route() tells whether resolve() uses a route, without resolving it."""
+        host_id = uuid.uuid4()
+        ep = ClientRoutesEndPoint(host_id=host_id, handler=self.handler,
+                                  original_address="10.0.0.1", original_port=9042)
+        self.assertFalse(ep.has_route())
+        self.handler._routes.update([
+            _Route(connection_id=str(self.conn_id), host_id=host_id,
+                   address="nlb.example.com", port=9042),
+        ])
+        with patch('cassandra.client_routes.socket.getaddrinfo') as getaddrinfo:
+            self.assertTrue(ep.has_route())
+        getaddrinfo.assert_not_called()
 
     def test_resolve_falls_back_when_no_mapping(self):
         """resolve() should return original address/port when no route mapping exists."""

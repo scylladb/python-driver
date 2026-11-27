@@ -53,7 +53,8 @@ def cleanup_clusters(request):
 
     if not os.environ.get('DISABLE_CLUSTER_CLEANUP'):
         for cluster_name in [CLUSTER_NAME, SINGLE_NODE_CLUSTER_NAME, MULTIDC_CLUSTER_NAME,
-                             'cluster_tests', 'shared_aware', 'sni_proxy', 'test_ip_change', 'test_client_routes_replacement']:
+                             'cluster_tests', 'shared_aware', 'sni_proxy', 'test_ip_change', 'test_client_routes_replacement',
+                             'test_client_routes_shard_aware']:
             try:
                 cluster = CCMClusterFactory.load(ccm_path, cluster_name)
                 logging.debug("Clearing CCM cluster {0}".format(cluster.name))

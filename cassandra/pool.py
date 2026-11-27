@@ -32,7 +32,7 @@ except ImportError:
 
 from cassandra import AuthenticationFailed, _lifecycle
 from cassandra.connection import (ConnectionException, ConnectionSendError, EndPoint,
-                                  DefaultEndPoint, UnixSocketEndPoint)
+                                  DefaultEndPoint, UnixSocketEndPoint, ClientRoutesEndPoint)
 from cassandra.policies import HostDistance
 
 log = logging.getLogger(__name__)
@@ -504,6 +504,7 @@ class HostConnection(object):
         self._trash = set()
         self._shard_connections_futures = []
         self.advanced_shardaware_block_until = 0
+        self._client_routes_shard_mismatch_warned = False
 
         if host_distance == HostDistance.IGNORED:
             log.debug("Not opening connection to ignored host %s", self.host)
@@ -950,8 +951,60 @@ class HostConnection(object):
             c.close()
 
     def disable_advanced_shard_aware(self, secs):
+        """
+        Stop choosing source ports for this host for ``secs`` seconds.
+
+        Takes ``self._lock``, which is not reentrant: callers must not hold it.
+        """
         log.warning("disabling advanced_shard_aware for %i seconds, could be that this client is behind NAT?", secs)
-        self.advanced_shardaware_block_until = max(time.time() + secs, self.advanced_shardaware_block_until)
+        self._block_advanced_shard_aware(secs)
+
+    def _block_advanced_shard_aware(self, secs):
+        """
+        Stop choosing source ports for this host for ``secs`` seconds.
+
+        Takes ``self._lock``, which is not reentrant: callers must not hold it.
+        """
+        with self._lock:
+            self.advanced_shardaware_block_until = max(time.time() + secs, self.advanced_shardaware_block_until)
+
+    def _reached_through_route(self):
+        """
+        Whether this host is currently reached through a client route, whose
+        endpoint dials the route's port rather than the port the node
+        advertises. A client routes host without a route is reached at its
+        own address, like any other host.
+        """
+        return isinstance(self.endpoint, ClientRoutesEndPoint) and self.endpoint.has_route()
+
+    def _on_unexpected_shard(self, requested_shard_id, actual_shard_id):
+        """
+        Handle a shard-aware connection that landed on a shard other than the
+        one its source port requested: stop choosing source ports for a while.
+
+        Takes ``self._lock``, which is not reentrant: callers must not hold it.
+        """
+        secs = 10 * 60
+        if not self._reached_through_route():
+            self.disable_advanced_shard_aware(secs)
+            return
+
+        # Under client routes the usual cause is an endpoint that does not
+        # carry the source port, which repeats on every retry: say so once per
+        # pool, then keep quiet. Connections to missing shards open
+        # concurrently, so decide under the lock which one warns.
+        with self._lock:
+            first_mismatch = not self._client_routes_shard_mismatch_warned
+            self._client_routes_shard_mismatch_warned = True
+        log_fn = log.warning if first_mismatch else log.debug
+        log_fn("[client routes] Shard-aware connection to %s requested shard %d but landed on shard %s. "
+               "The client routes endpoint of this host probably does not forward the source port "
+               "to the node's shard-aware port (for example with PROXY protocol v2). Not choosing "
+               "source ports for this host for %d seconds. Set "
+               "ClientRoutesConfig(advanced_shard_awareness=False) if this deployment does not "
+               "preserve the source port.",
+               self.host, requested_shard_id, actual_shard_id, secs)
+        self._block_advanced_shard_aware(secs)
 
     def _get_shard_aware_endpoint(self):
         """
@@ -962,6 +1015,15 @@ class HostConnection(object):
         regular SSL connection instead of falling back to the plaintext port.
         Explicit ssl_options={}, like ssl_context, marks the cluster SSL-enabled.
         Unix sockets bypass advertised TCP ports and source-port shard targeting.
+
+        A client routes endpoint with a route is returned as is: it dials the
+        port that system.client_routes publishes for the node, never the
+        advertised shard-aware port, and the route's endpoint is responsible
+        for carrying the source port to the node's shard-aware listener. The
+        advertised port only signals that the node supports shard-aware
+        connections. A client routes endpoint without a route falls back to
+        the node's own address, so it gets the advertised shard-aware port
+        like any other endpoint.
         """
         if isinstance(self.endpoint, UnixSocketEndPoint):
             return None
@@ -973,21 +1035,27 @@ class HostConnection(object):
         cluster = self._session.cluster
         ssl_enabled = cluster.ssl_context is not None or cluster.ssl_options is not None
 
-        endpoint = None
-        if ssl_enabled and self.host.sharding_info.shard_aware_port_ssl:
-            endpoint = copy.copy(self.endpoint)
-            endpoint._port = self.host.sharding_info.shard_aware_port_ssl
-        elif not ssl_enabled and self.host.sharding_info.shard_aware_port:
-            endpoint = copy.copy(self.endpoint)
-            endpoint._port = self.host.sharding_info.shard_aware_port
+        if ssl_enabled:
+            shard_aware_port = self.host.sharding_info.shard_aware_port_ssl
+        else:
+            shard_aware_port = self.host.sharding_info.shard_aware_port
+        if not shard_aware_port:
+            return None
 
-        if endpoint is not None:
-            # Another listener of this same node, with the same TLS
-            # credentials, so it offers and refreshes the session cached for
-            # the node rather than one of its own.
-            endpoint._tls_session_cache_key_override = \
-                self.endpoint.tls_session_cache_key
+        if self._reached_through_route():
+            return self.endpoint
 
+        endpoint = copy.copy(self.endpoint)
+        if isinstance(endpoint, ClientRoutesEndPoint):
+            # Without a route it falls back to its original address and port.
+            endpoint._original_port = shard_aware_port
+        else:
+            endpoint._port = shard_aware_port
+        # Another listener of this same node, with the same TLS
+        # credentials, so it offers and refreshes the session cached for
+        # the node rather than one of its own.
+        endpoint._tls_session_cache_key_override = \
+            self.endpoint.tls_session_cache_key
         return endpoint
 
     @contextmanager
@@ -1091,10 +1159,10 @@ class HostConnection(object):
                     return
                 expected = self._connections.get(conn.features.shard_id)
             if shard_aware_endpoint and shard_id != conn.features.shard_id:
-                # A different assigned shard may indicate NAT changed the
-                # source port. Back off advanced shard awareness for ten
-                # minutes.
-                self.disable_advanced_shard_aware(10 * 60)
+                # A different assigned shard may indicate NAT or a proxy
+                # changed the source port. Back off advanced shard awareness
+                # for a while.
+                self._on_unexpected_shard(shard_id, conn.features.shard_id)
 
             if expected is None or expected.orphaned_threshold_reached:
                 retained = None

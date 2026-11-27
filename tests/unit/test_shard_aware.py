@@ -22,7 +22,8 @@ import sys
 import textwrap
 import threading
 import time
-from unittest.mock import MagicMock
+import uuid
+from unittest.mock import MagicMock, patch
 from concurrent.futures import Future, ThreadPoolExecutor
 from threading import RLock
 
@@ -31,7 +32,8 @@ import pytest
 from cassandra._lifecycle import PoolOwnershipReservation
 from cassandra.cluster import ShardAwareOptions
 from cassandra.pool import HostConnection, HostDistance
-from cassandra.connection import (ShardingInfo, DefaultEndPoint,
+from cassandra.client_routes import ClientRouteProxy, ClientRoutesConfig, _ClientRoutesHandler, _Route
+from cassandra.connection import (ShardingInfo, DefaultEndPoint, ClientRoutesEndPoint,
                                   UnixSocketEndPoint)
 from cassandra.metadata import Murmur3Token
 from cassandra.protocol_features import ProtocolFeatures
@@ -395,4 +397,200 @@ class TestShardAware(unittest.TestCase):
 
         # The hard-disable flag must suppress the endpoint regardless of the timer.
         session.cluster.shard_aware_options.disable_shardaware_port = True
+        assert pool._get_shard_aware_endpoint() is None
+
+
+class TestClientRoutesShardAware(unittest.TestCase):
+    """
+    Advanced shard awareness through client routes (PrivateLink): shard-aware
+    connections choose their shard through the source port but are dialed at
+    the node's route, never at the advertised shard-aware port.
+    """
+
+    ROUTE_ADDRESS = "10.9.9.9"
+    ROUTE_PORT = 41000
+    ROUTE_TLS_PORT = 41001
+
+    def _host(self, ssl_enabled=False, routed=True):
+        connection_id = str(uuid.uuid4())
+        host_id = uuid.uuid4()
+        handler = _ClientRoutesHandler(
+            ClientRoutesConfig([ClientRouteProxy(connection_id)], advanced_shard_awareness=True),
+            ssl_enabled=ssl_enabled)
+        port = self.ROUTE_TLS_PORT if ssl_enabled else self.ROUTE_PORT
+        if routed:
+            handler._routes.update([_Route(connection_id=connection_id, host_id=host_id,
+                                           address=self.ROUTE_ADDRESS, port=port)])
+        host = MagicMock()
+        host.endpoint = ClientRoutesEndPoint(host_id=host_id, handler=handler,
+                                             original_address="1.2.3.4", original_port=9042)
+        return host
+
+    def _pool(self, host, session, pool_class=HostConnection):
+        """Publish a pool for ``host`` as TestShardAware.make_pool does."""
+        self.addCleanup(session.cluster.executor.shutdown,
+                        wait=False, cancel_futures=True)
+        host.lock = RLock()
+        host._is_removed = False
+        ownership = PoolOwnershipReservation(session, host, host.endpoint)
+        pool = pool_class(host, HostDistance.REMOTE, session, _ownership=ownership)
+        with pool._membership_lock, session._lock, host.lock:
+            session._pools[host] = pool
+            ownership.published = True
+        for f in session.futures:
+            f.result(timeout=FUTURE_TIMEOUT)
+        return pool
+
+    def test_shard_aware_connections_dial_the_route(self):
+        host = self._host()
+        session = MockSession()
+        requests = []
+        factory = session.cluster.connection_factory
+
+        def recording_factory(*args, **kwargs):
+            requests.append((args[0], kwargs.get('shard_id')))
+            return factory(*args, **kwargs)
+        session.cluster.connection_factory = recording_factory
+
+        pool = self._pool(host, session)
+
+        assert len(pool._connections) == 4
+        for shard_id, connection in pool._connections.items():
+            assert connection.features.shard_id == shard_id
+            assert connection.endpoint is host.endpoint
+        # Every connection after the first one asked for its shard.
+        assert sorted(shard_id for _, shard_id in requests[1:]) == [1, 2, 3]
+        # The shard-aware endpoint dials the route, not the advertised 19042.
+        endpoint = pool._get_shard_aware_endpoint()
+        assert endpoint is host.endpoint
+        assert endpoint.resolve() == (self.ROUTE_ADDRESS, self.ROUTE_PORT)
+
+    def test_tls_requires_advertised_ssl_shard_aware_port(self):
+        host = self._host(ssl_enabled=True)
+        without_ssl_port = ShardingInfo(
+            shard_id=1, shards_count=4, partitioner="", sharding_algorithm="",
+            sharding_ignore_msb=0, shard_aware_port=19042, shard_aware_port_ssl=None)
+        pool = self._pool(host, MockSession(ssl_options={}, sharding_info=without_ssl_port))
+        assert pool._get_shard_aware_endpoint() is None
+
+        host = self._host(ssl_enabled=True)
+        pool = self._pool(host, MockSession(ssl_options={}))
+        endpoint = pool._get_shard_aware_endpoint()
+        assert endpoint is host.endpoint
+        assert endpoint.resolve() == (self.ROUTE_ADDRESS, self.ROUTE_TLS_PORT)
+
+    def test_disabled_shard_aware_port_returns_no_endpoint(self):
+        session = MockSession()
+        session.cluster.shard_aware_options.disable_shardaware_port = True
+        pool = self._pool(self._host(), session)
+        assert pool._get_shard_aware_endpoint() is None
+
+    def test_mismatch_triggers_fallback(self):
+        host = self._host()
+        session = MockSession()
+        pool = self._pool(host, session)
+
+        def landing_on_shard_2(*args, **kwargs):
+            connection = MockSession.mock_connection_factory(session, *args, **kwargs)
+            connection.features = ProtocolFeatures(shard_id=2, sharding_info=connection.features.sharding_info)
+            return connection
+        session.cluster.connection_factory = landing_on_shard_2
+
+        with patch.object(pool, '_on_unexpected_shard') as on_unexpected_shard:
+            pool._open_connection_to_missing_shard(3)
+        on_unexpected_shard.assert_called_once_with(3, 2)
+
+    def test_mismatch_warns_once_then_falls_back(self):
+        pool = self._pool(self._host(), MockSession())
+        logger = 'cassandra.pool'
+
+        with self.assertLogs(logger, level='DEBUG') as logs:
+            pool._on_unexpected_shard(3, 2)
+        assert [r.levelno for r in logs.records] == [logging.WARNING]
+        assert "PROXY protocol v2" in logs.output[0]
+        assert "advanced_shard_awareness=False" in logs.output[0]
+        assert pool._get_shard_aware_endpoint() is None
+
+        # The fallback ends with the cool-down window, and a repeated mismatch
+        # is no longer worth a warning.
+        pool.advanced_shardaware_block_until = time.time() - 1
+        assert pool._get_shard_aware_endpoint() is not None
+        with self.assertLogs(logger, level='DEBUG') as logs:
+            pool._on_unexpected_shard(1, 0)
+        assert [r.levelno for r in logs.records] == [logging.DEBUG]
+        assert pool._get_shard_aware_endpoint() is None
+
+    def test_concurrent_mismatches_warn_once(self):
+        """
+        Connections to missing shards open concurrently, so several can
+        report a mismatch at once; only one of them warns.
+
+        Reading the warned flag pauses, so without the pool lock every thread
+        would read it before any of them sets it, and all would warn.
+        """
+        class SlowFlagHostConnection(HostConnection):
+            @property
+            def _client_routes_shard_mismatch_warned(self):
+                value = self.__dict__.get('_warned', False)
+                time.sleep(0.05)
+                return value
+
+            @_client_routes_shard_mismatch_warned.setter
+            def _client_routes_shard_mismatch_warned(self, value):
+                self.__dict__['_warned'] = value
+
+        pool = self._pool(self._host(), MockSession(), pool_class=SlowFlagHostConnection)
+        threads_count = 8
+        barrier = threading.Barrier(threads_count)
+
+        def report_mismatch(shard_id):
+            barrier.wait()
+            pool._on_unexpected_shard(shard_id, (shard_id + 1) % 4)
+
+        with self.assertLogs('cassandra.pool', level='DEBUG') as logs:
+            threads = [threading.Thread(target=report_mismatch, args=(i % 4,))
+                       for i in range(threads_count)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(5)
+        assert not any(t.is_alive() for t in threads)
+        levels = [r.levelno for r in logs.records if "[client routes]" in r.getMessage()]
+        assert len(levels) == threads_count
+        assert levels.count(logging.WARNING) == 1
+
+    def test_unrouted_host_dials_advertised_shard_aware_port(self):
+        """
+        A client routes host without a route is reached at its own address,
+        so its shard-aware connections use the advertised shard-aware port.
+        """
+        for ssl_options, port in [(None, 19042), ({}, 19045)]:
+            with self.subTest(ssl=ssl_options is not None):
+                host = self._host(ssl_enabled=ssl_options is not None, routed=False)
+                pool = self._pool(host, MockSession(ssl_options=ssl_options))
+                endpoint = pool._get_shard_aware_endpoint()
+                assert endpoint is not host.endpoint
+                assert endpoint.resolve() == ("1.2.3.4", port)
+                assert host.endpoint.resolve() == ("1.2.3.4", 9042)
+                assert endpoint.tls_session_cache_key == host.endpoint.tls_session_cache_key
+
+    def test_mismatch_on_unrouted_host_keeps_nat_warning(self):
+        """No route means no route endpoint to blame for a shard mismatch."""
+        pool = self._pool(self._host(routed=False), MockSession())
+
+        with self.assertLogs('cassandra.pool', level='WARNING') as logs:
+            pool._on_unexpected_shard(3, 2)
+        assert "behind NAT" in logs.output[0]
+        assert not any("[client routes]" in line for line in logs.output)
+        assert pool._get_shard_aware_endpoint() is None
+
+    def test_mismatch_without_client_routes_keeps_nat_warning(self):
+        host = MagicMock()
+        host.endpoint = DefaultEndPoint("1.2.3.4")
+        pool = self._pool(host, MockSession())
+
+        for _ in range(2):
+            with self.assertLogs('cassandra.pool', level='WARNING') as logs:
+                pool._on_unexpected_shard(3, 2)
+            assert "behind NAT" in logs.output[0]
         assert pool._get_shard_aware_endpoint() is None
