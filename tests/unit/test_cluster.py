@@ -6361,6 +6361,28 @@ def test_profile_manager_down_stops_when_removed_during_callback():
     second.on_down.assert_not_called()
 
 
+def test_profile_manager_remove_isolates_policy_errors():
+    manager = ProfileManager()
+    removed = Host('127.0.0.1', SimpleConvictionPolicy, host_id=uuid.uuid4())
+    removed.set_location_info('local', 'rack1')
+    healthy = Host('127.0.0.2', SimpleConvictionPolicy, host_id=uuid.uuid4())
+    healthy.set_location_info('local', 'rack1')
+
+    failing = Mock()
+    failing.on_remove.side_effect = RuntimeError('policy failed')
+    later = DCAwareRoundRobinPolicy(local_dc='local')
+    later._dc_live_hosts = {'local': (removed, healthy)}
+    manager.profiles['first'] = ExecutionProfile(load_balancing_policy=failing)
+    manager.profiles['later'] = ExecutionProfile(load_balancing_policy=later)
+
+    with patch('cassandra.cluster.log') as log:
+        manager.on_remove(removed)
+
+    failing.on_remove.assert_called_once_with(removed)
+    assert log.exception.call_count == 1
+    assert list(later.make_query_plan()) == [healthy]
+
+
 class ExecutionProfileTest(unittest.TestCase):
     def setUp(self):
         if connection_class is None:

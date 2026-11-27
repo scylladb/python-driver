@@ -734,7 +734,10 @@ class ProfileManager(object):
 
     def on_remove(self, host):
         for p in self.profiles.values():
-            p.load_balancing_policy.on_remove(host)
+            try:
+                p.load_balancing_policy.on_remove(host)
+            except Exception:
+                log.exception("Error in load balancing policy remove handler for host %s", host)
 
     @property
     def default(self):
