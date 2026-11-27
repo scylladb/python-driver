@@ -49,6 +49,11 @@ class NLBEmulator:
 
     Automatically creates/removes per-node proxies when nodes are
     added/removed so CCM cluster operations are reflected seamlessly.
+
+    With ``proxy_protocol=True`` the proxies start every connection to a
+    node with a PROXY protocol v2 header carrying the driver's address and
+    source port, as a private endpoint configured for it does; ``native_port``
+    must then be a node listener that expects the header.
     """
 
     LISTEN_HOST = "127.254.254.101"
@@ -56,10 +61,12 @@ class NLBEmulator:
     def __init__(self, discovery_port=0,
                  per_node_base=0,
                  native_port=9042,
-                 node_addresses=None):
+                 node_addresses=None,
+                 proxy_protocol=False):
         self.discovery_port = discovery_port
         self.per_node_base = per_node_base
         self.native_port = native_port
+        self.proxy_protocol = proxy_protocol
         self._deferred_node_addresses = node_addresses
 
         self._node_proxies = {}
@@ -85,6 +92,7 @@ class NLBEmulator:
             self._discovery_proxy = TcpProxy(
                 self.LISTEN_HOST, self.discovery_port,
                 first_addr, self.native_port,
+                proxy_protocol=self.proxy_protocol,
             )
             self._discovery_proxy.start()
             self.discovery_port = self._discovery_proxy.listen_port
@@ -163,7 +171,8 @@ class NLBEmulator:
 
     def _add_node_proxy(self, node_id, addr):
         port = 0
-        proxy = TcpProxy(self.LISTEN_HOST, port, addr, self.native_port)
+        proxy = TcpProxy(self.LISTEN_HOST, port, addr, self.native_port,
+                         proxy_protocol=self.proxy_protocol)
         proxy.start()
         with self._lock:
             self._node_proxies[node_id] = proxy

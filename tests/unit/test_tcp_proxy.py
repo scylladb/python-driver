@@ -25,12 +25,15 @@ incidentally (and non-deterministically) by the integration suite.
 """
 
 import socket
+import struct
 import threading
 import time
+import types
 import unittest
 from unittest.mock import patch
 
-from tests.tcp_proxy import TcpProxy
+from tests import tcp_proxy
+from tests.tcp_proxy import TcpProxy, build_proxy_protocol_v2_header, PROXY_PROTOCOL_V2_SIGNATURE
 
 
 class _EchoServer:
@@ -348,6 +351,144 @@ class TestTcpProxyShutdownJoin(unittest.TestCase):
             self.assertFalse(t.is_alive(),
                               "%s left alive after stop()" % t.name)
 
+
+class TestProxyProtocolV2Header(unittest.TestCase):
+
+    def test_ipv4(self):
+        header = build_proxy_protocol_v2_header(("10.0.0.1", 50001), ("10.0.0.2", 9042))
+        self.assertEqual(
+            header,
+            PROXY_PROTOCOL_V2_SIGNATURE
+            + bytes([0x21, 0x11, 0x00, 12])
+            + bytes([10, 0, 0, 1, 10, 0, 0, 2])
+            + struct.pack('!HH', 50001, 9042))
+
+    def test_ipv6(self):
+        header = build_proxy_protocol_v2_header(("::1", 50001), ("fe80::2", 9042))
+        self.assertEqual(header[:16], PROXY_PROTOCOL_V2_SIGNATURE + bytes([0x21, 0x21, 0x00, 36]))
+        self.assertEqual(len(header), 16 + 36)
+        self.assertEqual(header[16:32], socket.inet_pton(socket.AF_INET6, "::1"))
+        self.assertEqual(header[-4:], struct.pack('!HH', 50001, 9042))
+
+    def test_mixed_address_families_rejected(self):
+        with self.assertRaises(ValueError):
+            build_proxy_protocol_v2_header(("10.0.0.1", 1), ("::1", 2))
+
+
+class _RecordingServer:
+    """Accepts one connection and records the first ``size`` bytes it receives."""
+
+    def __init__(self, size):
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._sock.bind(("127.0.0.1", 0))
+        self._sock.listen(1)
+        self._sock.settimeout(5)
+        self.port = self._sock.getsockname()[1]
+        self.received = b""
+        self._thread = threading.Thread(target=self._run, args=(size,), daemon=True)
+        self._thread.start()
+
+    def _run(self, size):
+        conn, _ = self._sock.accept()
+        conn.settimeout(5)
+        with conn:
+            while len(self.received) < size:
+                data = conn.recv(size - len(self.received))
+                if not data:
+                    break
+                self.received += data
+
+    def join(self):
+        self._thread.join(5)
+        self._sock.close()
+
+
+class TestTcpProxyProxyProtocol(unittest.TestCase):
+
+    def _received_through_proxy(self, proxy_protocol, payload, expected_size):
+        server = _RecordingServer(expected_size)
+        proxy = TcpProxy("127.0.0.1", 0, "127.0.0.1", server.port, proxy_protocol=proxy_protocol)
+        proxy.start()
+        try:
+            with socket.create_connection(("127.0.0.1", proxy.listen_port), timeout=5) as client:
+                client.sendall(payload)
+                server.join()
+                return server.received, client.getsockname(), ("127.0.0.1", proxy.listen_port)
+        finally:
+            proxy.stop()
+
+    def test_sends_header_with_client_address_before_data(self):
+        header_size = 16 + 12
+        received, client_addr, proxy_addr = self._received_through_proxy(
+            True, b"payload", header_size + len(b"payload"))
+        self.assertEqual(received[:header_size],
+                         build_proxy_protocol_v2_header(client_addr, proxy_addr))
+        self.assertEqual(received[header_size:], b"payload")
+
+    def test_no_header_by_default(self):
+        received, _, _ = self._received_through_proxy(False, b"payload", len(b"payload"))
+        self.assertEqual(received, b"payload")
+
+    def _handle_tracking_sockets(self, proxy, client_sock):
+        """
+        Run the proxy's connection handler for ``client_sock`` and return the
+        target sockets it created, which must all be closed when it gives up.
+        """
+        created = []
+
+        class TrackingSocket(socket.socket):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                created.append(self)
+
+        # Only tests.tcp_proxy sees the tracking class; other threads keep
+        # using the real socket module.
+        tracking_socket_module = types.SimpleNamespace(
+            socket=TrackingSocket, AF_INET=socket.AF_INET, SOCK_STREAM=socket.SOCK_STREAM)
+        with patch.object(tcp_proxy, 'socket', tracking_socket_module):
+            proxy._handle_new_connection(client_sock)
+        return created
+
+    def test_connect_failure_closes_both_sockets(self):
+        """
+        When the target refuses the connection, the proxy closes the client
+        and its own target socket rather than leaving the latter to the
+        garbage collector, which the logged exception would delay.
+        """
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as unused:
+            unused.bind(("127.0.0.1", 0))
+            refused_port = unused.getsockname()[1]
+        proxy = TcpProxy("127.0.0.1", 0, "127.0.0.1", refused_port, proxy_protocol=True)
+        client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+        with self.assertLogs('tests.tcp_proxy', level='WARNING') as logs:
+            created = self._handle_tracking_sockets(proxy, client_sock)
+
+        self.assertIn("failed to connect to target", logs.output[0])
+        self.assertEqual(client_sock.fileno(), -1)
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0].fileno(), -1, "the target socket was left open")
+        self.assertEqual(proxy.total_connections, 0)
+
+    def test_header_failure_closes_both_sockets(self):
+        """
+        When the header cannot be sent, the proxy reports that step and closes
+        both sockets, including the target one it already connected.
+        """
+        backend = _EchoServer()
+        self.addCleanup(backend.stop)
+        proxy = TcpProxy("127.0.0.1", 0, "127.0.0.1", backend.port, proxy_protocol=True)
+        # Never connected, so reading its peer address for the header fails.
+        client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+        with self.assertLogs('tests.tcp_proxy', level='WARNING') as logs:
+            created = self._handle_tracking_sockets(proxy, client_sock)
+
+        self.assertIn("failed to send the PROXY protocol header to target", logs.output[0])
+        self.assertEqual(client_sock.fileno(), -1)
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0].fileno(), -1, "the target socket was left open")
+        self.assertEqual(proxy.total_connections, 0)
 
 if __name__ == "__main__":
     unittest.main()
